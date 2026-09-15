@@ -1,0 +1,39 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "evolve-ab-runtime-v1",
+  "base_version": "comparison-only/v0",
+  "target_version": "paired-retrieval/v1",
+  "surface": "runtime",
+  "component": "runtime.evolve_ab",
+  "hypothesis": "Executing the existing retrieval-eval twice over the same frozen fixture and deriving the comparison from per-question outputs makes incomplete or failed arms invalid instead of allowing a precomputed default-zero scorecard. The first supported experiment changes only the existing eval query policy (verbatim/terms); it does not claim to evaluate answer truth, live models or translation.",
+  "predicted_delta": {
+    "invalid_arm_false_accepts": {
+      "baseline": 1,
+      "target": 0
+    },
+    "paired_execution_records": {
+      "baseline": 0,
+      "target": 2
+    }
+  },
+  "guardrails": {
+    "accepted_without_quote": 0
+  },
+  "eval_plan": {
+    "replay_set": "fixtures/evolution/retrieval-smoke",
+    "paired_sources": 2,
+    "soak": false,
+    "paired_run": {
+      "runner": "retrieval",
+      "fixture_dir": "fixtures/evolution/retrieval-smoke",
+      "control_query_mode": "verbatim",
+      "candidate_query_mode": "terms",
+      "k": 1,
+      "min_mean_recall_delta": 0.0,
+      "timeout_seconds": 60,
+      "expected_questions": 2
+    }
+  },
+  "rollback": "Revert the evolve-ab implementation commit; existing registry/validate/ledger/diagnose and legacy compare API remain available. No production corpus, prompts or model policy is modified.",
+  "ablation_required": false
+}

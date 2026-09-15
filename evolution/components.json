@@ -1,6 +1,13 @@
 {
   "components": [
     {
+      "id": "runtime.evolve_ab",
+      "surface": "runtime",
+      "current_version": "v1",
+      "file": "crates/ovp-evolve/src/paired.rs",
+      "quality_buckets": ["operational_reliability"]
+    },
+    {
       "id": "prompt.unit_extract",
       "surface": "prompt",
       "current_version": "v5",

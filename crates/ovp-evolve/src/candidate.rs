@@ -43,6 +43,9 @@ pub struct CandidateGuardrails {
 /// Plan for evaluating this candidate.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EvalPlan {
+    /// Executable plan; absent for historical comparison-only candidates.
+    #[serde(default)]
+    pub paired_run: Option<crate::paired::RetrievalPlan>,
     #[serde(default)]
     pub replay_set: Option<String>,
     #[serde(default)]
@@ -108,6 +111,11 @@ impl CandidateSpec {
                  without ablation_required=true",
                 self.surface, comp.surface
             )));
+        }
+
+        if let Some(plan) = &self.eval_plan.paired_run {
+            plan.validate()
+                .map_err(|e| CandidateError::Validation(format!("invalid eval_plan.paired_run: {e}")))?;
         }
 
         Ok(())
@@ -197,6 +205,41 @@ mod tests {
         let mut spec = valid_spec();
         spec.surface = ChangeSurface::Runtime;
         spec.ablation_required = true;
+        spec.validate(&reg).unwrap();
+    }
+
+    #[test]
+    fn invalid_paired_run_rejected() {
+        let reg = test_registry();
+        let mut spec = valid_spec();
+        spec.eval_plan.paired_run = Some(crate::paired::RetrievalPlan {
+            runner: "unknown".into(),
+            fixture_dir: "fixtures".into(),
+            control_query_mode: "verbatim".into(),
+            candidate_query_mode: "terms".into(),
+            k: 10,
+            expected_questions: 2,
+            min_mean_recall_delta: 0.0,
+            timeout_seconds: 30,
+        });
+        let err = spec.validate(&reg).unwrap_err();
+        assert!(err.to_string().contains("invalid eval_plan.paired_run"));
+    }
+
+    #[test]
+    fn valid_paired_run_passes() {
+        let reg = test_registry();
+        let mut spec = valid_spec();
+        spec.eval_plan.paired_run = Some(crate::paired::RetrievalPlan {
+            runner: "retrieval".into(),
+            fixture_dir: "fixtures".into(),
+            control_query_mode: "verbatim".into(),
+            candidate_query_mode: "terms".into(),
+            k: 10,
+            expected_questions: 2,
+            min_mean_recall_delta: 0.0,
+            timeout_seconds: 30,
+        });
         spec.validate(&reg).unwrap();
     }
 }

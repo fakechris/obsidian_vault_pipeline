@@ -1095,15 +1095,18 @@ enum Cmd {
     },
     /// PRODUCT — Evolution Kernel governance: component registry, candidate
     /// validation, evolution ledger, root-cause diagnostics. Subcommands:
-    /// `registry`, `validate`, `ledger`, `diagnose`.
+    /// `registry`, `validate`, `ab`, `ledger`, `diagnose`.
     Evolve {
-        /// Subcommand: registry | validate | ledger | diagnose
+        /// Subcommand: registry | validate | ab | ledger | diagnose
         #[arg(value_enum)]
         action: EvolveAction,
         /// Path to `evolution/components.json`.
         #[arg(long, default_value = "evolution/components.json")]
         registry_path: PathBuf,
-        /// Candidate spec path (for `validate`).
+        /// New evidence directory under .run or .ovp (for `ab`).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Candidate spec path (for `validate` or `ab`).
         #[arg(long)]
         candidate: Option<PathBuf>,
         /// Vault root (for `ledger`).
@@ -1529,6 +1532,7 @@ enum ClusterModeArg {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 enum EvolveAction {
     Registry,
+    Ab,
     Validate,
     Ledger,
     Diagnose,
@@ -2546,6 +2550,7 @@ fn main() -> ExitCode {
             })
         }
         Cmd::Evolve {
+            out,
             action,
             registry_path,
             candidate,
@@ -2557,6 +2562,10 @@ fn main() -> ExitCode {
             use commands::evolve::{EvolveArgs, EvolveSubcmd};
             let sub = match action {
                 EvolveAction::Registry => EvolveSubcmd::Registry,
+                EvolveAction::Ab => EvolveSubcmd::Ab {
+                    candidate: candidate.unwrap_or_else(|| { eprintln!("evolve ab requires --candidate"); std::process::exit(2) }),
+                    output: out.unwrap_or_else(|| { eprintln!("evolve ab requires --out"); std::process::exit(2) }),
+                },
                 EvolveAction::Validate => {
                     let path = candidate.unwrap_or_else(|| {
                         eprintln!("evolve validate requires --candidate <path>");
