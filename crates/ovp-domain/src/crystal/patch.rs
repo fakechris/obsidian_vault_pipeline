@@ -803,11 +803,20 @@ pub fn append_patch_record(path: &Path, record: &HumanPatchRecord) -> Result<(),
 
 /// fsync a directory so a newly created file's directory entry survives a
 /// power loss (syncing file contents does not persist the entry itself).
+/// On non-Unix platforms (e.g. Windows), opening a directory via File::open
+/// fails with ERROR_ACCESS_DENIED, so directory fsync is skipped.
 fn sync_dir(dir: &Path) -> Result<(), String> {
-    let f = std::fs::File::open(dir)
-        .map_err(|e| format!("opening directory {}: {e}", dir.display()))?;
-    f.sync_all()
-        .map_err(|e| format!("syncing directory {}: {e}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        let f = std::fs::File::open(dir)
+            .map_err(|e| format!("opening directory {}: {e}", dir.display()))?;
+        f.sync_all()
+            .map_err(|e| format!("syncing directory {}: {e}", dir.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+    }
     Ok(())
 }
 
