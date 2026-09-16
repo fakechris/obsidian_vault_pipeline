@@ -13,6 +13,7 @@ ovp-api-projection = { path = "../ovp-api-projection" }
 ovp-memory = { path = "../ovp-memory" }
 ovp-llm = { path = "../ovp-llm" }
 ovp-doctor = { path = "../ovp-doctor" }
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
