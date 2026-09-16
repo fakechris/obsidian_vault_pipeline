@@ -3898,10 +3898,18 @@ Line 5: End of specification.";
         let private_txt = proc_dir.join(".private.txt");
         std::fs::write(&private_txt, "super secret private txt").unwrap();
 
+        // The key must RESOLVE for this guard to be reached at all — with an
+        // unresolvable key the request dies at note lookup and the cursor is
+        // never consulted, so the test would pass for the wrong reason.
+        // Note also that `parse_cursor` reads `path` / `p`; a `rel_path` key is
+        // silently dropped, which would leave the cursor carrying no path.
+        let guard_note_rel = "50-Inbox/03-Processed/2026-09/cursor-guard.md";
+        std::fs::write(tmp.path().join(guard_note_rel), "Line one\nLine two\nLine three").unwrap();
+
         let fake_cur_obj = serde_json::json!({
             "source_hash": "deadbeef12345678",
             "offset_line": 2,
-            "rel_path": "50-Inbox/01-Raw/2026-09/.private.txt"
+            "path": "50-Inbox/03-Processed/2026-09/.private.txt"
         });
         let fake_cur_str = serde_json::to_string(&fake_cur_obj).unwrap();
 
@@ -3909,11 +3917,16 @@ Line 5: End of specification.";
             &state,
             "ovp_read_note",
             serde_json::json!({
-                "key": "deadbeef12345678",
+                "key": guard_note_rel,
                 "cursor": fake_cur_str
             }),
         );
         assert!(bypass_err.is_err(), "ineligible file reached via cursor lifecycle path must be rejected");
+        let bypass_msg = bypass_err.unwrap_err().message;
+        assert!(
+            bypass_msg.contains("Conflicting target note"),
+            "must be refused by the cursor/key mismatch guard, not by an unrelated lookup failure; got: {bypass_msg}"
+        );
 
         // 21. Duplicate stem matches with identical content succeed on 8-char lookup, while conflicting content is rejected
         let stem8 = "beefcafe";
