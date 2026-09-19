@@ -17,6 +17,7 @@
 //! only.
 
 pub mod anydoc;
+pub mod enrich_attempts;
 pub mod ledger;
 pub mod pinboard;
 pub mod sweep;
@@ -26,9 +27,15 @@ pub use anydoc::{
     AnydocEngine, AnydocError, AnydocOptions, DocumentMetadata, OfficeFormat, OfficeIngestor,
     ParsedDocument,
 };
+pub use enrich_attempts::{
+    append_enrich_attempt, enrich_verdict, fold_attempts, now_unix_secs, read_enrich_attempts,
+    record_enrich_outcomes, ClosedCaptures, EnrichAttemptRecord, EnrichAttemptState,
+    EnrichOutcome, EnrichVerdict, ENRICH_ATTEMPT_SCHEMA, MAX_ENRICH_ATTEMPTS,
+    MAX_ENRICH_PENDING_SECS,
+};
 pub use ledger::{
-    append_intake_record, flagged_hashes, known_content_hashes, known_urls, read_intake_ledger,
-    IntakeAction, IntakeRecord, INTAKE_SCHEMA,
+    append_intake_record, flagged_hashes, is_pending_flag, known_content_hashes, known_urls,
+    read_intake_ledger, reoffer_flag, IntakeAction, IntakeRecord, INTAKE_SCHEMA,
 };
 pub use pinboard::{
     auto_since, coverage_floor, plan_backfill_window, posted_day, read_pinboard_backfill_ledger,

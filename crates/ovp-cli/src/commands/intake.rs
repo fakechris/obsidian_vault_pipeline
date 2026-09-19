@@ -45,6 +45,7 @@ pub fn run(args: IntakeArgs) -> Result<(), CliError> {
             IntakeAction::NeedsContent => "needs-content",
             IntakeAction::Unparseable => "unparseable",
             IntakeAction::Skipped => "skipped",
+            IntakeAction::ContentUnavailable => "unavailable",
         };
         match &rec.to {
             Some(to) => println!("  {verb:13} {} → {to}", rec.from),

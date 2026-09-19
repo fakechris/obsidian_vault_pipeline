@@ -110,6 +110,10 @@ registry 在**加载期**校验 cadence,一个不认识的语法会让 `schedule
 顺序反了 = 定时任务全停。(`plan_tick` 里还有一层 `skipped_not_due` 的防御分支,
 但那条路径正常走不到,别指望它。)
 
+同一类坑:`.ovp/intake.jsonl` 里新的 `IntakeAction` 变体(如 `content_unavailable`)。
+`read_jsonl` 一行解析失败就整份 ledger 报错,intake / daily / index 全挂。
+**新 sidecar 必须先装上,再让它写 `content_unavailable`;旧 sidecar 读到会整份 ledger 报错。**
+
 ## `is_due` 只看时间,不看上次成败
 
 `crates/ovp-scheduler/src/lib.rs:175` 只比较 `last_run` 与最近调度点。所以**失败或被 kill 的 job

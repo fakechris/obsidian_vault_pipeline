@@ -258,6 +258,12 @@ fn build_sources(
             IntakeAction::NeedsContent => SourceStatus::NeedsContent,
             IntakeAction::Unparseable => SourceStatus::Unparseable,
             IntakeAction::Skipped => SourceStatus::Skipped,
+            // Still "captured but too thin to read; operator should enrich"
+            // from the read model's point of view — only the automatic
+            // enrichment retry is closed. A dedicated SourceStatus would
+            // ripple through console/query/portal types; deferred until the
+            // portal has a place to show the distinction.
+            IntakeAction::ContentUnavailable => SourceStatus::NeedsContent,
         };
         // Precedence: a later Duplicate record for the same hash means another
         // COPY was parked — it must not mask the canonical copy still queued
