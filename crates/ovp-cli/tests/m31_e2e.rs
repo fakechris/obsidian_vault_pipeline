@@ -155,6 +155,131 @@ fn md_files(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// The one `daily-result: {json}` line a run prints, parsed back.
+///
+/// Also enforces the documented contract that it is the FINAL stdout line:
+/// the best-effort tails after the reader phase (theme hint, tags bootstrap,
+/// bilingual tail) all print, so a caller told to "read the last line" only
+/// works if the emission really is last.
+fn daily_result_line(stdout: &str) -> serde_json::Value {
+    let lines: Vec<&str> = stdout.lines().filter(|l| l.starts_with("daily-result: ")).collect();
+    assert_eq!(lines.len(), 1, "exactly one daily-result line.\nstdout:\n{stdout}");
+    let last = stdout.lines().filter(|l| !l.trim().is_empty()).next_back().unwrap_or("");
+    assert!(
+        last.starts_with("daily-result: "),
+        "daily-result must be the LAST stdout line, got: {last}\nstdout:\n{stdout}"
+    );
+    serde_json::from_str(&lines[0]["daily-result: ".len()..])
+        .unwrap_or_else(|e| panic!("daily-result line is not JSON: {e}\n{}", lines[0]))
+}
+
+/// A `source_enriched` rewrite leaves a pipeline-log event whose hashes
+/// bracket the write (old = the needs-content ledger record's sha, new = the
+/// file now on disk), and every run — real or dry — ends with one parseable
+/// `daily-result:` line pointing at artifacts that exist.
+#[test]
+fn daily_enrich_logs_source_enriched_and_prints_daily_result_line() {
+    let cache = tempfile::tempdir().unwrap();
+    set_test_cache(cache.path());
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    // An operator vault has its raw inbox even when nothing has been
+    // ingested yet; the planner reads it.
+    std::fs::create_dir_all(vault.join("50-Inbox/01-Raw")).unwrap();
+    let cache_dir = tmp.path().join("cassettes");
+
+    // One bare bookmark: too thin to read → needs-content → the web-fetch
+    // fixture supplies its body.
+    let export = tmp.path().join("pinboard-export.json");
+    std::fs::write(&export, r#"[
+      {"href":"https://e.x/bare","description":"Bare Bookmark","extended":"just a link","time":"2026-06-03T09:00:00Z","tags":""}
+    ]"#).unwrap();
+    let fixture = tmp.path().join("web-fixture");
+    ovp_enrich::web_fetch::FixtureWebFetch::with_response(
+        &fixture,
+        "https://e.x/bare",
+        "A fetched body that is long enough to be worth a grounded reader run on the next sweep.",
+    );
+
+    let stdout = run_ok(bin().args([
+        "daily",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-enrich",
+        "--pinboard-fixture", export.to_str().unwrap(),
+        "--web-fetch-fixture", fixture.to_str().unwrap(),
+        "--cache-dir", cache_dir.to_str().unwrap(),
+    ]));
+    assert!(stdout.contains("enrich: 1 needs-content URL(s), 1 enriched, 0 failed"), "{stdout}");
+
+    // --- The rewrite is in the pipeline log. ---
+    let log = std::fs::read_to_string(vault.join("60-Logs/pipeline.jsonl")).unwrap();
+    let events: Vec<serde_json::Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .filter(|v: &serde_json::Value| v["event_type"] == "source_enriched")
+        .collect();
+    assert_eq!(events.len(), 1, "one rewrite, one event:\n{log}");
+    let ev = &events[0];
+    assert_eq!(ev["run_id"], "daily-enrich");
+    assert_eq!(ev["date"], DATE);
+    let target = ev["target"].as_str().unwrap();
+    assert!(target.starts_with("50-Inbox/02-Pinboard/") && target.ends_with(".md"), "{target}");
+    let reason = ev["reason"].as_str().unwrap();
+    let field = |key: &str| -> String {
+        reason
+            .split(' ')
+            .find_map(|kv| kv.strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("no {key}= in reason: {reason}"))
+            .to_string()
+    };
+    assert_eq!(field("kind"), "web");
+    assert_eq!(field("url"), "https://e.x/bare");
+    assert_eq!(field("old_body_chars"), "just a link".len().to_string());
+    // old = the hash intake flagged needs-content (the ledger's identity for
+    // this capture); new = the bytes now on disk.
+    let intake = std::fs::read_to_string(vault.join(".ovp/intake.jsonl")).unwrap();
+    let flagged: serde_json::Value = intake
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .find(|v: &serde_json::Value| v["action"] == "needs_content")
+        .expect("bare bookmark flagged needs-content");
+    assert_eq!(field("old_sha256"), flagged["sha256"].as_str().unwrap());
+    let on_disk = std::fs::read(vault.join(target)).unwrap();
+    assert_eq!(field("new_sha256"), ovp_intake::hex_sha256(&on_disk));
+    assert_ne!(field("old_sha256"), field("new_sha256"));
+
+    // --- The end line describes artifacts that exist. ---
+    let v = daily_result_line(&stdout);
+    assert_eq!(v["run_id"], "daily-enrich");
+    assert_eq!(v["date"], DATE);
+    assert_eq!(v["dry_run"], false);
+    for key in ["report", "index", "evidence", "console"] {
+        let rel = v[key].as_str().unwrap_or_else(|| panic!("{key} missing: {v}"));
+        assert!(vault.join(rel).exists(), "{key} = {rel} does not exist");
+    }
+    assert_eq!(v["report"], ".ovp/reports/daily-enrich.json");
+    assert_eq!(v["processed"], 0);
+    assert_eq!(v["failed"], 0);
+    assert_eq!(v["needs_content"], 1);
+    assert_eq!(v["enriched"], 1);
+    assert_eq!(v["enrich_failed"], 0);
+
+    // --- Dry run: same line, no artifacts claimed. ---
+    let stdout = run_ok(bin().args([
+        "daily",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-enrich-dry",
+        "--dry-run",
+    ]));
+    let v = daily_result_line(&stdout);
+    assert_eq!(v["run_id"], "daily-enrich-dry");
+    assert_eq!(v["dry_run"], true);
+    assert!(v["report"].is_null() && v["index"].is_null(), "{v}");
+    assert_eq!(v["enriched"], 0);
+}
+
 /// First-sync flood guard through the REAL binary: an unfiltered pinboard
 /// capture of >500 NEW bookmarks aborts `daily` and `pinboard-sync` before
 /// any write; `--pinboard-since`/`--pinboard-max` (daily) and
@@ -318,6 +443,10 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     assert!(stdout.contains("pinboard: 2 fetched, 2 new"), "{stdout}");
     assert!(stdout.contains("intake:"), "{stdout}");
     assert!(stdout.contains("done: 2 processed, 0 failed"), "{stdout}");
+    let result = daily_result_line(&stdout);
+    assert_eq!(result["run_id"], "daily-e2e");
+    assert_eq!(result["processed"], 2);
+    assert_eq!(result["report"], ".ovp/reports/daily-e2e.json");
 
     // Product state: 2 packs; raw inbox drained; processed dir has both; the
     // bare bookmark stays in 02-Pinboard flagged needs-content.
