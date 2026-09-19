@@ -34,7 +34,7 @@ const SQLITE_FILE: &str = "read-model.sqlite";
 // bump is MANDATORY for any DDL change: the reader trusts the stored
 // version, so an old shadow without the column would otherwise pass the
 // check and then fail at SELECT time instead of requesting a rebuild.
-const SCHEMA_VERSION: &str = "5";
+const SCHEMA_VERSION: &str = "6";
 /// The FTS analyzer version, stamped into `meta` — index-side and query-side
 /// tokenization MUST match, so any change to [`tokenize_for_fts`] bumps this
 /// and the next build re-tokenizes everything (fresh-file builds make that
@@ -169,7 +169,7 @@ CREATE TABLE sources(
   sha256 TEXT NOT NULL, status TEXT NOT NULL, title TEXT, author TEXT,
   url TEXT, origin TEXT, rel_path TEXT, date TEXT, content_date TEXT,
   captured_on TEXT, processed_on TEXT, last_run_id TEXT, pack_dir TEXT,
-  fail_count INTEGER NOT NULL, last_reason TEXT);
+  fail_count INTEGER NOT NULL, last_reason TEXT, annotation TEXT);
 CREATE INDEX idx_sources_sha ON sources(sha256);
 CREATE INDEX idx_sources_status ON sources(status);
 CREATE INDEX idx_sources_date ON sources(date);
@@ -371,8 +371,8 @@ fn build_into(
             .prepare(
                 "INSERT INTO sources(sha256, status, title, author, url, origin, rel_path,
                  date, content_date, captured_on, processed_on, last_run_id, pack_dir,
-                 fail_count, last_reason)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                 fail_count, last_reason, annotation)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             )
             .map_err(|e| format!("prepare sources: {e}"))?;
         let mut tag = tx
@@ -401,13 +401,21 @@ fn build_into(
                 &s.pack_dir,
                 s.fail_count as i64,
                 &s.last_reason,
+                &s.annotation,
             ))
             .map_err(|e| format!("source {}: {e}", s.sha256))?;
             let rowid = tx.last_insert_rowid();
             let mut fts_text = String::new();
-            for part in [s.title.as_deref(), s.author.as_deref(), s.url.as_deref()]
-                .into_iter()
-                .flatten()
+            // The reader's own note is how people remember a source ("the one
+            // I said was about X"), so it is searchable — but never evidence.
+            for part in [
+                s.title.as_deref(),
+                s.author.as_deref(),
+                s.url.as_deref(),
+                s.annotation.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
             {
                 fts_text.push_str(part);
                 fts_text.push(' ');
@@ -883,7 +891,8 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
     let sources = conn
         .prepare(
             "SELECT sha256, status, title, author, url, origin, rel_path, date, content_date,
-             captured_on, processed_on, last_run_id, pack_dir, fail_count, last_reason
+             captured_on, processed_on, last_run_id, pack_dir, fail_count, last_reason,
+             annotation
              FROM sources ORDER BY rowid",
         )
         .and_then(|mut st| {
@@ -904,6 +913,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                     r.get::<_, Option<String>>(12)?,
                     r.get::<_, i64>(13)?,
                     r.get::<_, Option<String>>(14)?,
+                    r.get::<_, Option<String>>(15)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -930,6 +940,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                 pack_dir: row.12,
                 fail_count: row.13 as usize,
                 last_reason: row.14,
+                annotation: row.15,
                 tags,
                 tags_inferred,
                 tags_implied,
@@ -1435,6 +1446,7 @@ mod tests {
                 author: Some("Ada".into()),
                 url: Some("https://e.x/a?q=1&z=2".into()),
                 origin: Some("pinboard".into()),
+                annotation: Some("my own note: 值得再读".into()),
                 rel_path: Some("50-Inbox/03-Processed/a.md".into()),
                 date: Some("2026-08-01".into()),
                 content_date: Some("2026-07-30".into()),

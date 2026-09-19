@@ -13,6 +13,12 @@ pub struct SourceDoc {
     /// ISO 8601 date string from the source. Not parsed.
     pub published: Option<String>,
     pub tags: Vec<String>,
+    /// The reader's own words about the source (frontmatter `annotation:`,
+    /// alias `note:`). Carried for the index/portal only — it is NOT source
+    /// text: no prompt builder may feed it to the model, and it never
+    /// becomes evidence. `None` when absent or blank. Serde-additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<String>,
     pub body_markdown: String,
     /// Number of source-file lines BEFORE `body_markdown` begins (the YAML
     /// frontmatter block + its `---` delimiters). M19: lets evidence line
@@ -45,6 +51,7 @@ impl SourceDoc {
             author,
             published,
             tags,
+            annotation: None,
             body_markdown: body_markdown.into(),
             body_line_offset: 0,
             source_kind: SourceKind::Article,

@@ -68,6 +68,18 @@ mod tests {
     }
 
     #[test]
+    fn annotation_never_reaches_the_model() {
+        // `annotation:` is the reader's own words. It must not be shown to
+        // the model, or the owner's opinion becomes "verbatim evidence".
+        let mut source = src();
+        source.annotation = Some("SENTINEL-my-own-opinion-about-this".into());
+        let (system, user) = build_unit_prompt(&source);
+        assert!(!system.contains("SENTINEL-my-own-opinion"));
+        assert!(!user.contains("SENTINEL-my-own-opinion"));
+        assert!(user.contains("Body text here."));
+    }
+
+    #[test]
     fn prompt_forbids_concepts_and_requires_quotes() {
         let (system, _user) = build_unit_prompt(&src());
         assert!(system.contains("knowledge units"));
