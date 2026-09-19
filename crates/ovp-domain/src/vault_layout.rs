@@ -185,6 +185,15 @@ impl VaultLayout {
         ".ovp/intake.jsonl"
     }
 
+    /// Enrich-attempt ledger (vault-relative, append-only JSONL): one record
+    /// per web-fetch attempt on a needs-content capture. The intake ledger is
+    /// one record per hash, so attempt counting lives here; folding the lines
+    /// per sha256 gives the count/first/last state the terminal
+    /// `content_unavailable` decision is made from.
+    pub fn enrich_attempts_ledger(&self) -> &'static str {
+        ".ovp/enrich-attempts.jsonl"
+    }
+
     /// Durable pinboard-sync ledger (vault-relative, append-only JSONL, M31):
     /// one record per bookmark materialized; the URL-dedup authority.
     pub fn pinboard_ledger(&self) -> &'static str {

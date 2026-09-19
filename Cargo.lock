@@ -2827,6 +2827,7 @@ dependencies = [
  "ovp-daily",
  "ovp-domain",
  "ovp-index",
+ "ovp-intake",
  "serde",
  "serde_json",
  "tempfile",

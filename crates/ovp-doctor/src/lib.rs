@@ -125,7 +125,114 @@ pub fn run_checks(vault_root: &Path, opts: &DoctorOptions) -> Vec<Finding> {
     check_disk_usage(vault_root, &layout, &mut findings);
     check_legacy_artifacts(vault_root, &mut findings);
     check_inbox_orphans(vault_root, &layout, &mut findings);
+    check_content_unavailable(vault_root, &layout, &mut findings);
     findings
+}
+
+/// How many closed captures the finding lists by path before eliding.
+const CONTENT_UNAVAILABLE_LIST_CAP: usize = 5;
+
+/// Captures the pipeline closed as `content_unavailable`: enrichment fetch
+/// failed for the whole attempt budget, so `daily` no longer retries them.
+/// Informational — nothing is broken — but a closed capture that nobody
+/// surfaces is a bookmark that quietly never arrives, and the operator has
+/// three ways out (edit the file, tag `ovp/skip`, `--retry-unavailable`)
+/// that only work if they know it is sitting there.
+fn check_content_unavailable(vault_root: &Path, layout: &VaultLayout, findings: &mut Vec<Finding>) {
+    let check = "content-unavailable".to_string();
+    let ledger = vault_root.join(layout.intake_ledger());
+    if !ledger.exists() {
+        return; // no intake ledger yet — nothing captured, nothing to say
+    }
+    let records = match ovp_intake::read_intake_ledger(&ledger) {
+        Ok(r) => r,
+        // Nothing else checks the INTAKE ledger (`check_ledger_fs_consistency`
+        // reads the daily one), and a malformed line here fails every
+        // intake/daily/index run. Silence would hide the whole outage.
+        Err(e) => {
+            findings.push(
+                Finding {
+                    check,
+                    severity: Severity::Fail,
+                    message: format!("intake ledger unreadable: {e}"),
+                    hint: None,
+                    fixed: false,
+                }
+                .attach_hint(
+                    "one malformed line fails intake, daily and index — repair or remove that \
+                     line in .ovp/intake.jsonl (an older binary cannot read newer action values)",
+                ),
+            );
+            return;
+        }
+    };
+    let closed: Vec<_> = {
+        let flagged = ovp_intake::flagged_hashes(&records);
+        // Latest record per hash decides; walk newest-first so the listed
+        // note is the one from the closing record.
+        let mut seen = HashSet::new();
+        records
+            .iter()
+            .rev()
+            .filter(|r| {
+                flagged.get(&r.sha256) == Some(&ovp_intake::IntakeAction::ContentUnavailable)
+            })
+            .filter(|r| r.action == ovp_intake::IntakeAction::ContentUnavailable)
+            .filter(|r| seen.insert(r.sha256.clone()))
+            // Closed AND still on disk UNCHANGED. Matching the bytes against
+            // the closing record's hash is the whole point: an edit (or a
+            // successful `--retry-unavailable` fetch) rewrites the file, which
+            // re-enters intake under a new hash — reporting it as still closed
+            // would send the operator to fix something already fixed.
+            .filter(|r| {
+                std::fs::read(vault_root.join(&r.from))
+                    .map(|bytes| ovp_intake::hex_sha256(&bytes) == r.sha256)
+                    .unwrap_or(false)
+            })
+            .collect()
+    };
+    if closed.is_empty() {
+        findings.push(Finding {
+            check,
+            severity: Severity::Pass,
+            message: "no captures closed as content-unavailable".into(),
+            hint: None,
+            fixed: false,
+        });
+        return;
+    }
+    let mut listed: Vec<String> = closed
+        .iter()
+        .take(CONTENT_UNAVAILABLE_LIST_CAP)
+        .map(|r| {
+            format!(
+                "{}{}{}",
+                r.from,
+                r.url.as_deref().map(|u| format!(" <{u}>")).unwrap_or_default(),
+                r.note.as_deref().map(|n| format!(" — {n}")).unwrap_or_default()
+            )
+        })
+        .collect();
+    if closed.len() > CONTENT_UNAVAILABLE_LIST_CAP {
+        listed.push(format!("… and {} more", closed.len() - CONTENT_UNAVAILABLE_LIST_CAP));
+    }
+    findings.push(
+        Finding {
+            check,
+            severity: Severity::Info,
+            message: format!(
+                "{} capture(s) closed as content-unavailable (enrichment gave up): {}",
+                closed.len(),
+                listed.join("; ")
+            ),
+            hint: None,
+            fixed: false,
+        }
+        .attach_hint(
+            "paste the content into the file (new hash re-enters intake), tag it ovp/skip \
+             to drop it, or `ovp2 daily --retry-unavailable` to re-fetch the whole set",
+        ),
+    );
 }
 
 /// Today as a civil date in LOCAL time — the same wall clock the scheduler and
@@ -1622,5 +1729,87 @@ mod tests {
             .expect("backlog info");
         assert_eq!(info.severity, Severity::Info);
         assert!(info.message.contains("growing"));
+    }
+
+    /// Write one `content_unavailable` intake record for `rel` and return the
+    /// findings `check_content_unavailable` produces.
+    fn unavailable_findings(root: &Path, rel: &str, bytes: &[u8]) -> Vec<Finding> {
+        let layout = VaultLayout::new();
+        let rec = ovp_intake::IntakeRecord {
+            schema: ovp_intake::INTAKE_SCHEMA.into(),
+            run_id: "daily-2026-06-03".into(),
+            date: "2026-06-03".into(),
+            action: ovp_intake::IntakeAction::ContentUnavailable,
+            from: rel.into(),
+            to: None,
+            url: Some("https://example.com/gone".into()),
+            sha256: ovp_intake::hex_sha256(bytes),
+            dup_of: None,
+            title: None,
+            note: Some("3 failed enrich attempts; last error: 404".into()),
+        };
+        ovp_intake::append_intake_record(&root.join(layout.intake_ledger()), &rec).unwrap();
+        let mut findings = Vec::new();
+        check_content_unavailable(root, &layout, &mut findings);
+        findings
+    }
+
+    #[test]
+    fn content_unavailable_is_reported_while_the_file_is_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rel = "50-Inbox/02-Pinboard/x.md";
+        let abs = tmp.path().join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        let body = b"---\ntitle: x\n---\nthin\n";
+        std::fs::write(&abs, body).unwrap();
+
+        let f = unavailable_findings(tmp.path(), rel, body);
+        let got = f
+            .iter()
+            .find(|x| x.check == "content-unavailable")
+            .expect("finding");
+        assert_eq!(got.severity, Severity::Info, "closed captures are not a failure");
+        assert!(got.message.contains(rel), "{}", got.message);
+        assert!(got.message.contains("404"), "last error is shown: {}", got.message);
+        assert!(got.hint.is_some(), "the operator needs the three ways out");
+    }
+
+    #[test]
+    fn an_edited_capture_is_no_longer_reported_as_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rel = "50-Inbox/02-Pinboard/x.md";
+        let abs = tmp.path().join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        let body = b"---\ntitle: x\n---\nthin\n";
+        std::fs::write(&abs, body).unwrap();
+        // The operator pasted the article in: new bytes, new hash, back in the
+        // pipeline. Doctor must stop pointing at it.
+        std::fs::write(&abs, b"---\ntitle: x\n---\nthe whole article\n").unwrap();
+
+        let f = unavailable_findings(tmp.path(), rel, body);
+        let got = f
+            .iter()
+            .find(|x| x.check == "content-unavailable")
+            .expect("finding");
+        assert_eq!(got.severity, Severity::Pass, "{}", got.message);
+    }
+
+    #[test]
+    fn an_unreadable_intake_ledger_fails_loudly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = VaultLayout::new();
+        let ledger = tmp.path().join(layout.intake_ledger());
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        // What an older binary sees after a newer one wrote a new action.
+        std::fs::write(&ledger, "{\"action\":\"content_unavailable\"}\n").unwrap();
+
+        let mut findings = Vec::new();
+        check_content_unavailable(tmp.path(), &layout, &mut findings);
+        let got = findings
+            .iter()
+            .find(|x| x.check == "content-unavailable")
+            .expect("finding");
+        assert_eq!(got.severity, Severity::Fail, "{}", got.message);
+        assert!(got.message.contains("unreadable"), "{}", got.message);
     }
 }
