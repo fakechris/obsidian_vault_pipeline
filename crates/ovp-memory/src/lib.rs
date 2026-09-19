@@ -15,6 +15,7 @@ pub mod intent;
 pub mod receipts;
 pub mod retrieve;
 pub mod bilingual;
+pub mod closure;
 pub mod source_work;
 pub mod source_work_auto;
 pub mod source_work_config;

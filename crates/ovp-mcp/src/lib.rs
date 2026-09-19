@@ -11,6 +11,7 @@ use ovp_domain::crystal::DurableRecord;
 use ovp_domain::crystal::theme_pages::ThemePagesFile;
 use ovp_domain::tags::TagAliases;
 use ovp_index::{IndexModel, Query, QueryKind, read_index, run_query};
+use ovp_memory::closure::claim_closure;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -78,76 +79,14 @@ impl McpState {
     }
 }
 
-/// Resolve `key` (a `claim_key`, `claim_id`, or `ovp://claim/<key>` URI)
-/// against the active records. claim_key wins; claim_id is a convenience
-/// alias resolved only when unambiguous.
+/// Resolve `key` against the active records — the shared
+/// [`ovp_memory::closure::find_record`], with its lookup failures mapped to
+/// the JSON-RPC invalid-params error. Message text is the shared one, so the
+/// CLI and MCP report the same words.
 fn find_record<'a>(records: &'a [DurableRecord], key: &str) -> Result<&'a DurableRecord, RpcError> {
-    let key = key.strip_prefix("ovp://claim/").unwrap_or(key);
-    if let Some(r) = records.iter().find(|r| r.claim_key == key) {
-        return Ok(r);
-    }
-    let by_id: Vec<&DurableRecord> = records.iter().filter(|r| r.claim_id == key).collect();
-    match by_id.as_slice() {
-        [one] => Ok(one),
-        [] => Err(RpcError {
-            code: -32602,
-            message: format!("No active claim with key or id `{key}`"),
-        }),
-        many => Err(RpcError {
-            code: -32602,
-            message: format!(
-                "claim_id `{key}` is ambiguous ({} records) — use the claim_key: {}",
-                many.len(),
-                many.iter()
-                    .map(|r| r.claim_key.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        }),
-    }
-}
-
-/// The full evidence closure for one claim: text + gate verdicts + every
-/// citation resolved to its source row (title/sha) when the index knows it.
-/// This is the payload behind both the `claim` tool and `ovp://claim/<key>`.
-fn claim_closure(vault_root: &std::path::Path, record: &DurableRecord, model: Option<&IndexModel>) -> Value {
-    // pack_dir basenames key claim↔source joins everywhere else too.
-    let source_of = |case_id: &str| -> Value {
-        let Some(m) = model else { return Value::Null };
-        let sha = m
-            .packs
-            .iter()
-            .find(|p| p.pack_dir.rsplit(['/', '\\']).next() == Some(case_id))
-            .and_then(|p| p.source_sha256.clone());
-        let Some(sha) = sha else { return Value::Null };
-        let Some(src) = m.sources.iter().find(|s| s.sha256 == sha) else {
-            return Value::Null;
-        };
-        serde_json::json!({
-            "sha256": src.sha256,
-            "title": src.title,
-            "url": src.url,
-            "uri": format!("ovp://source/{}", src.sha256),
-        })
-    };
-    let view = ovp_memory::bilingual::evaluate_claim_projection(vault_root, &record.claim_key, &record.claim);
-    serde_json::json!({
-        "uri": format!("ovp://claim/{}", record.claim_key),
-        "claim_key": record.claim_key,
-        "claim_id": record.claim_id,
-        "claim": record.claim,
-        "claim_zh": view.text_zh,
-        "claim_zh_status": view.status,
-        "theme": record.theme,
-        "strength": record.strength,
-        "provenance_score": record.provenance_score,
-        "citations": record.citations.iter().map(|c| serde_json::json!({
-            "case_id": c.case_id,
-            "unit_id": c.unit_id,
-            "quote": c.quote,
-            "resolved_line": c.resolved_line,
-            "source": source_of(&c.case_id),
-        })).collect::<Vec<Value>>(),
+    ovp_memory::closure::find_record(records, key).map_err(|e| RpcError {
+        code: -32602,
+        message: e.to_string(),
     })
 }
 
