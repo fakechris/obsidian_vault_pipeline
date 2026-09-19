@@ -27,7 +27,10 @@ use ovp_enrich::github::{
     GitHubFetch,
 };
 use ovp_enrich::web_fetch::{enrich_needs_content, FixtureWebFetch, WebFetch};
-use ovp_intake::{sweep_intake, sync_pinboard, FixturePinboardFetch, IntakeConfig, PinboardFetch};
+use ovp_intake::{
+    now_unix_secs, record_enrich_outcomes, sweep_intake, sync_pinboard, EnrichOutcome,
+    FixturePinboardFetch, IntakeConfig, PinboardFetch,
+};
 
 use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
@@ -65,6 +68,8 @@ pub struct DailyArgs {
     pub pinboard_max: Option<usize>,
     pub no_lifecycle: bool,
     pub retry_blocked: bool,
+    /// Re-offer captures closed as `content_unavailable` to enrichment.
+    pub retry_unavailable: bool,
     /// Capture thrift: focused | balanced | comprehensive (worth gate before `$` reader).
     pub capture_tier: CaptureTier,
     /// Web fetch fixture directory for enriching needs-content sources.
@@ -150,7 +155,9 @@ fn run_inner(
     let layout = VaultLayout::new();
     let inbox = args.inbox.clone().unwrap_or_else(|| args.vault_root.join(layout.inbox_raw_dir()));
     let ledger_path = args.vault_root.join(layout.daily_ledger());
-    let intake_cfg = IntakeConfig::new(args.vault_root.clone(), args.date.clone(), args.run_id.clone());
+    let mut intake_cfg =
+        IntakeConfig::new(args.vault_root.clone(), args.date.clone(), args.run_id.clone());
+    intake_cfg.retry_unavailable = args.retry_unavailable;
 
     let mut report = RunReport::new(&args.run_id, &args.date);
     sayln!("daily [{}]: vault {}", args.date, args.vault_root.display());
@@ -266,7 +273,19 @@ fn run_inner(
                 format!(", {} skipped by tag", sweep.skipped.len())
             },
             if sweep.already_flagged > 0 {
-                format!(" ({} previously flagged)", sweep.already_flagged)
+                format!(
+                    " ({} previously flagged{})",
+                    sweep.already_flagged,
+                    if sweep.already_unavailable > 0 {
+                        format!(
+                            ", {} closed as content-unavailable{}",
+                            sweep.already_unavailable,
+                            if args.retry_unavailable { " — reopened this run" } else { "" }
+                        )
+                    } else {
+                        String::new()
+                    }
+                )
             } else {
                 String::new()
             },
@@ -310,15 +329,87 @@ fn run_inner(
             );
             let enriched = results.iter().filter(|r| r.updated).count();
             let failed = results.iter().filter(|r| !r.updated).count();
+            // Fetch-attributable outcomes go to the attempt ledger; a capture
+            // that has spent its budget (3 failures or 72h) is closed as
+            // content_unavailable HERE, so the next sweep stops re-offering
+            // it. Before this, an unreachable URL was fetched on every run.
+            //
+            // A LOCAL write failure (fetch returned content, `update_source_body`
+            // could not write it — read-only file, full disk) is deliberately
+            // NOT counted: `content_unavailable` means "the content cannot be
+            // had", and closing a reachable capture over a permissions problem
+            // would strand it even after the operator fixes the permissions.
+            // Those are surfaced as warnings below instead.
+            let mut local_write_failures: Vec<&str> = Vec::new();
+            let mut outcomes: Vec<EnrichOutcome> = Vec::new();
+            for r in &results {
+                let fetched_something = r
+                    .fetch
+                    .content
+                    .as_deref()
+                    .is_some_and(|c| !c.trim().is_empty());
+                if !r.updated && fetched_something {
+                    local_write_failures.push(&r.file_path);
+                    continue;
+                }
+                outcomes.push(EnrichOutcome {
+                    from: r.file_path.clone(),
+                    url: r.url.clone(),
+                    ok: r.updated,
+                    error: if r.updated {
+                        None
+                    } else {
+                        Some(
+                            r.fetch
+                                .error
+                                .clone()
+                                .unwrap_or_else(|| "fetch returned no content".into()),
+                        )
+                    },
+                });
+            }
+            let closed = record_enrich_outcomes(
+                &args.vault_root,
+                &args.run_id,
+                &args.date,
+                now_unix_secs(),
+                &outcomes,
+            )
+            .map_err(CliError::Io)?;
             sayln!(
-                "  enrich: {} needs-content URL(s), {} enriched, {} failed",
+                "  enrich: {} needs-content URL(s), {} enriched, {} failed{}",
                 needs_content_items.len(), enriched, failed,
+                if closed.unavailable.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", {} closed as content-unavailable (edit the file, tag ovp/skip, \
+                         or rerun with --retry-unavailable)",
+                        closed.unavailable.len()
+                    )
+                },
             );
             for r in &results {
                 if !r.updated
                     && let Some(err) = &r.fetch.error {
                         sayln!("    skip {}: {err}", r.url);
                     }
+            }
+            for rec in &closed.unavailable {
+                sayln!("    closed {}: {}", rec.from, rec.note.as_deref().unwrap_or(""));
+            }
+            // Fetched fine, could not write: a local problem the operator can
+            // fix, so it must be loud AND must not count toward closure.
+            for path in &local_write_failures {
+                let msg = format!(
+                    "enrich: fetched content for {path} but could not write it \
+                     (check file permissions / disk space); not counted as content-unavailable"
+                );
+                sayln!("    WARN {msg}");
+                report.warnings.push(msg);
+            }
+            if let Some(intake) = report.intake.as_mut() {
+                intake.content_unavailable += closed.unavailable.len();
             }
         }
     }
@@ -1239,6 +1330,7 @@ mod tests {
             pinboard_max: None,
             no_lifecycle: false,
             retry_blocked: false,
+            retry_unavailable: false,
             capture_tier: ovp_daily::CaptureTier::Balanced,
             web_fetch_fixture: None,
             web_fetch_live: false,

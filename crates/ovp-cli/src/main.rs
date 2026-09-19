@@ -222,6 +222,10 @@ enum Cmd {
         /// Also retry sources blocked by the 3-failure cap.
         #[arg(long)]
         retry_blocked: bool,
+        /// Also re-offer captures closed as content-unavailable (enrichment
+        /// fetch failed 3 times or for 72h) to the enrichment phases.
+        #[arg(long)]
+        retry_unavailable: bool,
         /// Capture thrift before the `$` reader trunk: `focused` (long body),
         /// `balanced` (default, ≥200 chars), or `comprehensive` (thinner notes).
         /// Low-signal sources close as index-only (Succeeded, 0 units) without
@@ -1692,6 +1696,7 @@ fn main() -> ExitCode {
             pinboard_max,
             no_lifecycle,
             retry_blocked,
+            retry_unavailable,
             capture_tier,
             web_fetch_fixture,
             web_fetch_live,
@@ -1736,6 +1741,7 @@ fn main() -> ExitCode {
                 pinboard_max,
                 no_lifecycle,
                 retry_blocked,
+                retry_unavailable,
                 capture_tier,
                 web_fetch_fixture,
                 web_fetch_live,
