@@ -70,8 +70,19 @@ What one run does, in order:
 5. **Audit + report**: every attempt appends to `.ovp/daily-runs.jsonl`;
    every write is logged to `60-Logs/pipeline.jsonl` *before* its success
    record; a per-run report lands in `.ovp/reports/<run_id>.json`.
+   Enrich body rewrites (web fetch, GitHub) log a `source_enriched` event
+   there too — `reason` carries `kind=… url=… old_body_chars=… old_sha256=…
+   new_sha256=… title=…`, so what a rewrite replaced is recoverable from the
+   log even though the old body itself is not kept.
 6. **Refresh**: read model (`.ovp/index/index.json`) + console
    (`.ovp/console/index.html`) are rebuilt.
+   The last stdout line of every run (real or `--dry-run`) is
+   `daily-result: {…}` — one JSON object with `run_id`, `date`, `dry_run`,
+   the vault-relative `report` / `index` / `evidence` / `console` paths
+   (`null` on a dry run) and the counts `processed`, `failed`, `skipped`,
+   `blocked`, `needs_content`, `enriched`, `enrich_failed`. Scripts should
+   read that line instead of guessing `.ovp/reports/<run_id>.json` from the
+   date-keyed run id (two same-day runs share it).
 7. **Portal**: open the web portal to review the day —
 
 ```bash
