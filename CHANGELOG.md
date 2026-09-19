@@ -32,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loaded/enabled state, schedule, env file, last log lines, and warns when
   the last daily run is more than 2 days old; `uninstall` removes the job
   and keeps logs + env file. No daemon (M32 §9) — the OS owns the clock.
+- Enrich leaves a trace (#486): every body rewrite by the web-fetch or
+  GitHub enrich phase appends a `source_enriched` event to
+  `60-Logs/pipeline.jsonl` (`kind`, `url`, `old_body_chars`, `old_sha256`,
+  `new_sha256`, `title` in `reason`). Before this the rewrite was invisible
+  except as a content-hash change between two intake sweeps.
+- `ovp2 daily` ends with one machine-readable stdout line,
+  `daily-result: {json}` — run id, date, vault-relative report / index /
+  evidence / console paths (`null` on `--dry-run`) and the run's counts — so
+  callers stop guessing the report path from the date-keyed run id.
 
 ## [2.0.1] - 2026-07-10
 
