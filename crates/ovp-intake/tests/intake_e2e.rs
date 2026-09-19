@@ -159,13 +159,21 @@ fn pinboard_sync_materializes_dedups_and_feeds_sweep() {
     assert_eq!(out2.skipped_known, 2);
     assert_eq!(read_pinboard_ledger(&root.join(".ovp/pinboard-sync.jsonl")).unwrap().len(), 2);
 
-    // Sweep: the rich bookmark flows to 01-Raw; the bare one is flagged.
+    // Sweep: a bookmark has no body — the owner's note is `annotation:`, not
+    // source text — so BOTH are flagged needs-content and stay in
+    // 02-Pinboard until enrichment fetches the page. Nothing reaches 01-Raw.
     let sweep = sweep_intake(&cfg(root), &HashSet::new(), false).unwrap();
-    assert_eq!(sweep.ingested.len(), 1, "{sweep:?}");
-    assert_eq!(sweep.needs_content.len(), 1);
-    let to = sweep.ingested[0].to.as_ref().unwrap();
-    assert!(to.starts_with("50-Inbox/01-Raw/2026-06/2026-06-02_Rich bookmark-"), "got {to}");
-    assert_eq!(sweep.ingested[0].url.as_deref(), Some("https://rich.example/post"));
+    assert_eq!(sweep.ingested.len(), 0, "{sweep:?}");
+    assert_eq!(sweep.needs_content.len(), 2, "{sweep:?}");
+    let rich = out
+        .new_notes
+        .iter()
+        .find(|r| r.url == "https://rich.example/post")
+        .unwrap();
+    let doc = ovp_domain::units::read_source_from_path(&root.join(&rich.to)).unwrap();
+    assert_eq!(doc.annotation.as_deref(), Some(long_note.trim()));
+    assert_eq!(doc.body_markdown.trim(), "");
+    assert!(root.join(&rich.to).exists(), "left in place for enrichment");
 }
 
 /// Export with `n` bare bookmarks at distinct ascending timestamps.

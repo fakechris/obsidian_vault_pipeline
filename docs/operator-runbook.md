@@ -63,6 +63,17 @@ What one run does, in order:
    to read (< 200 chars body, e.g. bare bookmarks) are flagged
    `needs-content` and left where they are; enriching the file re-queues it
    automatically (the flag is per content-hash).
+   **Your own words go in frontmatter, not the body.** The reserved key
+   `annotation:` (alias `note:`) holds the reader's comment about a source —
+   a Pinboard `extended` note, a clipper remark. It survives intake and body
+   enrichment, is shown on the portal's source page and searchable, but is
+   never fed to the reader as evidence. Anything in the *body* is treated as
+   the source's own text, so a comment placed there is either cited as if the
+   author wrote it or silently replaced when the page is fetched.
+   `ovp2 pinboard` writes `extended` to `annotation:` and leaves the body
+   empty, so every bookmark takes the needs-content → fetch path. The agent's
+   source-reading tools cut the key before handing a model the file, so your
+   note cannot come back as a quote attributed to the author.
 3. **Reader runs**: up to `--max-sources` (default 10) NEW sources go through
    the grounded reader trunk → packs in `40-Resources/Reader/`.
 4. **Lifecycle**: each succeeded source moves to

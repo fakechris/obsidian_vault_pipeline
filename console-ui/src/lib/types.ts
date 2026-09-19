@@ -168,6 +168,10 @@ export interface SourceRow {
    * pinboard-sync ledger at index build. Survives enrichment re-hashes and
    * lifecycle moves — unlike the note's current path. */
   origin?: string;
+  /** The reader's own words about the source (frontmatter `annotation:`),
+   * re-read at index build. Display-only: never evidence, never in a
+   * prompt. Absent on the redacted public model. */
+  annotation?: string;
   rel_path?: string;
   /** Legacy B: last pipeline activity (`processed_on ?? captured_on`). */
   date?: string;

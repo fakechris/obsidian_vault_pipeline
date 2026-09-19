@@ -1,5 +1,6 @@
 //! M31 end-to-end dogfood over the REAL `ovp2` binary on a fixture vault:
-//! pinboard fixture → intake → daily reader (replay over pre-seeded cassettes)
+//! pinboard fixture → intake → web-fetch enrich (fixture) → daily reader
+//! (replay over pre-seeded cassettes)
 //! → lifecycle moves → run report → index → console → crystal-write into the
 //! vault-local store → find. Then: idempotent rerun, and the failure → retry →
 //! blocked path.
@@ -15,7 +16,8 @@ use ovp_domain::units::{
     critic_model_request, extract_units, read_source_from_path, unit_model_request, Unit,
 };
 use ovp_domain::SourceDoc;
-use ovp_index::{read_evidence, read_index};
+use ovp_enrich::web_fetch::{FixtureWebFetch, enrich_needs_content};
+use ovp_index::{SourceStatus, read_evidence, read_index};
 use ovp_llm::{
     CacheMode, CachedModelClient, CallError, ModelClient, ModelReply, ModelRequest, StopReason,
     Usage,
@@ -34,6 +36,10 @@ console that always links back to verbatim evidence rather than free-floating su
 
 const CLIP_QUOTE: &str = "A chunk is a structurally neutral container.";
 const PIN_QUOTE: &str = "Benchmark maxxing is for augmenting experts.";
+/// The bookmark owner's OWN words (`extended`). Under the annotation
+/// contract this is never source text: it must reach the index/portal and
+/// must never be quoted as evidence.
+const PIN_NOTE: &str = "my note: the eval argument is the part worth keeping";
 
 struct Canned(String);
 impl ModelClient for Canned {
@@ -278,22 +284,32 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     let cache_dir = tmp.path().join("cassettes");
     std::fs::create_dir_all(vault.join("Clippings")).unwrap();
 
-    // --- Fixtures: one rich clipping + a pinboard export (rich + bare). ---
+    // --- Fixtures: one rich clipping + a pinboard export (two bookmarks: one
+    // whose page a web-fetch fixture can serve, one it cannot). A bookmark
+    // never carries source text — the owner's `extended` note goes to
+    // `annotation:` and the body is empty — so BOTH start as needs-content
+    // and only the fetchable one becomes readable, on the sweep AFTER the
+    // enrichment that filled its body. ---
     let clip_path = vault.join("Clippings/The Chunk Problem.md");
     std::fs::write(&clip_path, clip_note("The Chunk Problem", "https://e.x/chunk", CLIP_BODY)).unwrap();
 
     let export = tmp.path().join("pinboard-export.json");
     std::fs::write(&export, format!(r#"[
-      {{"href":"https://e.x/benchmaxx","description":"Benchmark Maxxing","extended":"{PIN_BODY}","time":"2026-06-02T08:00:00Z","tags":"ai eval"}},
+      {{"href":"https://e.x/benchmaxx","description":"Benchmark Maxxing","extended":"{PIN_NOTE}","time":"2026-06-02T08:00:00Z","tags":"ai eval"}},
       {{"href":"https://e.x/bare","description":"Bare Bookmark","extended":"just a link","time":"2026-06-03T09:00:00Z","tags":""}}
     ]"#)).unwrap();
+
+    // Web-fetch fixture: only the benchmaxx page is servable.
+    let fetch_fixtures = tmp.path().join("web-fixtures");
+    FixtureWebFetch::with_response(&fetch_fixtures, "https://e.x/benchmaxx", PIN_BODY);
 
     // --- Seed cassettes from the EXACT SourceDocs the binary will read. ---
     // The clipping is moved (bytes unchanged) by intake, so parse it directly.
     let clip_doc = read_source_from_path(&clip_path).unwrap();
     seed_cassettes(&cache_dir, &clip_doc, CLIP_QUOTE, "A chunk is structurally neutral.");
-    // The pinboard note is materialized by sync; render it in a scratch vault
-    // via the same library path the binary uses, then parse THAT file.
+    // The pinboard note is materialized by sync and then filled by web-fetch
+    // enrichment; run BOTH library paths the binary uses in a scratch vault,
+    // then parse THAT file.
     {
         let scratch = tmp.path().join("scratch-vault");
         std::fs::create_dir_all(&scratch).unwrap();
@@ -302,7 +318,16 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
         let out =
             ovp_intake::sync_pinboard(&cfg, &mut fetch, false, &Default::default()).unwrap();
         let rich = out.new_notes.iter().find(|r| r.url.contains("benchmaxx")).unwrap();
+        let fresh = read_source_from_path(&scratch.join(&rich.to)).unwrap();
+        assert_eq!(fresh.annotation.as_deref(), Some(PIN_NOTE), "owner note → annotation");
+        assert_eq!(fresh.body_markdown.trim(), "", "a bookmark has no body");
+        let mut fetcher = FixtureWebFetch::new(&fetch_fixtures);
+        let results =
+            enrich_needs_content(&mut fetcher, &scratch, &[(rich.to.clone(), rich.url.clone())]);
+        assert!(results[0].updated, "fixture enrich fills the body");
         let doc = read_source_from_path(&scratch.join(&rich.to)).unwrap();
+        assert_eq!(doc.annotation.as_deref(), Some(PIN_NOTE), "annotation survives enrich");
+        assert!(doc.body_markdown.contains(PIN_QUOTE), "body is the fetched page");
         seed_cassettes(&cache_dir, &doc, PIN_QUOTE, "Benchmark maxxing augments experts.");
     }
 
@@ -313,19 +338,32 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
         "--date", DATE,
         "--run-id", "daily-e2e",
         "--pinboard-fixture", export.to_str().unwrap(),
+        "--web-fetch-fixture", fetch_fixtures.to_str().unwrap(),
         "--cache-dir", cache_dir.to_str().unwrap(),
     ]));
     assert!(stdout.contains("pinboard: 2 fetched, 2 new"), "{stdout}");
     assert!(stdout.contains("intake:"), "{stdout}");
-    assert!(stdout.contains("done: 2 processed, 0 failed"), "{stdout}");
+    // Both bookmarks are needs-content (empty body); the fixture fills one.
+    assert!(
+        stdout.contains("enrich: 2 needs-content URL(s), 1 enriched, 1 failed"),
+        "{stdout}"
+    );
+    // Only the clipping is readable THIS run — the enriched bookmark is
+    // picked up by the NEXT sweep (its content hash changed).
+    assert!(stdout.contains("done: 1 processed, 0 failed"), "{stdout}");
 
-    // Product state: 2 packs; raw inbox drained; processed dir has both; the
-    // bare bookmark stays in 02-Pinboard flagged needs-content.
+    // Product state: 1 pack; raw inbox drained; processed dir has the
+    // clipping; both bookmarks still sit in 02-Pinboard (one now enriched in
+    // place, the bare one still flagged needs-content).
     let packs = std::fs::read_dir(vault.join("40-Resources/Reader")).unwrap().count();
-    assert_eq!(packs, 2);
+    assert_eq!(packs, 1);
     assert!(md_files(&vault.join("50-Inbox/01-Raw")).is_empty(), "raw queue drained");
-    assert_eq!(md_files(&vault.join("50-Inbox/03-Processed")).len(), 2);
-    assert_eq!(md_files(&vault.join("50-Inbox/02-Pinboard")).len(), 1, "bare bookmark left");
+    assert_eq!(md_files(&vault.join("50-Inbox/03-Processed")).len(), 1);
+    assert_eq!(
+        md_files(&vault.join("50-Inbox/02-Pinboard")).len(),
+        2,
+        "enriched + bare bookmarks left for the next sweep"
+    );
     for state in [
         ".ovp/daily-runs.jsonl", ".ovp/intake.jsonl", ".ovp/pinboard-sync.jsonl",
         ".ovp/reports/daily-e2e.json", ".ovp/index/index.json", ".ovp/index/evidence.json",
@@ -349,7 +387,6 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     );
     let console = std::fs::read_to_string(vault.join(".ovp/console/index.html")).unwrap();
     assert!(console.contains("The Chunk Problem"), "console shows sources");
-    assert!(console.contains("Benchmark Maxxing"));
     assert!(console.contains("待补内容"), "needs-content surfaced bilingually");
 
     // P1 provenance: the daily path stamps the wall-clock instant AND passes
@@ -360,13 +397,52 @@ fn full_daily_workflow_capture_to_console_with_crystal_and_retry() {
     let built = idx.built_at.expect("daily path stamps built_at");
     assert!(built.starts_with(|c: char| c.is_ascii_digit()) && built.contains('T'), "RFC3339: {built}");
 
-    // === Run 2: idempotence. Same inputs → nothing new. ===
+    // === Run 2: the enriched bookmark is swept in and read. ===
     let stdout = run_ok(bin().args([
         "daily",
         "--vault-root", vault.to_str().unwrap(),
         "--date", DATE,
         "--run-id", "daily-e2e-2",
         "--pinboard-fixture", export.to_str().unwrap(),
+        "--web-fetch-fixture", fetch_fixtures.to_str().unwrap(),
+        "--cache-dir", cache_dir.to_str().unwrap(),
+    ]));
+    assert!(stdout.contains("pinboard: 2 fetched, 0 new"), "{stdout}");
+    assert!(stdout.contains("done: 1 processed, 0 failed"), "{stdout}");
+    assert_eq!(std::fs::read_dir(vault.join("40-Resources/Reader")).unwrap().count(), 2);
+    assert!(md_files(&vault.join("50-Inbox/01-Raw")).is_empty(), "raw queue drained");
+    assert_eq!(md_files(&vault.join("50-Inbox/03-Processed")).len(), 2);
+    assert_eq!(
+        md_files(&vault.join("50-Inbox/02-Pinboard")).len(),
+        1,
+        "only the bare bookmark is left"
+    );
+    // The annotation contract, observed end to end: the owner's note is on
+    // the processed source's index row (the portal/API read it from there)
+    // and is NOT in the reader's evidence — the pack quotes the fetched page.
+    let idx = read_index(&vault).unwrap();
+    let bench = idx
+        .sources
+        .iter()
+        .find(|s| s.url.as_deref() == Some("https://e.x/benchmaxx"))
+        .expect("benchmaxx indexed");
+    assert_eq!(bench.status, SourceStatus::Processed);
+    assert_eq!(bench.annotation.as_deref(), Some(PIN_NOTE), "annotation reaches the index");
+    let bench_pack = vault.join(bench.pack_dir.as_deref().expect("processed → pack_dir"));
+    let accepted = std::fs::read_to_string(bench_pack.join("units.accepted.json")).unwrap();
+    assert!(accepted.contains(PIN_QUOTE), "evidence is the fetched page");
+    assert!(!accepted.contains(PIN_NOTE), "the owner's note is never evidence");
+    let console = std::fs::read_to_string(vault.join(".ovp/console/index.html")).unwrap();
+    assert!(console.contains("Benchmark Maxxing"));
+
+    // === Run 3: idempotence. Same inputs → nothing new. ===
+    let stdout = run_ok(bin().args([
+        "daily",
+        "--vault-root", vault.to_str().unwrap(),
+        "--date", DATE,
+        "--run-id", "daily-e2e-3",
+        "--pinboard-fixture", export.to_str().unwrap(),
+        "--web-fetch-fixture", fetch_fixtures.to_str().unwrap(),
         "--cache-dir", cache_dir.to_str().unwrap(),
     ]));
     assert!(stdout.contains("pinboard: 2 fetched, 0 new"), "{stdout}");

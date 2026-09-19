@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Pinboard `extended` notes are no longer written as the note body. A long
+  note used to pass the reader's size gate and be cited as the source's own
+  words; a short one was flagged needs-content and then silently destroyed
+  when enrichment replaced the body. The note now lives in the reserved
+  frontmatter key `annotation:` (alias `note:`), the body is left empty so
+  every bookmark takes the needs-content → fetch path, and the annotation is
+  carried through `SourceDoc` → index `SourceRow.annotation` → `/api/source`
+  → the portal source page (and the SQLite shadow's search text). It is never
+  part of a reader prompt and is scrubbed from the public/static model.
+  Shadow schema bumped to v6 — `ovp2 index` rebuilds it (#481).
+  Keeping it out of the extraction prompt alone was not enough: several tools
+  hand a model raw file content, where the reader's own words would read as
+  the author's and could be quoted back as evidence. The entry is now cut at
+  every model-facing boundary — the agent's `read_source_body` and
+  `search_source_chunks`, the shared `read_source_doc` behind source-grounded
+  chat / source summaries / the session glossary / the MCP `ovp://source`
+  resource, and MCP's `ovp_read_note`. The MCP index model drops the field
+  outright, since that whole surface is model-facing. Every other frontmatter
+  key and all body text are untouched, and the portal still shows the note.
+  Known gap, tracked separately: the clipping parser accepts only `---\n`
+  fences, so a CRLF or unterminated note parses with its frontmatter as BODY
+  — which mis-parses `title`, `source` and `tags` the same way, and predates
+  this key.
+  The Pinboard renderer folds every line break YAML recognizes (bare CR, NEL,
+  U+2028, U+2029) into `\n`: left as-is they terminated the block scalar and
+  made the whole note `Unparseable`, which dropped that bookmark from
+  enrichment permanently. Whitespace inside a line is preserved, so a Markdown
+  hard break survives.
 - claims_zh tail: a claims backlog left by crystal-synth now drains in one
   run instead of being throttled to the daily enqueue budget
   (`auto_max_per_run`, default 30). The tail budget is a separate config key

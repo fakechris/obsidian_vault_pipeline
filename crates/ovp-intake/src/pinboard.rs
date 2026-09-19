@@ -10,9 +10,12 @@
 //!
 //! `sync_pinboard` materializes each NEW bookmark (URL-deduped against the
 //! pinboard ledger AND the intake ledger) as a markdown note in
-//! `50-Inbox/02-Pinboard/`, where the normal intake sweep picks it up: notes
-//! with enough body text flow to `01-Raw` and the reader; bare bookmarks are
-//! flagged `needs_content` for the operator to enrich.
+//! `50-Inbox/02-Pinboard/`, where the normal intake sweep picks it up. The
+//! note body is always EMPTY: a bookmark carries no source text, so every
+//! bookmark is flagged `needs_content` and enrichment fetches the page. The
+//! owner's `extended` note goes into the reserved `annotation:` frontmatter
+//! key — it is the reader's own words, not the source, so it must neither
+//! be read as evidence nor be overwritten when the body is enriched.
 //!
 //! FIRST-SYNC FLOOD GUARD: `posts/all` returns the account's ENTIRE history,
 //! so a first sync against an old Pinboard account can materialize tens of
@@ -652,29 +655,103 @@ fn validate_iso_day(flag: &str, s: &str) -> Result<(), String> {
 }
 
 /// Render the bookmark note in the exact frontmatter dialect the clipping
-/// parser reads (`title`/`source`/`published`/`created`/`tags`). Extra keys
-/// (`clipped_from`) are ignored by the parser but useful to humans.
+/// parser reads (`title`/`source`/`published`/`created`/`tags`/`annotation`).
+/// Extra keys (`clipped_from`) are ignored by the parser but useful to humans.
+///
+/// The body is deliberately empty. The owner's note (`extended`) is the
+/// reader's own words and lives ONLY in `annotation:`: putting it in the body
+/// either made the reader cite the owner's opinion as source evidence (long
+/// notes passed the size gate) or lost it entirely when enrichment replaced
+/// the body (short notes). An empty body is always `needs_content`, so the
+/// page itself is what gets fetched and read.
 fn render_bookmark_note(
     title: &str,
     url: &str,
     published: &str,
     created: &str,
     tags: &str,
-    body: &str,
+    annotation: &str,
 ) -> String {
     let mut tag_lines = String::from("  - \"clippings\"\n  - \"pinboard\"\n");
     for t in tags.split_whitespace() {
         tag_lines.push_str(&format!("  - \"{}\"\n", yaml_escape(t)));
     }
     format!(
-        "---\ntitle: \"{}\"\nsource: \"{}\"\npublished: {}\ncreated: {}\nclipped_from: pinboard\ntags:\n{}---\n{}\n",
+        "---\ntitle: \"{}\"\nsource: \"{}\"\npublished: {}\ncreated: {}\nclipped_from: pinboard\ntags:\n{}{}---\n",
         yaml_escape(title),
         yaml_escape(url),
         published,
         created,
         tag_lines,
-        body.trim_end(),
+        yaml_block_scalar("annotation", annotation),
     )
+}
+
+/// Render `key: |-` + an indented literal block, or nothing when the text is
+/// blank. A literal block scalar needs no escaping — every line is taken
+/// verbatim — which is what makes it safe for arbitrary user prose (quotes,
+/// colons, `#`, a leading `-`). `|-` strips the trailing newline so the parsed
+/// value round-trips to the trimmed input. Lines are indented by two spaces;
+/// an empty line inside the note stays an empty line.
+///
+/// Two deliberate normalizations, both applied BEFORE indenting:
+///
+/// 1. Every line break YAML recognizes becomes `\n`. This is not cosmetic. A
+///    bare CR (or NEL / LS / PS) inside a line is invisible to Rust's
+///    `lines()` but IS a line break to the YAML scanner, so it would emit an
+///    UNindented continuation that terminates the block and breaks the whole
+///    frontmatter — flagging the bookmark `Unparseable` instead of
+///    `NeedsContent`, which quietly removes it from enrichment forever.
+/// 2. The text is trimmed as a whole. Leading whitespace on the first line
+///    would otherwise raise the block's auto-detected indentation above the
+///    two spaces every later line gets, which again breaks the parse.
+///
+/// Whitespace WITHIN a line is preserved, so a Markdown hard break (two
+/// trailing spaces) survives the round trip.
+fn yaml_block_scalar(key: &str, text: &str) -> String {
+    let normalized = normalize_yaml_line_breaks(text);
+    let text = normalized.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("{key}: |-\n");
+    for line in text.split('\n') {
+        if line.is_empty() {
+            out.push('\n');
+        } else {
+            out.push_str("  ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Fold every YAML-recognized line break into `\n`: CRLF, bare CR, NEL
+/// (U+0085), LINE SEPARATOR (U+2028) and PARAGRAPH SEPARATOR (U+2029). Other
+/// C0 control characters are DROPPED: YAML forbids them in a literal scalar,
+/// and the Pinboard API's JSON can carry them (` `), so leaving one in
+/// would make the note unparseable — the same dead end the line breaks caused.
+/// Tab is kept; it is legal and meaningful indentation in prose.
+fn normalize_yaml_line_breaks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                // CRLF is one break, not two.
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push('\n');
+            }
+            '\u{85}' | '\u{2028}' | '\u{2029}' => out.push('\n'),
+            '\n' | '\t' => out.push(c),
+            c if c.is_control() => {}
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn yaml_escape(s: &str) -> String {
@@ -693,7 +770,7 @@ mod tests {
             "2026-06-01",
             "2026-06-09",
             "rust testing",
-            "A body of notes.",
+            "A note of my own.",
         );
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("n.md");
@@ -704,7 +781,108 @@ mod tests {
         assert_eq!(doc.published.as_deref(), Some("2026-06-01"));
         assert!(doc.tags.contains(&"pinboard".to_string()));
         assert!(doc.tags.contains(&"rust".to_string()));
-        assert_eq!(doc.body_markdown.trim(), "A body of notes.");
+        // The owner's note is an annotation, never the body: the body is
+        // empty so the sweep flags needs_content and enrichment fetches
+        // the page instead of reading the owner's opinion as the source.
+        assert_eq!(doc.annotation.as_deref(), Some("A note of my own."));
+        assert_eq!(doc.body_markdown.trim(), "");
+    }
+
+    #[test]
+    fn bookmark_annotation_survives_yaml_hostile_prose_and_blank_lines() {
+        let extended =
+            "  First: line with \"quotes\" and a # hash\n\n- looks like a list\n  indented? yes: it is  \n";
+        let note =
+            render_bookmark_note("T", "https://e.x/p", "2026-06-01", "2026-06-09", "", extended);
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, &note).unwrap();
+        let doc = ovp_domain::units::read_source_from_path(&p).expect("parses");
+        assert_eq!(
+            doc.annotation.as_deref(),
+            Some("First: line with \"quotes\" and a # hash\n\n- looks like a list\n  indented? yes: it is")
+        );
+        assert_eq!(doc.body_markdown.trim(), "");
+    }
+
+    /// A line break YAML recognizes but Rust's `lines()` does not would be
+    /// emitted unindented, terminate the block scalar, and break the WHOLE
+    /// frontmatter — the bookmark would land `Unparseable` (never enriched)
+    /// instead of `NeedsContent`. Each of these used to do exactly that.
+    #[test]
+    fn bookmark_annotation_survives_every_yaml_line_break() {
+        for (name, raw) in [
+            ("bare CR", "first\rsecond"),
+            ("CRLF", "first\r\nsecond"),
+            ("NEL", "first\u{85}second"),
+            ("LINE SEPARATOR", "first\u{2028}second"),
+            ("PARAGRAPH SEPARATOR", "first\u{2029}second"),
+        ] {
+            let note =
+                render_bookmark_note("T", "https://e.x/p", "2026-06-01", "2026-06-09", "", raw);
+            let dir = tempfile::tempdir().unwrap();
+            let p = dir.path().join("n.md");
+            std::fs::write(&p, &note).unwrap();
+            let doc = ovp_domain::units::read_source_from_path(&p)
+                .unwrap_or_else(|e| panic!("{name} broke the frontmatter: {e}\n{note}"));
+            assert_eq!(
+                doc.annotation.as_deref(),
+                Some("first\nsecond"),
+                "{name} did not fold to a newline"
+            );
+            assert_eq!(doc.body_markdown.trim(), "");
+        }
+    }
+
+    /// Whitespace INSIDE a line is content: two trailing spaces are a
+    /// Markdown hard break and must survive the round trip.
+    #[test]
+    fn bookmark_annotation_keeps_a_markdown_hard_break() {
+        let note = render_bookmark_note(
+            "T",
+            "https://e.x/p",
+            "2026-06-01",
+            "2026-06-09",
+            "",
+            "first  \nsecond",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, &note).unwrap();
+        let doc = ovp_domain::units::read_source_from_path(&p).expect("parses");
+        assert_eq!(doc.annotation.as_deref(), Some("first  \nsecond"));
+    }
+
+    /// A C0 control character is legal in the API's JSON but forbidden in a
+    /// YAML literal scalar — verbatim it would break the whole note.
+    #[test]
+    fn bookmark_annotation_drops_control_characters_but_keeps_tabs() {
+        let note = render_bookmark_note(
+            "T",
+            "https://e.x/p",
+            "2026-06-01",
+            "2026-06-09",
+            "",
+            "before\u{0}after\tkept",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, &note).unwrap();
+        let doc = ovp_domain::units::read_source_from_path(&p).expect("parses");
+        assert_eq!(doc.annotation.as_deref(), Some("beforeafter\tkept"));
+    }
+
+    #[test]
+    fn bookmark_without_extended_has_no_annotation_key() {
+        let note =
+            render_bookmark_note("T", "https://e.x/p", "2026-06-01", "2026-06-09", "", "   \n");
+        assert!(!note.contains("annotation"));
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("n.md");
+        std::fs::write(&p, &note).unwrap();
+        let doc = ovp_domain::units::read_source_from_path(&p).expect("parses");
+        assert_eq!(doc.annotation, None);
+        assert_eq!(doc.body_markdown.trim(), "");
     }
 
     #[test]

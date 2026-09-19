@@ -756,6 +756,18 @@ export default function SourceDetailPage() {
         </div>
       )}
 
+      {source.annotation && (
+        <blockquote
+          className="tiny"
+          title={t('source.annotationHint')}
+          style={{ whiteSpace: 'pre-wrap', marginBottom: '0.8rem' }}
+        >
+          <strong>{t('source.annotation')}</strong>
+          <br />
+          {source.annotation}
+        </blockquote>
+      )}
+
       <dl className="meta-rows">
         {source.url && (
           <>

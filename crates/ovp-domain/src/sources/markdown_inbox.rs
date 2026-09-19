@@ -113,6 +113,11 @@ struct ClippingFrontmatter {
     published: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    /// The reader's own words about the source (a Pinboard `extended`
+    /// note, a clipper comment). Reserved key: it is NOT source text and
+    /// never reaches unit extraction. `note:` is accepted as an alias.
+    #[serde(default, alias = "note")]
+    annotation: Option<String>,
     // --- source-kind classification fields ---
     /// `arxiv-paper`, `github-project`, ... Absent → article.
     #[serde(default)]
@@ -157,6 +162,143 @@ fn strip_wikilink(s: &str) -> String {
     }
 }
 
+/// The reserved frontmatter keys holding the READER's own words (never the
+/// source's). `annotation` is canonical; `note` is the accepted alias.
+pub const ANNOTATION_KEYS: [&str; 2] = ["annotation", "note"];
+
+/// Byte span of the reserved annotation entry — its `key:` line plus every
+/// block-scalar continuation line — inside a note's LEADING frontmatter.
+/// `None` when the note has no frontmatter or carries no annotation.
+///
+/// This exists because the annotation contract is not satisfied by keeping
+/// the text out of the reader's prompt alone: any tool that hands a model the
+/// RAW file (the agent's source-read and chunk-search tools do) would put the
+/// reader's own opinion in front of the model as if it were source text, and
+/// it could then be quoted back as evidence. Model-facing readers cut this
+/// span; the parser, the index and the portal keep reading the key normally.
+///
+/// Continuation lines are recognized structurally, not by re-parsing YAML: a
+/// key sits at column 0 inside this dialect, so any indented or empty line
+/// after it belongs to its value. That keeps the cut correct for a multi-line
+/// `|-` block without pulling a YAML parser into a byte-level scan.
+pub fn annotation_span(raw: &str) -> Option<std::ops::Range<usize>> {
+    let (fm_start, fm_len) = frontmatter_region(raw)?;
+    let fm = &raw[fm_start..fm_start + fm_len];
+
+    let mut offset = 0usize;
+    let mut span: Option<std::ops::Range<usize>> = None;
+    for line in fm.split_inclusive('\n') {
+        let starts_at_col0 = !line.starts_with([' ', '\t']) && !line.trim().is_empty();
+        if let Some(open) = &span {
+            if starts_at_col0 {
+                return Some(open.start..fm_start + offset);
+            }
+        } else if starts_at_col0 && is_annotation_key_line(line) {
+            span = Some(fm_start + offset..fm_start + offset);
+        }
+        offset += line.len();
+    }
+    span.map(|open| open.start..fm_start + offset)
+}
+
+/// Does this frontmatter line open the reserved annotation key? Accepts the
+/// plain and simply-quoted spellings (`annotation:`, `"annotation":`,
+/// `'note':`).
+///
+/// KNOWN LIMIT: this is a scanner for the dialect this module WRITES —
+/// block-style mapping, keys at column 0. serde_yaml accepts more than that
+/// (a fully indented root mapping, a flow mapping `{annotation: x}`, a key
+/// escaped as `"annotation"`), and those forms parse as an annotation
+/// but are NOT matched here, so they would not be cut. Nothing in this repo
+/// writes them; a hand-edited note could. Widening the scanner means running
+/// a YAML parse inside a byte-level scan, which is a change worth making on
+/// its own rather than smuggling into the key's introduction.
+fn is_annotation_key_line(line: &str) -> bool {
+    let Some((key, _)) = line.split_once(':') else {
+        return false;
+    };
+    let key = key.trim();
+    let key = key
+        .strip_prefix('"')
+        .and_then(|k| k.strip_suffix('"'))
+        .or_else(|| key.strip_prefix('\'').and_then(|k| k.strip_suffix('\'')))
+        .unwrap_or(key);
+    ANNOTATION_KEYS.contains(&key)
+}
+
+/// `(start, len)` of the frontmatter YAML inside `raw` — the bytes between the
+/// opening fence and the closing one, excluding both. Tolerates a BOM and
+/// CRLF line endings. `None` when there is no leading fence.
+///
+/// A missing CLOSING fence still yields a region (everything after the opening
+/// fence): the redaction contract must fail CLOSED, so a truncated or
+/// malformed note hides its annotation rather than exposing it.
+pub fn frontmatter_region(raw: &str) -> Option<(usize, usize)> {
+    // Every offset this returns is a line boundary, so it is always a char
+    // boundary too — safe to slice the original `&str` with.
+    frontmatter_region_bytes(raw.as_bytes())
+}
+
+/// [`frontmatter_region`] over raw bytes, for callers that must locate the
+/// frontmatter BEFORE deciding what is safe to decode as UTF-8 (a streaming
+/// reader's buffer can end mid-character in the body, and decoding the whole
+/// buffer just to find the fences would make that a redaction bypass).
+pub fn frontmatter_region_bytes(raw: &[u8]) -> Option<(usize, usize)> {
+    let bom = if raw.starts_with(b"\xef\xbb\xbf") { 3 } else { 0 };
+    let after_bom = &raw[bom..];
+    let open = if after_bom.starts_with(b"---\n") {
+        4
+    } else if after_bom.starts_with(b"---\r\n") {
+        5
+    } else {
+        return None;
+    };
+    let start = bom + open;
+
+    // The close must be a line that is EXACTLY `---`. Matching a bare `---`
+    // prefix instead would let an ordinary key like `---metadata: value` end
+    // the region early, and everything after it would escape the cut.
+    let mut line_start = start;
+    for i in start..raw.len() {
+        if raw[i] != b'\n' {
+            continue;
+        }
+        let mut line_end = i;
+        if line_end > line_start && raw[line_end - 1] == b'\r' {
+            line_end -= 1;
+        }
+        if &raw[line_start..line_end] == b"---" {
+            return Some((start, line_start - start));
+        }
+        line_start = i + 1;
+    }
+    // A final line with no trailing newline can still be the closing fence.
+    let mut line_end = raw.len();
+    if line_end > line_start && raw[line_end - 1] == b'\r' {
+        line_end -= 1;
+    }
+    if &raw[line_start..line_end] == b"---" {
+        return Some((start, line_start - start));
+    }
+    // Never closed: fail CLOSED by treating the rest as frontmatter, so a
+    // truncated note hides its annotation instead of exposing it.
+    Some((start, raw.len() - start))
+}
+
+/// `raw` with the annotation entry removed, for the model-facing readers
+/// described on [`annotation_span`]. Borrowed unchanged when there is none.
+pub fn redact_annotation(raw: &str) -> std::borrow::Cow<'_, str> {
+    match annotation_span(raw) {
+        None => std::borrow::Cow::Borrowed(raw),
+        Some(span) => {
+            let mut out = String::with_capacity(raw.len() - span.len());
+            out.push_str(&raw[..span.start]);
+            out.push_str(&raw[span.end..]);
+            std::borrow::Cow::Owned(out)
+        }
+    }
+}
+
 /// Split a clipping into (frontmatter_yaml, body_markdown). Frontmatter
 /// is delimited by `---\n` at the start and a second `---\n` somewhere
 /// later. If there's no frontmatter the entire file is the body.
@@ -186,6 +328,10 @@ pub(crate) fn parse_clipping(raw: &str) -> Result<SourceDoc, String> {
     };
     let title = fm.title.unwrap_or_else(|| "Untitled".to_string());
     let source_url = strip_tracker_params(&fm.source.unwrap_or_default());
+    let annotation = fm
+        .annotation
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty());
     let author = fm.author.map(|a| a.into_string());
     let kind = classify_kind(
         fm.source_type.as_deref(),
@@ -203,6 +349,7 @@ pub(crate) fn parse_clipping(raw: &str) -> Result<SourceDoc, String> {
         author,
         published: fm.published,
         tags: fm.tags,
+        annotation,
         body_markdown: body.to_string(),
         body_line_offset,
         source_kind: kind,
@@ -310,6 +457,134 @@ mod clipping_tests {
     fn body_line_offset_zero_without_frontmatter() {
         let doc = parse_clipping("Just a body, no frontmatter.\n\nMore.").unwrap();
         assert_eq!(doc.body_line_offset, 0);
+    }
+}
+
+#[cfg(test)]
+mod annotation_redaction_tests {
+    use super::{parse_clipping, redact_annotation};
+
+    fn note(annotation_block: &str) -> String {
+        format!(
+            "---\ntitle: \"T\"\nsource: \"https://e.x/p\"\n{annotation_block}tags:\n  - \"pinboard\"\n---\nThe source body.\n"
+        )
+    }
+
+    #[test]
+    fn cuts_a_multi_line_block_scalar_but_keeps_every_other_key() {
+        let raw = note("annotation: |-\n  my own take\n\n  second para\n");
+        assert_eq!(
+            parse_clipping(&raw).unwrap().annotation.as_deref(),
+            Some("my own take\n\nsecond para"),
+            "the parser still reads it"
+        );
+        let cut = redact_annotation(&raw);
+        assert!(!cut.contains("my own take"), "{cut}");
+        assert!(!cut.contains("second para"), "{cut}");
+        assert!(cut.contains("title: \"T\""));
+        assert!(cut.contains("source: \"https://e.x/p\""));
+        assert!(cut.contains("  - \"pinboard\""));
+        assert!(cut.contains("The source body."));
+        // Still a well-formed clipping after the cut, minus the annotation.
+        let doc = parse_clipping(&cut).expect("redacted note still parses");
+        assert_eq!(doc.annotation, None);
+        assert_eq!(doc.title, "T");
+        assert_eq!(doc.tags, vec!["pinboard".to_string()]);
+        assert_eq!(doc.body_markdown.trim(), "The source body.");
+    }
+
+    #[test]
+    fn cuts_the_note_alias_and_a_single_line_value() {
+        let raw = note("note: a one-liner\n");
+        assert_eq!(
+            parse_clipping(&raw).unwrap().annotation.as_deref(),
+            Some("a one-liner")
+        );
+        let cut = redact_annotation(&raw);
+        assert!(!cut.contains("a one-liner"), "{cut}");
+        assert_eq!(parse_clipping(&cut).unwrap().annotation, None);
+    }
+
+    #[test]
+    fn leaves_notes_without_an_annotation_byte_identical() {
+        let raw = note("");
+        assert_eq!(redact_annotation(&raw), raw);
+        assert_eq!(redact_annotation("no frontmatter at all\n"), "no frontmatter at all\n");
+        // A key that merely starts with the reserved name is NOT the key.
+        let other = note("annotation_source: pinboard\n");
+        assert_eq!(redact_annotation(&other), other);
+    }
+
+    #[test]
+    fn an_annotation_in_the_body_is_not_frontmatter_and_is_left_alone() {
+        // Only the LEADING frontmatter is redacted; a line in the body that
+        // happens to look like the key is source text and must survive.
+        let raw = "---\ntitle: \"T\"\n---\nannotation: this is body prose\n";
+        assert_eq!(redact_annotation(raw), raw);
+    }
+
+    /// serde_yaml accepts a quoted key, so the cut must too — otherwise the
+    /// parser reads an annotation the redactor cannot see, and it leaks.
+    #[test]
+    fn cuts_quoted_annotation_keys() {
+        for key in ["\"annotation\"", "'annotation'", "\"note\""] {
+            let raw = note(&format!("{key}: SENTINEL-leak\n"));
+            assert_eq!(
+                parse_clipping(&raw).unwrap().annotation.as_deref(),
+                Some("SENTINEL-leak"),
+                "{key} parses as an annotation"
+            );
+            let cut = redact_annotation(&raw);
+            assert!(!cut.contains("SENTINEL-leak"), "{key} leaked: {cut}");
+        }
+    }
+
+    /// A CRLF note must not slip past the cut. (The clipping parser itself
+    /// does not accept CRLF frontmatter at all — that gap is older and wider
+    /// than this key; the redactor is deliberately the more permissive of the
+    /// two, because the cost of over-cutting is nothing and the cost of
+    /// under-cutting is the reader's own words quoted back as evidence.)
+    #[test]
+    fn cuts_an_annotation_in_crlf_frontmatter() {
+        let raw = "---\r\ntitle: \"T\"\r\nannotation: SENTINEL-crlf\r\ntags:\r\n  - \"x\"\r\n---\r\nBody.\r\n";
+        let cut = redact_annotation(raw);
+        assert!(!cut.contains("SENTINEL-crlf"), "{cut}");
+        assert!(cut.contains("title: \"T\""), "{cut}");
+        assert!(cut.contains("Body."), "{cut}");
+    }
+
+    /// A key that merely STARTS with `---` is not the closing fence. Ending
+    /// the region there would let everything after it escape the cut.
+    #[test]
+    fn a_key_starting_with_three_dashes_is_not_the_closing_fence() {
+        let raw = "---\ntitle: \"T\"\n---metadata: value\nannotation: SENTINEL-after-false-fence\n---\nBody.\n";
+        let cut = redact_annotation(raw);
+        assert!(!cut.contains("SENTINEL-after-false-fence"), "{cut}");
+        assert!(cut.contains("---metadata: value"), "{cut}");
+        assert!(cut.contains("Body."), "{cut}");
+    }
+
+    /// Fail closed: an unterminated fence must hide the annotation, not
+    /// expose it because the closing `---` never arrived.
+    #[test]
+    fn cuts_an_annotation_when_the_fence_never_closes() {
+        let raw = "---\ntitle: \"T\"\nannotation: |-\n  SENTINEL-unterminated\n";
+        let cut = redact_annotation(raw);
+        assert!(!cut.contains("SENTINEL-unterminated"), "{cut}");
+    }
+
+    #[test]
+    fn cuts_an_annotation_that_is_the_last_frontmatter_key() {
+        let raw = "---\ntitle: \"T\"\nannotation: |-\n  trailing key\n---\nBody.\n";
+        assert_eq!(
+            parse_clipping(raw).unwrap().annotation.as_deref(),
+            Some("trailing key")
+        );
+        let cut = redact_annotation(raw);
+        assert!(!cut.contains("trailing key"), "{cut}");
+        let doc = parse_clipping(&cut).expect("redacted note still parses");
+        assert_eq!(doc.annotation, None);
+        assert_eq!(doc.body_markdown.trim(), "Body.");
     }
 }
 

@@ -42,6 +42,9 @@ impl PublicView {
             s.tags.clear();
             s.tags_inferred.clear();
             s.tags_implied.clear();
+            // `annotation` is the reader's own words about the source — as
+            // personal as tags, and often more candid. Private by default.
+            s.annotation = None;
             // `author` is KEPT, deliberately: it is the byline of an article
             // that is already public, and the `url` beside it names the same
             // person or org anyway. This scrubber works by deletion, so every
@@ -141,6 +144,7 @@ mod tests {
             author: Some("A. Byline".into()),
             url: Some("https://example.com".into()),
             origin: None,
+            annotation: Some("secret personal note".into()),
             rel_path: Some("50-Inbox/01-Raw/2026-07/secret.md".into()),
             date: Some("2026-07-01".into()),
             content_date: None,
@@ -214,6 +218,7 @@ mod tests {
         // Personal taxonomy never ships publicly (operator or inferred).
         assert!(m.sources[0].tags.is_empty());
         assert!(m.sources[0].tags_inferred.is_empty());
+        assert_eq!(m.sources[0].annotation, None);
         // URL entities are public content (unlike personal tags) — they survive.
         assert_eq!(m.sources[0].entities, vec!["github:owner/repo".to_string()]);
         // Only the durable claim survives, citing only the public case.

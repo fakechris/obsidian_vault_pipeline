@@ -455,6 +455,8 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
         let Ok(doc) = read_source_from_path(&path) else {
             continue;
         };
+        // Same truth rule as tags: the note's current frontmatter wins.
+        row.annotation = doc.annotation.clone();
         row.tags = canonical_tags(&doc.tags, &aliases);
         if !row.tags.is_empty() {
             tagged += 1;

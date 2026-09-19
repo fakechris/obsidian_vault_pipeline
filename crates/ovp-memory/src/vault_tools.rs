@@ -42,6 +42,10 @@ const MAX_SERIALIZED_PAGE_BYTES: usize = 28 * 1024;
 const MAX_SERIALIZED_RESULT_BYTES: usize = 30 * 1024;
 /// Streaming chunk-scan ceiling — bounds one pass without a whole-file read.
 const MAX_CHUNK_SCAN_BYTES: usize = 32 * 1024 * 1024;
+/// How much of a source's HEAD is buffered to cut the reader's `annotation:`
+/// before a streaming scan. Frontmatter is leading and small; this is a
+/// generous ceiling that keeps the redaction pass O(1) in file size.
+const MAX_FRONTMATTER_SCAN_BYTES: usize = 64 * 1024;
 /// Bounded citation closure size for get_claim (count cap, marked when hit).
 const MAX_CLAIM_CITATIONS: usize = 24;
 /// Whole-file ceiling for body reads: vault sources are markdown (typically
@@ -2256,10 +2260,15 @@ fn scan_searchable_fulltext_block(
         ),
         FulltextScanRegion::DetectingFrontmatter(mut prefix) => {
             prefix.extend_from_slice(block);
-            let header_len = if prefix.starts_with(b"---\n") {
-                Some(4)
-            } else if prefix.starts_with(b"---\r\n") {
-                Some(5)
+            // A UTF-8 BOM before the fence must not defeat detection: missing
+            // the frontmatter means scanning it AS BODY, which would surface
+            // the reader's own `annotation:` as a source snippet.
+            let bom: usize = if prefix.starts_with(b"\xef\xbb\xbf") { 3 } else { 0 };
+            let prefix_body = &prefix[bom..];
+            let header_len = if prefix_body.starts_with(b"---\n") {
+                Some(bom + 4)
+            } else if prefix_body.starts_with(b"---\r\n") {
+                Some(bom + 5)
             } else {
                 None
             };
@@ -2281,7 +2290,11 @@ fn scan_searchable_fulltext_block(
                 } else {
                     *region = FulltextScanRegion::Frontmatter(delimiter_tail);
                 }
-            } else if b"---\n".starts_with(&prefix) || b"---\r\n".starts_with(&prefix) {
+            } else if b"\xef\xbb\xbf---\n".starts_with(&prefix)
+                || b"\xef\xbb\xbf---\r\n".starts_with(&prefix)
+                || b"---\n".starts_with(&prefix)
+                || b"---\r\n".starts_with(&prefix)
+            {
                 *region = FulltextScanRegion::DetectingFrontmatter(prefix);
             } else {
                 scan_fulltext_block(
@@ -2625,9 +2638,25 @@ pub fn search_source_chunks(
     // usable on sources too large for paged body reads. A scan ceiling keeps
     // the pass bounded; hitting it is explicit truncation.
     let (resolved, rel_path) = resolve_source_path(vault_root, model, source_id)?;
-    let file = std::fs::File::open(&resolved).map_err(|e| {
+    let mut file = std::fs::File::open(&resolved).map_err(|e| {
         VaultToolError::Failed(format!("reading source `{source_id}` at {rel_path}: {e}"))
     })?;
+    // Cut the reader's own `annotation:` before the scan can surface it as a
+    // passage: chunk search feeds passages straight into model context, where
+    // the owner's opinion would read as the source's own words. Only the
+    // FRONTMATTER is buffered (it is leading and small) and the redacted head
+    // is chained back in front of the untouched remainder, so the streaming
+    // scan below keeps its bounded-memory contract on any size of source.
+    let mut head = Vec::new();
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(&mut file, MAX_FRONTMATTER_SCAN_BYTES as u64),
+        &mut head,
+    )
+    .map_err(|e| {
+        VaultToolError::Failed(format!("reading source `{source_id}` at {rel_path}: {e}"))
+    })?;
+    let head = redact_head_annotation(&head, source_id, &rel_path)?;
+    let file = std::io::Read::chain(std::io::Cursor::new(head), file);
     // BYTE-level bounded scan: no read_line (a single giant line would be
     // allocated whole before any ceiling check). Retained memory ≤ the
     // passage cap; transient memory = the BufReader block. Paragraph bytes
@@ -3215,6 +3244,57 @@ fn resolve_source_path(
     Ok((resolved, rel_path.to_string()))
 }
 
+/// Cut the annotation out of a source's buffered HEAD, leaving every other
+/// byte alone. Two rules keep this fail-closed, both learned the hard way:
+///
+/// - Only the frontmatter is decoded as text. The head's cut-off point can
+///   land mid-character in the BODY, and treating that as "not UTF-8, leave
+///   it" would silently disable redaction for the whole file.
+/// - If a note opens a frontmatter fence that does not close inside the
+///   buffered head, the annotation may continue past it, so the tool REFUSES
+///   rather than streaming an unredacted tail.
+fn redact_head_annotation(
+    head: &[u8],
+    source_id: &str,
+    rel_path: &str,
+) -> Result<Vec<u8>, VaultToolError> {
+    // Locate the frontmatter in BYTES first. Decoding the whole buffer to
+    // find it would hand a mid-character cut in the BODY the power to fail
+    // the decode and skip redaction entirely.
+    let Some((start, len)) = ovp_domain::sources::markdown_inbox::frontmatter_region_bytes(head)
+    else {
+        return Ok(head.to_vec()); // no frontmatter, nothing to cut
+    };
+    let fm_end = start + len;
+    // When the buffer hit its cap we do NOT know where the file ends, so an
+    // apparent close at the cap may be a `---` the scanner only saw because
+    // the buffer stopped there. Demand a fence that is newline-terminated
+    // INSIDE the buffer; anything else refuses rather than streaming a tail
+    // the redactor never inspected.
+    let buffer_capped = head.len() == MAX_FRONTMATTER_SCAN_BYTES;
+    let fence_terminated = head[fm_end..].contains(&b'\n');
+    if buffer_capped && (fm_end >= head.len() || !fence_terminated) {
+        return Err(VaultToolError::Failed(format!(
+            "source `{source_id}` at {rel_path} has frontmatter larger than \
+             {MAX_FRONTMATTER_SCAN_BYTES} bytes — refusing to search it, because the \
+             reader's `annotation:` could not be fully excluded from the results"
+        )));
+    }
+    // Only the frontmatter is decoded, and it ends on a line boundary.
+    let Ok(fm) = std::str::from_utf8(&head[..fm_end]) else {
+        // Not UTF-8 inside the frontmatter: it never parsed as a clipping, so
+        // it carries no annotation the parser would have read back.
+        return Ok(head.to_vec());
+    };
+    let Some(span) = ovp_domain::sources::markdown_inbox::annotation_span(fm) else {
+        return Ok(head.to_vec());
+    };
+    let mut out = Vec::with_capacity(head.len() - (span.end - span.start));
+    out.extend_from_slice(&head[..span.start]);
+    out.extend_from_slice(&head[span.end..]);
+    Ok(out)
+}
+
 fn read_source_text(
     vault_root: &Path,
     model: &IndexModel,
@@ -3237,11 +3317,16 @@ fn read_source_text(
     let bytes = std::fs::read(&resolved).map_err(|e| {
         VaultToolError::Failed(format!("reading source `{source_id}` at {rel_path}: {e}"))
     })?;
-    String::from_utf8(bytes).map_err(|e| {
+    let text = String::from_utf8(bytes).map_err(|e| {
         VaultToolError::Failed(format!(
             "source `{source_id}` at {rel_path} is not valid UTF-8: {e}"
         ))
-    })
+    })?;
+    // The reader's own `annotation:` is not source text and must never be
+    // quotable as evidence, so it is cut before a model ever sees the file.
+    // Cutting HERE (not at the pagination layer) keeps byte cursors stable:
+    // every page is an offset into this one redacted string.
+    Ok(ovp_domain::sources::markdown_inbox::redact_annotation(&text).into_owned())
 }
 
 fn decode_cursor(cursor: Option<&str>, text: &str) -> Result<usize, VaultToolError> {
@@ -3816,6 +3901,7 @@ mod tests {
             author: None,
             url: Some(format!("https://example.test/{sha256}")),
             origin: None,
+            annotation: None,
             rel_path: rel_path.map(str::to_string),
             date: date.map(str::to_string),
             content_date: None,
@@ -4072,6 +4158,58 @@ mod tests {
         let out = search_sources_ranked(&model, "retrieval", 10, Some(saturated));
         assert_eq!(out["truncated"], json!(true));
         assert_eq!(out.get("query_terms_truncated"), None);
+    }
+
+    /// The reader's own `annotation:` must never reach a model through the
+    /// source-reading tools. Keeping it out of the extraction prompt is not
+    /// enough: these two tools hand the model raw file content, so without a
+    /// cut the owner's opinion arrives as if the source had said it, and can
+    /// be quoted straight back as evidence.
+    #[test]
+    fn source_tools_never_hand_a_model_the_readers_annotation() {
+        const SENTINEL: &str = "SENTINEL-the-owners-own-verdict";
+        let temp = tempfile::tempdir().expect("temp vault");
+        let root = temp.path().to_path_buf();
+        fs::create_dir_all(root.join("sources")).expect("source dir");
+        let note = format!(
+            "---\ntitle: \"Annotated\"\nsource: \"https://e.x/p\"\nannotation: |-\n  {SENTINEL}\n\n  still my words\ntags:\n  - \"pinboard\"\n---\nThe article's own sentence about chunking.\n"
+        );
+        fs::write(root.join("sources/annotated.md"), &note).expect("note");
+        let model = fixture_model(
+            vec![source(
+                "sha-ann",
+                "Annotated",
+                Some("sources/annotated.md"),
+                Some("2026-07-25"),
+            )],
+            vec![],
+            vec![],
+        );
+
+        let body = read_source_body(&root, &model, "sha-ann", None, MAX_BODY_LIMIT).expect("body");
+        let text = body["text"].as_str().expect("body text");
+        assert!(!text.contains(SENTINEL), "read_source_body leaked it: {text}");
+        assert!(!text.contains("still my words"), "leaked continuation: {text}");
+        // The cut is surgical: the rest of the note still reaches the model.
+        assert!(text.contains("title: \"Annotated\""), "{text}");
+        assert!(text.contains("The article's own sentence about chunking."), "{text}");
+
+        // Chunk search streams the file on a separate path — cover it too.
+        let hit = search_source_chunks(&root, &model, "sha-ann", SENTINEL, 5).expect("chunks");
+        let chunks = hit["chunks"].as_array().expect("chunks array");
+        assert!(
+            chunks.is_empty(),
+            "search_source_chunks surfaced the annotation: {chunks:?}"
+        );
+        let found = search_source_chunks(&root, &model, "sha-ann", "chunking", 5).expect("chunks");
+        let passage = found["chunks"][0]["passage"]
+            .as_str()
+            .expect("source text is still searchable");
+        assert!(
+            passage.contains("The article's own sentence about chunking."),
+            "{passage}"
+        );
+        assert!(!passage.contains(SENTINEL), "leaked via chunk passage: {passage}");
     }
 
     fn fixture_model(
