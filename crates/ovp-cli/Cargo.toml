@@ -53,6 +53,7 @@ ovp-eval = { path = "../ovp-eval" }
 ovp-daily = { path = "../ovp-daily" }
 ovp-intake = { path = "../ovp-intake" }
 ovp-index = { path = "../ovp-index" }
+ovp-api-projection = { path = "../ovp-api-projection" }
 ovp-console = { path = "../ovp-console" }
 ovp-publish = { path = "../ovp-publish" }
 ovp-enrich = { path = "../ovp-enrich" }
