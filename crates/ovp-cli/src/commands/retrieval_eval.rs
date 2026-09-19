@@ -819,6 +819,7 @@ mod tests {
             author: None,
             url: None,
             origin: None,
+            annotation: None,
             rel_path: None,
             date: None,
             content_date: None,

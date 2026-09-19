@@ -119,6 +119,14 @@ fn overlay_human_patches(
 /// Read a source's markdown from the vault, capped at `MAX_SOURCE_DOC_BYTES`.
 /// Returns `(markdown, truncated, error)` — every failure mode becomes an
 /// explicit error string so the endpoint always answers. Traversal-safe.
+///
+/// The reserved `annotation:` frontmatter entry — the READER's own words
+/// about the source, never the source's — is cut here. This text feeds
+/// source-grounded chat, source summaries, the session glossary and the MCP
+/// `ovp://source/` resource, all of which put it in front of a model, where
+/// it would read as something the author wrote and could be quoted back as
+/// evidence. The annotation still reaches the portal, which renders it as the
+/// reader's own note through `SourceRow::annotation` rather than as body text.
 pub fn read_source_doc(
     vault_root: &Path,
     layout: &VaultLayout,
@@ -140,7 +148,10 @@ pub fn read_source_doc(
         recorded
     };
     match std::fs::read_to_string(&path) {
-        Ok(mut text) => {
+        Ok(text) => {
+            // Cut BEFORE the cap, so the budget is spent on source text.
+            let mut text =
+                ovp_domain::sources::markdown_inbox::redact_annotation(&text).into_owned();
             let truncated = text.len() > MAX_SOURCE_DOC_BYTES;
             if truncated {
                 let mut cut = MAX_SOURCE_DOC_BYTES;
@@ -174,6 +185,35 @@ mod tests {
         append_patch_record, FinalClass, HumanPatchRecord, ProvenanceClass, StoreOp,
         StrengthClass,
     };
+
+    /// This reader feeds source-grounded chat, source summaries, the session
+    /// glossary and the MCP `ovp://source/` resource. Every one of those puts
+    /// the text in front of a model, so the reader's own note must be gone
+    /// before it leaves here.
+    #[test]
+    fn read_source_doc_cuts_the_readers_annotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("50-Inbox/01-Raw")).unwrap();
+        std::fs::write(
+            root.join("50-Inbox/01-Raw/n.md"),
+            "---\ntitle: \"T\"\nannotation: |-\n  SENTINEL-my-own-verdict\ntags:\n  - \"x\"\n---\nThe author's own sentence.\n",
+        )
+        .unwrap();
+
+        let (markdown, truncated, error) = read_source_doc(
+            root,
+            &VaultLayout,
+            Some("50-Inbox/01-Raw/n.md"),
+            None,
+        );
+        assert_eq!(error, None);
+        assert!(!truncated);
+        let md = markdown.expect("markdown");
+        assert!(!md.contains("SENTINEL-my-own-verdict"), "{md}");
+        assert!(md.contains("title: \"T\""), "{md}");
+        assert!(md.contains("The author's own sentence."), "{md}");
+    }
 
     #[test]
     fn test_load_active_records_overlays_patches() {

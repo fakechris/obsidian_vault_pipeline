@@ -72,6 +72,12 @@ pub struct SourceRow {
     /// Serde-additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// The reader's own words about the source: the note's CURRENT
+    /// frontmatter `annotation:` (alias `note:`), re-read on every build like
+    /// tags. Display-only — it is never evidence and never enters a prompt.
+    /// Serde-additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<String>,
     /// Current best-known vault-relative location.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rel_path: Option<String>,
@@ -138,6 +144,7 @@ impl SourceRow {
             author: None,
             url: None,
             origin: None,
+            annotation: None,
             rel_path: None,
             date: None,
             content_date: None,
