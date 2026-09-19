@@ -220,12 +220,19 @@ ovp2 find --vault-root "$VAULT" --kind claims --status durable
 ovp2 find --vault-root "$VAULT" --kind cards "agent memory"
 ovp2 find --vault-root "$VAULT" --kind units "verbatim quote"
 ovp2 find --vault-root "$VAULT" --kind runs --date 2026-06
+ovp2 claim --vault-root "$VAULT" <claim_key|claim_id|ovp://claim/KEY> [--json]  # one claim's evidence closure
 ovp2 ask --vault-root "$VAULT" --client live "What does the vault say about agent memory?"
 ovp2 ask --vault-root "$VAULT" --client live --strict-ask "What evidence supports that?"
 ```
 
 Pinboard without live credentials: export from <https://pinboard.in/export/>
 (JSON) and use `--fixture`. The note format and dedup are identical to live.
+
+`claim` prints one durable claim's evidence closure (text, gates, every
+citation resolved to its source through the index). `--json` emits exactly the
+payload the MCP `claim` tool returns, so scripts and CI checks can audit a
+`[claim:<key>]` citation without speaking JSON-RPC. A missing index is not an
+error: citations then carry `source: null`.
 
 `ask` uses the rebuilt evidence sidecar (`.ovp/index/evidence.json`) plus the
 Crystal claim rows. It prints a verification summary such as

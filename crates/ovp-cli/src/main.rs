@@ -386,6 +386,20 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// PRODUCT — the evidence closure of one durable claim: text, gate
+    /// verdicts, and every citation resolved to its source. Same payload as
+    /// the MCP `claim` tool / `ovp://claim/<key>`, for scripts and CI.
+    /// `ovp2 claim --vault-root V <claim_key|claim_id|ovp://claim/KEY> [--json]`
+    Claim {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// A claim_key, a claim_id (when unambiguous), or an
+        /// `ovp://claim/<key>` URI.
+        key: String,
+        /// Emit the closure JSON (pretty-printed) instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// PRODUCT — refresh the bilingual product console
     /// (`.ovp/console/index.html`) from product state: attention feed, runs,
     /// sources, reader packs, crystal claims. Also persists the read model so
@@ -1827,6 +1841,9 @@ fn main() -> ExitCode {
             entity,
             json,
         }),
+        Cmd::Claim { vault_root, key, json } => {
+            commands::claim::run(commands::claim::ClaimArgs { vault_root, key, json })
+        }
         Cmd::Console { vault_root, date } => {
             let date = date.unwrap_or_else(today_iso);
             commands::console_cmd::run(commands::console_cmd::ConsoleArgs { vault_root, date })

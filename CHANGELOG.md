@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run.
 
 ### Added
+- `ovp2 claim <key> [--json]` — the evidence closure of one durable claim on
+  the CLI. The closure moved to `ovp_memory::closure` and is now the single
+  implementation behind the CLI verb, the MCP `claim` tool, and the
+  `ovp://claim/<key>` resource (#484).
 - claims_zh observability: tail runs append a record
   (`translated`/`skipped`/`errors`/`error_keys`/`quarantined`/`remaining`) to
   `.ovp/crystal/claims_zh_runs.jsonl` — pure no-op runs leave no record, the
