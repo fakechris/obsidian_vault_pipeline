@@ -565,6 +565,7 @@ mod tests {
             origin: None,
             annotation: None,
             meta: Default::default(),
+            capture_path: None,
             rel_path: None,
             date: None,
             content_date: None,

@@ -20,7 +20,7 @@ pub use cards::{
     build_card_prompt, card_model_request, parse_cards, run_card_synthesis, validate_cards,
     CardReport, CardSynthesisRun, RawCard, CARD_PROMPT_ID,
 };
-pub use pack::{write_reader_pack, GroundingStatus, ReaderPack};
+pub use pack::{write_reader_pack, GroundingStatus, ReaderPack, SourceProvenance};
 pub use pipeline::{run_reader_pipeline, ReaderPipelineError, ReaderPipelineRun};
 
 /// A reader card (view layer). `cited_unit_ids` are the truth-layer Units this card

@@ -32,6 +32,10 @@ impl PublicView {
         m.sources.retain(|s| s.status == SourceStatus::Processed);
         for s in m.sources.iter_mut() {
             s.rel_path = None;
+            // Same reason as `rel_path`, and worse: the capture path is the
+            // PRE-move location, so it names the capture mechanism and the
+            // producer's own filename as well as the vault layout.
+            s.capture_path = None;
             s.last_reason = None;
             s.last_run_id = None;
             s.fail_count = 0;
@@ -153,6 +157,7 @@ mod tests {
             meta: [("x_capture_id".to_string(), "internal-42".to_string())]
                 .into_iter()
                 .collect(),
+            capture_path: Some("50-Inbox/00-Capture/lumenbox/msg-7.md".into()),
             rel_path: Some("50-Inbox/01-Raw/2026-07/secret.md".into()),
             date: Some("2026-07-01".into()),
             content_date: None,
@@ -220,6 +225,12 @@ mod tests {
         assert_eq!(m.sources[0].sha256, "aaa");
         // Internal path + failure diagnostics scrubbed.
         assert!(m.sources[0].rel_path.is_none());
+        // The pre-move capture path leaks the capture mechanism and the
+        // producer's filename on top of the vault layout, so it must go too.
+        assert!(
+            m.sources[0].capture_path.is_none(),
+            "capture_path must never reach a published artifact"
+        );
         assert!(m.sources[0].last_reason.is_none());
         assert!(m.sources[0].last_run_id.is_none());
         assert_eq!(m.sources[0].fail_count, 0);

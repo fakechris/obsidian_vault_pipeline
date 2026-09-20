@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -30,7 +30,11 @@ use crate::evidence::EvidenceModel;
 use crate::model::IndexModel;
 
 const SQLITE_FILE: &str = "read-model.sqlite";
-// v7: source_meta (custom frontmatter keys carried to the index, INV-621).
+// v7: TWO DDL changes landed in the same version, which is fine because the
+// shadow is rebuilt wholesale on a version mismatch rather than migrated
+// step by step — anything older than v7 rebuilds and gets both:
+//   - source_meta (custom frontmatter keys carried to the index, INV-621)
+//   - sources.capture_path (pre-move capture origin, INV-623)
 // v5: claims.patched_by (human patch ledger overlay, M37). A version
 // bump is MANDATORY for any DDL change: the reader trusts the stored
 // version, so an old shadow without the column would otherwise pass the
@@ -170,7 +174,8 @@ CREATE TABLE sources(
   sha256 TEXT NOT NULL, status TEXT NOT NULL, title TEXT, author TEXT,
   url TEXT, origin TEXT, rel_path TEXT, date TEXT, content_date TEXT,
   captured_on TEXT, processed_on TEXT, last_run_id TEXT, pack_dir TEXT,
-  fail_count INTEGER NOT NULL, last_reason TEXT, annotation TEXT);
+  fail_count INTEGER NOT NULL, last_reason TEXT, annotation TEXT,
+  capture_path TEXT);
 CREATE INDEX idx_sources_sha ON sources(sha256);
 CREATE INDEX idx_sources_status ON sources(status);
 CREATE INDEX idx_sources_date ON sources(date);
@@ -375,8 +380,8 @@ fn build_into(
             .prepare(
                 "INSERT INTO sources(sha256, status, title, author, url, origin, rel_path,
                  date, content_date, captured_on, processed_on, last_run_id, pack_dir,
-                 fail_count, last_reason, annotation)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                 fail_count, last_reason, annotation, capture_path)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             )
             .map_err(|e| format!("prepare sources: {e}"))?;
         let mut tag = tx
@@ -392,7 +397,9 @@ fn build_into(
             .prepare("INSERT INTO sources_fts(rowid, text) VALUES(?1,?2)")
             .map_err(|e| format!("prepare sources_fts: {e}"))?;
         for s in &model.sources {
-            src.execute((
+            // `params!`, not a tuple: rusqlite only implements `Params` for
+            // tuples up to 16 and this row now binds 17 columns.
+            src.execute(params![
                 &s.sha256,
                 enum_str(&s.status),
                 &s.title,
@@ -409,7 +416,8 @@ fn build_into(
                 s.fail_count as i64,
                 &s.last_reason,
                 &s.annotation,
-            ))
+                &s.capture_path,
+            ])
             .map_err(|e| format!("source {}: {e}", s.sha256))?;
             let rowid = tx.last_insert_rowid();
             let mut fts_text = String::new();
@@ -922,7 +930,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
         .prepare(
             "SELECT sha256, status, title, author, url, origin, rel_path, date, content_date,
              captured_on, processed_on, last_run_id, pack_dir, fail_count, last_reason,
-             annotation
+             annotation, capture_path
              FROM sources ORDER BY rowid",
         )
         .and_then(|mut st| {
@@ -944,6 +952,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                     r.get::<_, i64>(13)?,
                     r.get::<_, Option<String>>(14)?,
                     r.get::<_, Option<String>>(15)?,
+                    r.get::<_, Option<String>>(16)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -972,6 +981,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                 fail_count: row.13 as usize,
                 last_reason: row.14,
                 annotation: row.15,
+                capture_path: row.16,
                 tags,
                 tags_inferred,
                 tags_implied,
@@ -1484,6 +1494,7 @@ mod tests {
                 ]
                 .into_iter()
                 .collect(),
+                capture_path: None,
                 rel_path: Some("50-Inbox/03-Processed/a.md".into()),
                 date: Some("2026-08-01".into()),
                 content_date: Some("2026-07-30".into()),

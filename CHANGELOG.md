@@ -75,6 +75,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flat-string form. `SourceDoc` stays typed (invariant #3): the map travels
   beside it from `read_source_with_meta`, never inside it. Shadow schema
   bumped to v7 (new `source_meta` table) — `ovp2 index` rebuilds it.
+- Sources and reader packs now say where they came from without needing
+  `index.json`. `SourceRow.capture_path` keeps the intake record's `from` —
+  the capture location before the sweep normalized and moved the file — beside
+  the existing `rel_path` (still the current location); first intake record
+  wins, like `captured_on`. A pack's `run-status.json` gains `source_url`,
+  `source_sha256` and `source_rel_path`, so two sources with the same title
+  are no longer indistinguishable from inside the pack, and a pack that
+  outlives an index rebuild still names its source. `ovp2 doctor` gains
+  `pack-provenance`, which cross-checks each pack's self-declared sha against
+  the sha the index joined it to: until now that join was the only link from a
+  claim back to its source and nothing could verify it. Packs written earlier
+  carry no `source_sha256` and are reported as legacy at INFO. All fields are
+  serde-additive; the SQLite shadow schema is bumped to v7 (`ovp2 index`
+  rebuilds it) (#485).
 - `ovp2 claim <key> [--json]` — the evidence closure of one durable claim on
   the CLI. The closure moved to `ovp_memory::closure` and is now the single
   implementation behind the CLI verb, the MCP `claim` tool, and the

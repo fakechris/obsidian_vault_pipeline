@@ -3903,6 +3903,7 @@ mod tests {
             origin: None,
             annotation: None,
             meta: Default::default(),
+            capture_path: None,
             rel_path: rel_path.map(str::to_string),
             date: date.map(str::to_string),
             content_date: None,

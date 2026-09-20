@@ -26,7 +26,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use ovp_domain::reader::{run_reader_pipeline, ReaderPipelineError};
+use ovp_domain::reader::{run_reader_pipeline, ReaderPipelineError, SourceProvenance};
 use ovp_domain::units::read_source_from_path;
 use ovp_domain::VaultLayout;
 use ovp_intake::vaultops::{hex_sha256, rel_to, safe_move};
@@ -340,7 +340,26 @@ where
     let mut critic = make_client()?;
     let mut cards = make_client()?;
 
-    match run_reader_pipeline(&source, base.as_mut(), critic.as_mut(), cards.as_mut(), &out_dir) {
+    // What the pack records about its own origin. `item.sha256` is the
+    // plan-time hash, already re-verified against the bytes above, so it is
+    // the same identity the ledger and the index use for this content.
+    let provenance = SourceProvenance {
+        // The pipeline refills this from the SourceDoc; named here so the
+        // struct is complete at the call site.
+        title: source.title.clone(),
+        url: Some(source.source_url.clone()).filter(|u| !u.is_empty()),
+        sha256: Some(item.sha256.clone()),
+        rel_path: Some(item.rel.clone()),
+    };
+
+    match run_reader_pipeline(
+        &source,
+        &provenance,
+        base.as_mut(),
+        critic.as_mut(),
+        cards.as_mut(),
+        &out_dir,
+    ) {
         Ok(run) => match run.card_failure {
             // Pack + audit artifacts are on disk, but the run is not a success:
             // record Failed (no pack_dir → no write-log event) so the source is
