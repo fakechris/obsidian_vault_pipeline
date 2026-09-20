@@ -155,7 +155,7 @@ impl Retriever {
                     unit.content.clone()
                 } else {
                     let end = unit.content.char_indices().nth(160).map(|(i, _)| i).unwrap_or(unit.content.len());
-                    format!("{}…", &unit.content[..end].trim_end())
+                    format!("{}…", unit.content[..end].trim_end())
                 };
                 matched_units.push(ScoredChildUnit {
                     unit_id: unit.unit_id.clone(),

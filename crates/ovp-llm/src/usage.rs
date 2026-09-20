@@ -198,13 +198,11 @@ fn ymd_from_unix(ts: u64) -> (i32, u32, u32) {
         30,
         31,
     ];
-    let mut month: u32 = 1;
-    for m in months.iter() {
+    for (idx, m) in months.iter().enumerate() {
         if days < *m {
-            return (year, month, (days + 1) as u32);
+            return (year, idx as u32 + 1, (days + 1) as u32);
         }
         days -= *m;
-        month += 1;
     }
     (year, 12, 31)
 }

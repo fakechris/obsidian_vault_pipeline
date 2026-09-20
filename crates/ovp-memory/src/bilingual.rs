@@ -718,7 +718,7 @@ impl GlossaryFile {
             map.insert(t.en.to_ascii_lowercase(), t);
         }
         self.terms = map.into_values().collect();
-        self.terms.sort_by(|a, b| a.en.to_ascii_lowercase().cmp(&b.en.to_ascii_lowercase()));
+        self.terms.sort_by_key(|a| a.en.to_ascii_lowercase());
     }
 }
 

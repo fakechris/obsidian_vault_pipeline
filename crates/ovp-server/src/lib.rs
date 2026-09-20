@@ -5254,7 +5254,7 @@ fn handle_chats_list(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
             rows.push((mtime, name.to_string(), path));
         }
     }
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|b| std::cmp::Reverse(b.0));
     let list: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(mtime, name, path)| {
