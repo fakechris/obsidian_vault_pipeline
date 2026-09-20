@@ -297,6 +297,8 @@ export const zh: Record<keyof typeof en, string> = {
   'workq.itemFinished': '完成于 {when}',
   'workq.itemRunningFor': '已跑 {elapsed}',
   'source.url': '链接',
+  'source.annotation': '我的备注',
+  'source.annotationHint': '来自笔记 frontmatter 的 `annotation:`。是你自己的话，不会被当作证据。',
   'source.staticLite':
     '此处不发布全文与证据层。点击上方链接阅读原文;该来源支持的持久主张列在右侧。',
   'source.staticLiteNoUrl':

@@ -60,7 +60,16 @@ struct McpState {
 
 impl McpState {
     fn load_model(&self) -> Option<IndexModel> {
-        read_index(&self.vault_root).ok()
+        let mut model = read_index(&self.vault_root).ok()?;
+        // EVERY consumer of this model is model-facing — resources serialize
+        // whole `SourceRow`s, `find` echoes hits back. `annotation` is the
+        // READER's own words about a source, so it must not travel through
+        // this surface at all, or an agent can quote it as the source's. The
+        // portal reads the same field from its own (unredacted) index.
+        for source in model.sources.iter_mut() {
+            source.annotation = None;
+        }
+        Some(model)
     }
 
     /// ACTIVE durable records with display themes applied — the same fold the
@@ -1659,8 +1668,15 @@ fn tool_ovp_read_note(state: &McpState, args: &Value) -> Result<Value, RpcError>
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(full_content.as_bytes());
+    // Hashed from the REAL bytes: the cursor's drift check must track the
+    // file on disk, not this tool's redacted view of it.
     let actual_sha256 = format!("{:x}", hasher.finalize());
 
+    // The reader's own `annotation:` is not source text and this tool hands
+    // its output straight to a model. Cut it before paginating, so line
+    // offsets stay consistent across pages of the same redacted view.
+    let full_content =
+        ovp_domain::sources::markdown_inbox::redact_annotation(&full_content).into_owned();
     let lines: Vec<&str> = full_content.lines().collect();
     let total_lines = lines.len();
 
@@ -2512,6 +2528,74 @@ mod tests {
             ask_client: None,
         };
         (tmp, state)
+    }
+
+    /// The whole MCP surface is model-facing, so the reader's own words must
+    /// not travel through it — not as a note's body, and not as a serialized
+    /// index field either.
+    #[test]
+    fn mcp_never_serves_the_readers_annotation() {
+        const SENTINEL: &str = "SENTINEL-my-own-verdict";
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let layout = VaultLayout::new();
+        std::fs::create_dir_all(root.join("50-Inbox/01-Raw")).unwrap();
+        let rel = "50-Inbox/01-Raw/annotated.md";
+        std::fs::write(
+            root.join(rel),
+            format!("---\ntitle: \"T\"\nannotation: |-\n  {SENTINEL}\n---\nThe author's own sentence.\n"),
+        )
+        .unwrap();
+
+        let mut row = ovp_index::SourceRow::blank("sha-ann", ovp_index::SourceStatus::Processed);
+        row.title = Some("T".into());
+        row.rel_path = Some(rel.into());
+        row.annotation = Some(SENTINEL.into());
+        let model = ovp_index::IndexModel {
+            schema: ovp_index::INDEX_SCHEMA.into(),
+            date: "2026-07-24".into(),
+            built_at: None,
+            run_id: None,
+            totals: ovp_index::Totals::default(),
+            sources: vec![row],
+            packs: vec![],
+            claims: vec![],
+            runs: vec![],
+            ops: ovp_index::OpsState::default(),
+        };
+        ovp_index::write_index(&root, &model).unwrap();
+        let state = McpState {
+            vault_root: root,
+            layout,
+            ask_client: None,
+        };
+
+        // The index resource serializes whole SourceRows.
+        let index_res = dispatch(
+            &state,
+            "resources/read",
+            &serde_json::json!({ "uri": "ovp://index" }),
+        )
+        .expect("index resource");
+        let index_text = index_res["contents"][0]["text"].as_str().unwrap();
+        assert!(!index_text.contains(SENTINEL), "ovp://index leaked: {index_text}");
+
+        // The source resource serializes the row AND the markdown.
+        let src_res = dispatch(
+            &state,
+            "resources/read",
+            &serde_json::json!({ "uri": "ovp://source/sha-ann" }),
+        )
+        .expect("source resource");
+        let src_text = src_res["contents"][0]["text"].as_str().unwrap();
+        assert!(!src_text.contains(SENTINEL), "ovp://source leaked: {src_text}");
+        assert!(src_text.contains("The author's own sentence."), "{src_text}");
+
+        // ovp_read_note hands raw file lines back to the model.
+        let note = call(&state, "ovp_read_note", serde_json::json!({ "key": rel }))
+            .expect("ovp_read_note");
+        let note_text = serde_json::to_string(&note).unwrap();
+        assert!(!note_text.contains(SENTINEL), "read_note leaked: {note_text}");
     }
 
     fn call(state: &McpState, tool: &str, args: serde_json::Value) -> Result<Value, RpcError> {

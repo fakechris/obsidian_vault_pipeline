@@ -307,6 +307,8 @@ export const en = {
   'workq.itemFinished': 'finished {when}',
   'workq.itemRunningFor': 'running {elapsed}',
   'source.url': 'url',
+  'source.annotation': 'Your note',
+  'source.annotationHint': 'From the note’s frontmatter `annotation:`. Your own words — never used as evidence.',
   'source.companions': 'open with',
   'source.staticLite':
     'The full text and evidence layer are not published here. Follow the url above to read the original; the durable claims this source supports are listed on the right.',
