@@ -461,6 +461,67 @@ mod clipping_tests {
 }
 
 #[cfg(test)]
+mod inv627_fence_shape_tests {
+    use super::{parse_clipping, split_frontmatter};
+
+    /// Characterization, not aspiration: this records what the parser does
+    /// TODAY with each line-ending / fence shape, so a later unification has a
+    /// baseline to diff against. Where the recorded behaviour is wrong, the
+    /// comment says so and the assertion still pins the current answer.
+    #[test]
+    fn fence_shape_matrix() {
+        let cases: &[(&str, &str, bool)] = &[
+            ("LF", "---\ntitle: T\n---\nbody\n", true),
+            ("BOM+LF", "\u{feff}---\ntitle: T\n---\nbody\n", true),
+            // CRLF is NOT recognised: `strip_prefix("---\n")` cannot match
+            // `---\r\n`, so the entire YAML block is returned as BODY.
+            ("CRLF", "---\r\ntitle: T\r\n---\r\nbody\r\n", false),
+            // Unterminated: all five implementations in this repo agree on
+            // "no frontmatter", so the YAML is read as prose.
+            ("unterminated", "---\ntitle: T\nbody\n", false),
+        ];
+        for (name, raw, expect_fm) in cases {
+            let (fm, _) = split_frontmatter(raw);
+            assert_eq!(fm.is_some(), *expect_fm, "{name}: frontmatter detection");
+        }
+    }
+
+    /// The consequence that matters. A CRLF note's `annotation:` — the
+    /// reader's OWN words — ends up in `body_markdown`, which is exactly the
+    /// source text the grounded reader quotes as evidence. This is the leak
+    /// INV-619 closed for LF notes and which CRLF notes still have.
+    #[test]
+    fn crlf_note_leaks_its_annotation_into_the_body() {
+        let crlf = "---\r\ntitle: \"T\"\r\nsource: \"https://e.x/p\"\r\nannotation: |\r\n  my own take on this\r\n---\r\nThe real source text.\r\n";
+        let doc = parse_clipping(crlf).unwrap();
+
+        // Nothing was parsed out of the frontmatter...
+        assert_eq!(doc.title, "Untitled", "CRLF: title not parsed");
+        assert_eq!(doc.source_url, "", "CRLF: source not parsed");
+        assert_eq!(doc.annotation, None, "CRLF: annotation not parsed");
+
+        // ...and the reader's own words are now part of the source body.
+        assert!(
+            doc.body_markdown.contains("my own take on this"),
+            "CRLF annotation leaks into body: {:?}",
+            doc.body_markdown
+        );
+    }
+
+    /// The same note with LF endings behaves correctly — the contrast is the
+    /// whole point.
+    #[test]
+    fn lf_note_keeps_its_annotation_out_of_the_body() {
+        let lf = "---\ntitle: \"T\"\nsource: \"https://e.x/p\"\nannotation: |\n  my own take on this\n---\nThe real source text.\n";
+        let doc = parse_clipping(lf).unwrap();
+        assert_eq!(doc.title, "T");
+        assert_eq!(doc.annotation.as_deref(), Some("my own take on this"));
+        assert!(!doc.body_markdown.contains("my own take on this"));
+        assert_eq!(doc.body_markdown.trim(), "The real source text.");
+    }
+}
+
+#[cfg(test)]
 mod annotation_redaction_tests {
     use super::{parse_clipping, redact_annotation};
 
