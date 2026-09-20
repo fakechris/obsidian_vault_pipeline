@@ -110,7 +110,11 @@ fn find_record<'a>(records: &'a [DurableRecord], key: &str) -> Result<&'a Durabl
 /// The full evidence closure for one claim: text + gate verdicts + every
 /// citation resolved to its source row (title/sha) when the index knows it.
 /// This is the payload behind both the `claim` tool and `ovp://claim/<key>`.
-fn claim_closure(vault_root: &std::path::Path, record: &DurableRecord, model: Option<&IndexModel>) -> Value {
+fn claim_closure(
+    vault_root: &std::path::Path,
+    record: &DurableRecord,
+    model: Option<&IndexModel>,
+) -> Value {
     // pack_dir basenames key claim↔source joins everywhere else too.
     let source_of = |case_id: &str| -> Value {
         let Some(m) = model else { return Value::Null };
@@ -130,7 +134,11 @@ fn claim_closure(vault_root: &std::path::Path, record: &DurableRecord, model: Op
             "uri": format!("ovp://source/{}", src.sha256),
         })
     };
-    let view = ovp_memory::bilingual::evaluate_claim_projection(vault_root, &record.claim_key, &record.claim);
+    let view = ovp_memory::bilingual::evaluate_claim_projection(
+        vault_root,
+        &record.claim_key,
+        &record.claim,
+    );
     serde_json::json!({
         "uri": format!("ovp://claim/{}", record.claim_key),
         "claim_key": record.claim_key,
@@ -157,7 +165,11 @@ pub fn run_mcp(config: McpConfig) -> Result<(), String> {
     run_mcp_io(config, stdin.lock(), stdout.lock())
 }
 
-pub fn run_mcp_io(config: McpConfig, reader: impl BufRead, mut out: impl Write) -> Result<(), String> {
+pub fn run_mcp_io(
+    config: McpConfig,
+    reader: impl BufRead,
+    mut out: impl Write,
+) -> Result<(), String> {
     let state = McpState {
         vault_root: config.vault_root,
         layout: VaultLayout::new(),
@@ -489,8 +501,8 @@ fn handle_tools_call(state: &McpState, params: &Value) -> Result<Value, RpcError
 /// session id for continuation. Deliverable turns also land on the saved-chat
 /// History surface, so portal and MCP conversations share one product record.
 fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
-    use ovp_memory::agent::{run_agent_turn, AgentConfig, AgentError, StoppedReason};
-    use ovp_memory::agent_transcript::{valid_session_id, SessionStore};
+    use ovp_memory::agent::{AgentConfig, AgentError, StoppedReason, run_agent_turn};
+    use ovp_memory::agent_transcript::{SessionStore, valid_session_id};
     use ovp_memory::vault_tools::VaultTools;
 
     let question = args
@@ -514,8 +526,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         Some(_) => {
             return Err(RpcError {
                 code: -32602,
-                message: "`chat` must be a valid session id ([A-Za-z0-9_-], ≤64 chars)"
-                    .into(),
+                message: "`chat` must be a valid session id ([A-Za-z0-9_-], ≤64 chars)".into(),
             });
         }
     };
@@ -561,17 +572,16 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
                 .into(),
         });
     }
-    let idem_key = explicit_key
-        .or_else(|| {
-            supplied_chat.map(|chat| {
-                let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-                for byte in chat.bytes().chain([0u8]).chain(question.bytes()) {
-                    hash ^= u64::from(byte);
-                    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-                }
-                format!("mcp-auto-{hash:016x}")
-            })
-        });
+    let idem_key = explicit_key.or_else(|| {
+        supplied_chat.map(|chat| {
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            for byte in chat.bytes().chain([0u8]).chain(question.bytes()) {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            format!("mcp-auto-{hash:016x}")
+        })
+    });
     // Provider-free replay parity with the HTTP path: a keyed retry of a
     // completed turn answers from the transcript BEFORE building a client.
     let sessions_dir = state.vault_root.join(".ovp").join("ask-sessions");
@@ -587,7 +597,12 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             &ovp_domain::vault_layout::VaultLayout::new(),
         );
         let citations = match read_index(&state.vault_root).ok() {
-            Some(m) => ovp_memory::receipts::agent_citations(&done.answer, &m, &records, ovp_index::read_evidence(&state.vault_root).ok().as_ref()),
+            Some(m) => ovp_memory::receipts::agent_citations(
+                &done.answer,
+                &m,
+                &records,
+                ovp_index::read_evidence(&state.vault_root).ok().as_ref(),
+            ),
             None => ovp_memory::receipts::agent_citations_unindexed(&done.answer, &records),
         };
         let verified = citations.iter().filter(|c| c["verified"] == true).count();
@@ -629,13 +644,12 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         // turn's Q line is absent. (An identical question asked twice in one
         // session skips the repair; the retry contract makes that turn a
         // replay of the first anyway.)
-        let this_turn_missing = !ovp_memory::ask::agent_chat_contains_question(
-            &state.vault_root,
-            &session,
-            question,
-        );
-        if matches!(done.stopped_reason.as_str(), "final" | "need_user" | "refusal")
-            && !done.answer.is_empty()
+        let this_turn_missing =
+            !ovp_memory::ask::agent_chat_contains_question(&state.vault_root, &session, question);
+        if matches!(
+            done.stopped_reason.as_str(),
+            "final" | "need_user" | "refusal"
+        ) && !done.answer.is_empty()
             && this_turn_missing
             && let Err(e) = ovp_memory::ask::save_agent_chat_turn(
                 &state.vault_root,
@@ -695,18 +709,18 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         idem_key.as_deref(),
         &cfg,
     )
-        .map_err(|e| match e {
-            AgentError::SessionBusy => RpcError {
-                code: -32000,
-                message: format!(
-                    "session `{session}` has a turn in flight — retry shortly or start a new chat"
-                ),
-            },
-            AgentError::Store(d) => RpcError {
-                code: -32000,
-                message: format!("ask session store: {d}"),
-            },
-        })?;
+    .map_err(|e| match e {
+        AgentError::SessionBusy => RpcError {
+            code: -32000,
+            message: format!(
+                "session `{session}` has a turn in flight — retry shortly or start a new chat"
+            ),
+        },
+        AgentError::Store(d) => RpcError {
+            code: -32000,
+            message: format!("ask session store: {d}"),
+        },
+    })?;
 
     // Receipts verify against the SAME index snapshot the tools served from
     // (or degrade honestly when the vault has no index).
@@ -715,7 +729,12 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         &ovp_domain::vault_layout::VaultLayout::new(),
     );
     let citations = match tools.index_snapshot().as_deref() {
-        Some(m) => ovp_memory::receipts::agent_citations(&outcome.answer, m, &records, ovp_index::read_evidence(&state.vault_root).ok().as_ref()),
+        Some(m) => ovp_memory::receipts::agent_citations(
+            &outcome.answer,
+            m,
+            &records,
+            ovp_index::read_evidence(&state.vault_root).ok().as_ref(),
+        ),
         None => ovp_memory::receipts::agent_citations_unindexed(&outcome.answer, &records),
     };
     // A racing process completed this keyed turn between the preflight
@@ -825,8 +844,12 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     );
     if deliverable
         && !outcome.answer.is_empty()
-        && let Err(e) =
-            ovp_memory::ask::save_agent_chat_turn(&state.vault_root, &session, question, &outcome.answer)
+        && let Err(e) = ovp_memory::ask::save_agent_chat_turn(
+            &state.vault_root,
+            &session,
+            question,
+            &outcome.answer,
+        )
     {
         text.push_str(&format!("\nnote: chat history save failed: {e}"));
     }
@@ -845,8 +868,9 @@ fn tool_claim(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     let records = state.load_records();
     let record = find_record(&records, key.trim())?;
     let model = state.load_model();
-    let text = serde_json::to_string_pretty(&claim_closure(&state.vault_root, record, model.as_ref()))
-        .unwrap_or_else(|_| "{}".into());
+    let text =
+        serde_json::to_string_pretty(&claim_closure(&state.vault_root, record, model.as_ref()))
+            .unwrap_or_else(|_| "{}".into());
     Ok(serde_json::json!({ "content": [{ "type": "text", "text": text }] }))
 }
 
@@ -892,7 +916,9 @@ fn theme_page_payload(state: &McpState, theme: &str) -> Result<Value, RpcError> 
         .collect();
     let mut out = serde_json::json!({ "page": page, "claims": claims });
     if let Some(c) = body.get("bilingual_corrupt") {
-        out.as_object_mut().unwrap().insert("bilingual_corrupt".into(), c.clone());
+        out.as_object_mut()
+            .unwrap()
+            .insert("bilingual_corrupt".into(), c.clone());
     }
     Ok(out)
 }
@@ -1029,9 +1055,8 @@ fn is_safe_vault_note_path(p: &std::path::Path, vault_root: &std::path::Path) ->
         if first_comp.is_some_and(|s| s == "target" || s == "node_modules") {
             return false;
         }
-        !rel.components().any(|c| {
-            c.as_os_str().to_str().is_some_and(|s| s.starts_with('.'))
-        })
+        !rel.components()
+            .any(|c| c.as_os_str().to_str().is_some_and(|s| s.starts_with('.')))
     } else {
         false
     }
@@ -1076,7 +1101,8 @@ fn parse_cursor(cursor: &str) -> Option<(String, usize, Option<String>)> {
         }
         return None;
     }
-    if cursor.starts_with('{') && cursor.ends_with('}')
+    if cursor.starts_with('{')
+        && cursor.ends_with('}')
         && let Ok(val) = serde_json::from_str::<Value>(cursor)
     {
         let hash = val
@@ -1247,14 +1273,18 @@ fn find_note_by_hash(
         // If all matches share the identical full sha256, they are duplicate files with identical content.
         let first_sha = matching_paths[0].1.as_deref();
         let all_identical_content = first_sha.is_some()
-            && matching_paths.iter().all(|(_, s)| s.as_deref() == first_sha);
+            && matching_paths
+                .iter()
+                .all(|(_, s)| s.as_deref() == first_sha);
 
         if all_identical_content {
             Ok(Some(matching_paths.remove(0)))
         } else {
             Err(RpcError {
                 code: -32602,
-                message: format!("Multiple notes match content hash stem `{key_clean}` (ambiguous match)"),
+                message: format!(
+                    "Multiple notes match content hash stem `{key_clean}` (ambiguous match)"
+                ),
             })
         }
     } else {
@@ -1281,7 +1311,9 @@ fn resolve_source_note(
             s.sha256 == key_clean
                 || (key_clean.len() >= 8 && s.sha256.starts_with(key_clean))
                 || s.rel_path.as_deref() == Some(key_clean)
-                || s.title.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(key_clean))
+                || s.title
+                    .as_deref()
+                    .is_some_and(|t| t.eq_ignore_ascii_case(key_clean))
         })
         && let Some(rel) = &src.rel_path
     {
@@ -1301,9 +1333,8 @@ fn resolve_source_note(
     let p = std::path::Path::new(key_clean);
     let has_hidden_or_traversal = key_clean.contains("..")
         || p.is_absolute()
-        || p.components().any(|c| {
-            c.as_os_str().to_str().is_some_and(|s| s.starts_with('.'))
-        });
+        || p.components()
+            .any(|c| c.as_os_str().to_str().is_some_and(|s| s.starts_with('.')));
 
     let first_comp = p.components().next().and_then(|c| match c {
         std::path::Component::Normal(s) => s.to_str(),
@@ -1320,11 +1351,17 @@ fn resolve_source_note(
         if with_md.is_file() && is_markdown_file(&with_md) {
             return Ok((with_md, None, None));
         }
-        let in_raw = state.vault_root.join(state.layout.inbox_raw_dir()).join(key_clean);
+        let in_raw = state
+            .vault_root
+            .join(state.layout.inbox_raw_dir())
+            .join(key_clean);
         if in_raw.is_file() && is_markdown_file(&in_raw) {
             return Ok((in_raw, None, None));
         }
-        let in_raw_md = state.vault_root.join(state.layout.inbox_raw_dir()).join(format!("{key_clean}.md"));
+        let in_raw_md = state
+            .vault_root
+            .join(state.layout.inbox_raw_dir())
+            .join(format!("{key_clean}.md"));
         if in_raw_md.is_file() && is_markdown_file(&in_raw_md) {
             return Ok((in_raw_md, None, None));
         }
@@ -1333,7 +1370,10 @@ fn resolve_source_note(
             if in_cap.is_file() && is_markdown_file(&in_cap) {
                 return Ok((in_cap, None, None));
             }
-            let in_cap_md = state.vault_root.join(cap_dir).join(format!("{key_clean}.md"));
+            let in_cap_md = state
+                .vault_root
+                .join(cap_dir)
+                .join(format!("{key_clean}.md"));
             if in_cap_md.is_file() && is_markdown_file(&in_cap_md) {
                 return Ok((in_cap_md, None, None));
             }
@@ -1343,8 +1383,7 @@ fn resolve_source_note(
             &state.layout,
             key_clean,
             None,
-        )
-            && moved.is_file()
+        ) && moved.is_file()
             && is_markdown_file(&moved)
         {
             return Ok((moved, None, None));
@@ -1355,8 +1394,7 @@ fn resolve_source_note(
             &state.layout,
             &in_raw_rel,
             None,
-        )
-            && moved.is_file()
+        ) && moved.is_file()
             && is_markdown_file(&moved)
         {
             return Ok((moved, None, None));
@@ -1367,8 +1405,7 @@ fn resolve_source_note(
             &state.layout,
             &in_raw_md_rel,
             None,
-        )
-            && moved.is_file()
+        ) && moved.is_file()
             && is_markdown_file(&moved)
         {
             return Ok((moved, None, None));
@@ -1376,13 +1413,16 @@ fn resolve_source_note(
     }
 
     // 3. Scan by content hash if key looks like hex sha (>= 8 chars)
-    if let Some((path, full_sha)) = find_note_by_hash(&state.vault_root, &state.layout, key_clean)? {
+    if let Some((path, full_sha)) = find_note_by_hash(&state.vault_root, &state.layout, key_clean)?
+    {
         return Ok((path, full_sha, None));
     }
 
     Err(RpcError {
         code: -32602,
-        message: format!("Note not found for key `{key_clean}`. Tip: use `ovp_search` or `find` to discover valid note paths or sha256."),
+        message: format!(
+            "Note not found for key `{key_clean}`. Tip: use `ovp_search` or `find` to discover valid note paths or sha256."
+        ),
     })
 }
 
@@ -1538,7 +1578,9 @@ fn tool_ovp_read_note(state: &McpState, args: &Value) -> Result<Value, RpcError>
             None => {
                 return Err(RpcError {
                     code: -32602,
-                    message: format!("Invalid cursor `{c}`: expected `ovp_cur_v1:<hash>:<offset>` or JSON cursor token"),
+                    message: format!(
+                        "Invalid cursor `{c}`: expected `ovp_cur_v1:<hash>:<offset>` or JSON cursor token"
+                    ),
                 });
             }
         }
@@ -1565,7 +1607,9 @@ fn tool_ovp_read_note(state: &McpState, args: &Value) -> Result<Value, RpcError>
 
     let effective_expected_hash = explicit_hash.or(cursor_hash.clone());
 
-    let resolve_note = |state: &McpState, key: &str| -> Result<(PathBuf, Option<String>, Option<String>), RpcError> {
+    let resolve_note = |state: &McpState,
+                        key: &str|
+     -> Result<(PathBuf, Option<String>, Option<String>), RpcError> {
         match resolve_source_note(state, key) {
             Ok(res) => {
                 if let Some(cur_path) = &cursor_path {
@@ -1587,11 +1631,14 @@ fn tool_ovp_read_note(state: &McpState, args: &Value) -> Result<Value, RpcError>
                             cursor_hash.as_deref(),
                         )
                     {
-                        let hash_match = cursor_hash.as_deref().and_then(|h| {
-                            find_note_by_hash(&state.vault_root, &state.layout, h)
-                                .ok()
-                                .flatten()
-                        }).is_some_and(|(p, _)| p == res.0);
+                        let hash_match = cursor_hash
+                            .as_deref()
+                            .and_then(|h| {
+                                find_note_by_hash(&state.vault_root, &state.layout, h)
+                                    .ok()
+                                    .flatten()
+                            })
+                            .is_some_and(|(p, _)| p == res.0);
 
                         if !hash_match {
                             return Err(RpcError {
@@ -1648,7 +1695,9 @@ fn tool_ovp_read_note(state: &McpState, args: &Value) -> Result<Value, RpcError>
     };
 
     let (file_path, registered_sha256, title) = if let Some(cur_path) = &cursor_path
-        && cursor_hash.as_deref().is_some_and(|h| hash_matches(key.trim(), h))
+        && cursor_hash
+            .as_deref()
+            .is_some_and(|h| hash_matches(key.trim(), h))
     {
         // When key is a hash matching cursor_hash, prefer the cursor-bound note path.
         // This avoids selecting an unedited identical duplicate if the cursor note was edited.
@@ -1661,7 +1710,8 @@ fn tool_ovp_read_note(state: &McpState, args: &Value) -> Result<Value, RpcError>
             &cur_norm,
             cursor_hash.as_deref(),
         )
-        .filter(|p| is_safe_vault_note_path(p, &state.vault_root)) {
+        .filter(|p| is_safe_vault_note_path(p, &state.vault_root))
+        {
             (moved, None, None)
         } else {
             resolve_note(state, key)?
@@ -1751,7 +1801,11 @@ fn tool_ovp_read_note(state: &McpState, args: &Value) -> Result<Value, RpcError>
     let has_more = end_idx < total_lines;
 
     let next_cursor = if has_more {
-        Some(encode_cursor(&actual_sha256, end_idx + 1, Some(&rel_display)))
+        Some(encode_cursor(
+            &actual_sha256,
+            end_idx + 1,
+            Some(&rel_display),
+        ))
     } else {
         None
     };
@@ -1799,15 +1853,14 @@ fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             message: "`query` is required".into(),
         })?;
 
-    let kind = args
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("all");
+    let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("all");
 
     if !matches!(kind, "all" | "sources" | "claims" | "packs" | "evidence") {
         return Err(RpcError {
             code: -32602,
-            message: format!("Invalid kind `{kind}`: expected one of 'all', 'sources', 'claims', 'packs', 'evidence'"),
+            message: format!(
+                "Invalid kind `{kind}`: expected one of 'all', 'sources', 'claims', 'packs', 'evidence'"
+            ),
         });
     }
 
@@ -1833,7 +1886,8 @@ fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     // 1. Claims search
     if search_claims {
         if let Some(m) = &model {
-            let claims_val = ovp_memory::vault_tools::search_claims(m, &records, query, limit, None);
+            let claims_val =
+                ovp_memory::vault_tools::search_claims(m, &records, query, limit, None);
             if let Some(hits) = claims_val.get("hits").and_then(|v| v.as_array()) {
                 claim_matches = hits.len();
                 total_matches += claim_matches;
@@ -1842,7 +1896,10 @@ fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
                     let id = hit.get("claim_id").and_then(|v| v.as_str()).unwrap_or("");
                     let claim_text = hit.get("claim").and_then(|v| v.as_str()).unwrap_or("");
                     let theme = hit.get("theme").and_then(|v| v.as_str()).unwrap_or("");
-                    let status = hit.get("status").and_then(|v| v.as_str()).unwrap_or("durable");
+                    let status = hit
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("durable");
                     let score = 1.0 / (1.0 + (rank as f64) * 0.1);
 
                     results.push(serde_json::json!({
@@ -1860,7 +1917,10 @@ fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             let q_lower = query.to_lowercase();
             let matched_records: Vec<&DurableRecord> = records
                 .iter()
-                .filter(|r| r.claim.to_lowercase().contains(&q_lower) || r.theme.to_lowercase().contains(&q_lower))
+                .filter(|r| {
+                    r.claim.to_lowercase().contains(&q_lower)
+                        || r.theme.to_lowercase().contains(&q_lower)
+                })
                 .collect();
             claim_matches = matched_records.len();
             total_matches += claim_matches;
@@ -1880,9 +1940,7 @@ fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     }
 
     // 2. Sources search
-    if search_sources
-        && let Some(m) = &model
-    {
+    if search_sources && let Some(m) = &model {
         let sources_val = ovp_memory::vault_tools::search_sources(m, query, limit);
         if let Some(hits) = sources_val.get("hits").and_then(|v| v.as_array()) {
             let src_count = hits.len();
@@ -1890,7 +1948,10 @@ fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             total_matches += src_count;
             for (rank, hit) in hits.iter().enumerate() {
                 let sha = hit.get("source_id").and_then(|v| v.as_str()).unwrap_or("");
-                let title = hit.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled");
+                let title = hit
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Untitled");
                 let path = hit.get("rel_path").and_then(|v| v.as_str());
                 let author = hit.get("author").and_then(|v| v.as_str()).unwrap_or("");
                 let snippet = if !author.is_empty() {
@@ -1915,9 +1976,7 @@ fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     }
 
     // 3. Evidence / Packs search
-    if search_evidence
-        && let Some(m) = &model
-    {
+    if search_evidence && let Some(m) = &model {
         let evidence_val = ovp_memory::vault_tools::search_evidence(m, query, limit);
         if let Some(hits) = evidence_val.get("hits").and_then(|v| v.as_array()) {
             let pack_count = hits.len();
@@ -1925,10 +1984,19 @@ fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             total_matches += pack_count;
             for (rank, pack) in hits.iter().enumerate() {
                 let dir = pack.get("pack_dir").and_then(|v| v.as_str()).unwrap_or("");
-                let title = pack.get("pack_title").and_then(|v| v.as_str()).unwrap_or(dir);
-                let cards = pack.get("matched_cards")
+                let title = pack
+                    .get("pack_title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(dir);
+                let cards = pack
+                    .get("matched_cards")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|c| c.as_str()).collect::<Vec<_>>().join("; "))
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|c| c.as_str())
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    })
                     .unwrap_or_default();
                 let snippet = if !cards.is_empty() {
                     format!("Cards: {cards}")
@@ -2003,16 +2071,25 @@ fn tool_ovp_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         "Dense semantic vector retrieval is disabled (no embeddings in .ovp/embeddings). Search runs across lexical and crystal graph lanes only.".to_string()
     });
     if total_claims_available == 0 && model.is_none() {
-        warnings.push("Crystal claims ledger is empty or missing. Durable claims cannot be retrieved.".to_string());
+        warnings.push(
+            "Crystal claims ledger is empty or missing. Durable claims cannot be retrieved."
+                .to_string(),
+        );
     }
 
     let has_unindexed_or_disabled_lanes = lexical_status != "ready" || semantic_status != "ready";
     let coverage_warning = if model.is_none() && total_matches == 0 {
-        Some("Search yielded 0 matches, but lexical index is missing and semantic retrieval is disabled. This reflects incomplete retrieval coverage, NOT an empty vault.")
+        Some(
+            "Search yielded 0 matches, but lexical index is missing and semantic retrieval is disabled. This reflects incomplete retrieval coverage, NOT an empty vault.",
+        )
     } else if total_matches == 0 {
-        Some("Search yielded 0 matches across active lanes (lexical, claims). Semantic vector retrieval is disabled.")
+        Some(
+            "Search yielded 0 matches across active lanes (lexical, claims). Semantic vector retrieval is disabled.",
+        )
     } else {
-        Some("One or more search lanes are disabled or unindexed; results reflect active lanes only.")
+        Some(
+            "One or more search lanes are disabled or unindexed; results reflect active lanes only.",
+        )
     };
 
     let coverage = serde_json::json!({
@@ -2101,9 +2178,12 @@ fn tool_ovp_list_themes(state: &McpState, args: &Value) -> Result<Value, RpcErro
             if let Some(sections) = p["sections"].as_array() {
                 for sec in sections {
                     if let Some(body_text) = sec["body"].as_str() {
-                        let cits = ovp_domain::crystal::theme_pages::extract_claim_citations(body_text);
+                        let cits =
+                            ovp_domain::crystal::theme_pages::extract_claim_citations(body_text);
                         for c in cits {
-                            if sample_claims.len() < 3 && !sample_claims.iter().any(|sc| sc["key"] == c) {
+                            if sample_claims.len() < 3
+                                && !sample_claims.iter().any(|sc| sc["key"] == c)
+                            {
                                 let claim_text = body["claims"]
                                     .get(&c)
                                     .and_then(|obj| obj.get("claim"))
@@ -2123,8 +2203,12 @@ fn tool_ovp_list_themes(state: &McpState, args: &Value) -> Result<Value, RpcErro
                 let matches_label = label.to_lowercase().contains(q);
                 let matches_zh = label_zh.to_lowercase().contains(q);
                 let matches_claims = sample_claims.iter().any(|sc| {
-                    sc["key"].as_str().is_some_and(|k| k.to_lowercase().contains(q))
-                        || sc["claim"].as_str().is_some_and(|c| c.to_lowercase().contains(q))
+                    sc["key"]
+                        .as_str()
+                        .is_some_and(|k| k.to_lowercase().contains(q))
+                        || sc["claim"]
+                            .as_str()
+                            .is_some_and(|c| c.to_lowercase().contains(q))
                 });
                 if !matches_label && !matches_zh && !matches_claims {
                     continue;
@@ -2334,8 +2418,9 @@ fn handle_resources_read(state: &McpState, params: &Value) -> Result<Value, RpcE
             let records = state.load_records();
             let record = find_record(&records, uri)?;
             let model = state.load_model();
-            let json = serde_json::to_string(&claim_closure(&state.vault_root, record, model.as_ref()))
-                .unwrap_or_else(|_| "{}".into());
+            let json =
+                serde_json::to_string(&claim_closure(&state.vault_root, record, model.as_ref()))
+                    .unwrap_or_else(|_| "{}".into());
             Ok(serde_json::json!({
                 "contents": [{ "uri": uri, "mimeType": "application/json", "text": json }]
             }))
@@ -2376,7 +2461,11 @@ fn handle_resources_read(state: &McpState, params: &Value) -> Result<Value, RpcE
                 let rel = path
                     .strip_prefix(&state.vault_root)
                     .ok()
-                    .map(|p| p.to_string_lossy().to_string());
+                    // Vault-relative paths are '/'-separated everywhere else in
+                    // this file (see the three equivalent sites above). Without
+                    // this, Windows yields '50-Inbox\\02-Processed\\...' and
+                    // read_source_doc cannot open it, so `markdown` comes back null.
+                    .map(|p| p.to_string_lossy().replace('\\', "/"));
                 let (doc, truncated, err) = readers::read_source_doc(
                     &state.vault_root,
                     &state.layout,
@@ -2625,7 +2714,10 @@ mod tests {
                     model: request.model.clone(),
                     text: "answer [claim:ck-fabricated]".into(),
                     stop_reason: ovp_llm::StopReason::EndTurn,
-                    usage: ovp_llm::Usage { input_tokens: 1, output_tokens: 1 },
+                    usage: ovp_llm::Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                    },
                     blocks: None,
                     raw_stop_reason: None,
                 })
@@ -2648,12 +2740,11 @@ mod tests {
         assert!(text.contains("coverage:"), "{text}");
         // Transcript (audit) + saved chat (History product surface).
         assert!(
-            tmp.path().join(".ovp/ask-sessions/mcp-turn-test.jsonl").is_file()
+            tmp.path()
+                .join(".ovp/ask-sessions/mcp-turn-test.jsonl")
+                .is_file()
         );
-        let md = std::fs::read_to_string(
-            tmp.path().join(".ovp/chats/mcp-turn-test.md"),
-        )
-        .unwrap();
+        let md = std::fs::read_to_string(tmp.path().join(".ovp/chats/mcp-turn-test.md")).unwrap();
         assert!(md.contains("**Q:** q?"), "{md}");
     }
 
@@ -2674,7 +2765,10 @@ mod tests {
                     model: request.model.clone(),
                     text: "stable answer".into(),
                     stop_reason: ovp_llm::StopReason::EndTurn,
-                    usage: ovp_llm::Usage { input_tokens: 1, output_tokens: 1 },
+                    usage: ovp_llm::Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                    },
                     blocks: None,
                     raw_stop_reason: None,
                 })
@@ -2686,18 +2780,21 @@ mod tests {
         }));
         let args = serde_json::json!({ "question": "same q", "chat": "mcp-retry-test" });
         let first = call(&state, "ask", args.clone()).unwrap();
-        assert!(first["content"][0]["text"].as_str().unwrap().starts_with("stable answer"));
+        assert!(
+            first["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("stable answer")
+        );
         let retry = call(&state, "ask", args).unwrap();
         let text = retry["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("idempotent replay"), "{text}");
         assert_eq!(CALLS.load(Ordering::SeqCst), 1, "no second paid model call");
-        let transcript = std::fs::read_to_string(
-            tmp.path().join(".ovp/ask-sessions/mcp-retry-test.jsonl"),
-        )
-        .unwrap();
+        let transcript =
+            std::fs::read_to_string(tmp.path().join(".ovp/ask-sessions/mcp-retry-test.jsonl"))
+                .unwrap();
         assert_eq!(transcript.matches("turn_finished").count(), 1);
-        let md =
-            std::fs::read_to_string(tmp.path().join(".ovp/chats/mcp-retry-test.md")).unwrap();
+        let md = std::fs::read_to_string(tmp.path().join(".ovp/chats/mcp-retry-test.md")).unwrap();
         assert_eq!(md.matches("**Q:** same q").count(), 1, "{md}");
     }
 
@@ -2711,7 +2808,8 @@ mod tests {
         state.ask_client = Some(std::sync::Arc::new(|| Err("never built".into())));
         let err = call(&state, "ask", serde_json::json!({ "question": "q" })).unwrap_err();
         assert!(
-            err.message.contains("ask client configuration invalid: never built"),
+            err.message
+                .contains("ask client configuration invalid: never built"),
             "{}",
             err.message
         );
@@ -2737,10 +2835,7 @@ mod tests {
         let res = dispatch(&state, "tools/list", &serde_json::json!({})).unwrap();
         let tools = res["tools"].as_array().expect("tools array");
 
-        let names: Vec<&str> = tools
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
 
         assert!(names.contains(&"ovp_search"));
         assert!(names.contains(&"ovp_read_note"));
@@ -2753,14 +2848,12 @@ mod tests {
 
         for tool in tools {
             assert_eq!(
-                tool["readOnly"],
-                true,
+                tool["readOnly"], true,
                 "tool `{}` must be marked readOnly",
                 tool["name"]
             );
             assert_eq!(
-                tool["annotations"]["readOnlyHint"],
-                true,
+                tool["annotations"]["readOnlyHint"], true,
                 "tool `{}` must have readOnlyHint: true",
                 tool["name"]
             );
@@ -2806,7 +2899,12 @@ mod tests {
         let coverage = &parsed["coverage"];
         assert_eq!(coverage["claims"]["available"], true);
         assert_eq!(coverage["claims"]["match_count"], 2);
-        assert!(coverage["claims"]["detail"].as_str().unwrap().contains("2 active records"));
+        assert!(
+            coverage["claims"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("2 active records")
+        );
         assert_eq!(coverage["semantic"]["available"], false);
     }
 
@@ -2942,7 +3040,10 @@ mod tests {
         for d in diags {
             assert_eq!(d["origin"], "doctor");
             assert!(d["code"].as_str().unwrap().starts_with("doctor."), "{d}");
-            assert!(matches!(d["severity"].as_str(), Some("info" | "warning" | "error")), "{d}");
+            assert!(
+                matches!(d["severity"].as_str(), Some("info" | "warning" | "error")),
+                "{d}"
+            );
         }
         assert!(
             diags.iter().any(|d| d["code"] == "doctor.stale-index"),
@@ -3040,7 +3141,11 @@ mod tests {
         let note_path = tmp.path().join(note_rel);
         std::fs::create_dir_all(note_path.parent().unwrap()).unwrap();
 
-        std::fs::write(&note_path, "Line 1 original\nLine 2 original\nLine 3 original").unwrap();
+        std::fs::write(
+            &note_path,
+            "Line 1 original\nLine 2 original\nLine 3 original",
+        )
+        .unwrap();
 
         // Read page 1
         let p1 = call(
@@ -3058,7 +3163,11 @@ mod tests {
         let cursor1 = val1["next_cursor"].as_str().unwrap().to_string();
 
         // Note is modified on disk mid-reading
-        std::fs::write(&note_path, "Line 1 MODIFIED\nLine 2 original\nLine 3 original\nLine 4 new").unwrap();
+        std::fs::write(
+            &note_path,
+            "Line 1 MODIFIED\nLine 2 original\nLine 3 original\nLine 4 new",
+        )
+        .unwrap();
 
         // Attempt to read next page using cursor (which embeds original_hash)
         let drift_resp = call(
@@ -3078,14 +3187,22 @@ mod tests {
         let drift_val: Value = serde_json::from_str(&text_of(&drift_resp)).unwrap();
         assert_eq!(drift_val["status"], "version_changed");
         assert_eq!(drift_val["version_changed"], true);
-        assert_eq!(drift_val["version_invalidation_reason"], "source_hash_mismatch");
+        assert_eq!(
+            drift_val["version_invalidation_reason"],
+            "source_hash_mismatch"
+        );
         assert_eq!(drift_val["expected_source_hash"], original_hash);
         assert_ne!(drift_val["current_source_hash"], original_hash);
         assert_eq!(drift_val["lines_returned"], 0);
         assert_eq!(drift_val["has_more"], false);
         assert!(drift_val["next_cursor"].is_null());
         assert_eq!(drift_val["content"], "");
-        assert!(drift_val["reason"].as_str().unwrap().contains("Source version drift detected"));
+        assert!(
+            drift_val["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Source version drift detected")
+        );
 
         // Direct explicit expected_source_hash also fails loud with version_changed
         let direct_drift = call(
@@ -3114,7 +3231,10 @@ mod tests {
         std::fs::write(&file_path, "Processed article content\nLine 2").unwrap();
 
         // 1. Resolve by previous raw path (50-Inbox/01-Raw/2026-03/article-a1b2c3d4.md)
-        let raw_key = format!("{}/2026-03/article-a1b2c3d4.md", state.layout.inbox_raw_dir());
+        let raw_key = format!(
+            "{}/2026-03/article-a1b2c3d4.md",
+            state.layout.inbox_raw_dir()
+        );
         let resp1 = call(
             &state,
             "ovp_read_note",
@@ -3158,8 +3278,13 @@ mod tests {
         assert_eq!(cov["has_unindexed_or_disabled_lanes"], true);
 
         // Crucial A4 check: 0 matches must carry a coverage warning explaining that 0 matches does not mean empty vault!
-        let warning = val["coverage_warning"].as_str().expect("coverage_warning must be present");
-        assert!(warning.contains("NOT an empty vault"), "Warning was: {warning}");
+        let warning = val["coverage_warning"]
+            .as_str()
+            .expect("coverage_warning must be present");
+        assert!(
+            warning.contains("NOT an empty vault"),
+            "Warning was: {warning}"
+        );
     }
 
     #[test]
@@ -3189,7 +3314,13 @@ Line 5: End of specification.";
 
         // 2. Discover tools
         let tools_1 = dispatch(&state, "tools/list", &serde_json::json!({})).unwrap();
-        assert!(tools_1["tools"].as_array().unwrap().iter().any(|t| t["name"] == "ovp_read_note"));
+        assert!(
+            tools_1["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["name"] == "ovp_read_note")
+        );
 
         // 3. Read note with offset and limit
         let read_1 = call(
@@ -3220,7 +3351,12 @@ Line 5: End of specification.";
         .unwrap();
         let val_1_p2: Value = serde_json::from_str(&text_of(&read_1_p2)).unwrap();
         assert_eq!(val_1_p2["offset_line"], 4);
-        assert!(val_1_p2["content"].as_str().unwrap().contains("Verification receipt generation"));
+        assert!(
+            val_1_p2["content"]
+                .as_str()
+                .unwrap()
+                .contains("Verification receipt generation")
+        );
 
         // --- Host 2 (Cursor / Codex simulator) ---
         // 1. Initialize session
@@ -3242,9 +3378,20 @@ Line 5: End of specification.";
         let val_2: Value = serde_json::from_str(&text_of(&read_2)).unwrap();
 
         // Parity verification across both hosts (A1 & A6)
-        assert_eq!(val_1["sha256"], val_2["sha256"], "Both hosts read exact same sha256");
-        assert_eq!(val_1["uri"], val_2["uri"], "Both hosts resolve exact same resource URI");
-        assert!(val_2["content"].as_str().unwrap().contains("Line 3: The unified kernel enforces strict read-only execution"));
+        assert_eq!(
+            val_1["sha256"], val_2["sha256"],
+            "Both hosts read exact same sha256"
+        );
+        assert_eq!(
+            val_1["uri"], val_2["uri"],
+            "Both hosts resolve exact same resource URI"
+        );
+        assert!(
+            val_2["content"]
+                .as_str()
+                .unwrap()
+                .contains("Line 3: The unified kernel enforces strict read-only execution")
+        );
     }
 
     #[test]
@@ -3340,12 +3487,7 @@ Line 5: End of specification.";
         std::fs::write(&file_path, content).unwrap();
 
         // Read note by 8-char stem
-        let read_val = call(
-            &state,
-            "ovp_read_note",
-            serde_json::json!({ "key": hash8 }),
-        )
-        .unwrap();
+        let read_val = call(&state, "ovp_read_note", serde_json::json!({ "key": hash8 })).unwrap();
         let parsed_read: Value = serde_json::from_str(&text_of(&read_val)).unwrap();
         assert_eq!(parsed_read["status"], "ok");
         assert_eq!(parsed_read["sha256"], actual_hash);
@@ -3360,7 +3502,8 @@ Line 5: End of specification.";
         .unwrap();
         let contents = res_resp["contents"].as_array().unwrap();
         assert_eq!(contents.len(), 1);
-        let res_payload: Value = serde_json::from_str(contents[0]["text"].as_str().unwrap()).unwrap();
+        let res_payload: Value =
+            serde_json::from_str(contents[0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(res_payload["markdown"], content);
 
         // Verify that long hash lookup (> 8 chars) that starts with hash8 but doesn't match actual_hash fails
@@ -3370,7 +3513,10 @@ Line 5: End of specification.";
             "ovp_read_note",
             serde_json::json!({ "key": bogus_long_sha }),
         );
-        assert!(bad_lookup.is_err(), "bogus long hash must not match just by stem");
+        assert!(
+            bad_lookup.is_err(),
+            "bogus long hash must not match just by stem"
+        );
 
         // Verify that full actual_hash succeeds
         let good_lookup = call(
@@ -3384,7 +3530,8 @@ Line 5: End of specification.";
         let sources_dir = tmp.path().join("Sources");
         std::fs::create_dir_all(&sources_dir).unwrap();
         let ordinary_path = sources_dir.join("ordinary_article.md");
-        let ordinary_content = "This is an unindexed article in Sources without any hash stem in its name.";
+        let ordinary_content =
+            "This is an unindexed article in Sources without any hash stem in its name.";
         std::fs::write(&ordinary_path, ordinary_content).unwrap();
 
         let ordinary_hash = format!("{:x}", Sha256::digest(ordinary_content.as_bytes()));
@@ -3409,7 +3556,8 @@ Line 5: End of specification.";
         .unwrap();
         let res_contents = ordinary_res["contents"].as_array().unwrap();
         assert_eq!(res_contents.len(), 1);
-        let res_doc: Value = serde_json::from_str(res_contents[0]["text"].as_str().unwrap()).unwrap();
+        let res_doc: Value =
+            serde_json::from_str(res_contents[0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(res_doc["markdown"], ordinary_content);
         assert_eq!(res_doc["truncated"], false);
         assert_eq!(res_doc["doc_error"], Value::Null);
@@ -3427,9 +3575,16 @@ Line 5: End of specification.";
             &serde_json::json!({ "uri": large_uri }),
         )
         .unwrap();
-        let large_doc: Value = serde_json::from_str(large_res["contents"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(large_doc["truncated"], true, "large note must be bounded by MAX_SOURCE_DOC_BYTES");
-        assert!(large_doc["markdown"].as_str().unwrap().len() <= ovp_api_projection::MAX_SOURCE_DOC_BYTES);
+        let large_doc: Value =
+            serde_json::from_str(large_res["contents"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            large_doc["truncated"], true,
+            "large note must be bounded by MAX_SOURCE_DOC_BYTES"
+        );
+        assert!(
+            large_doc["markdown"].as_str().unwrap().len()
+                <= ovp_api_projection::MAX_SOURCE_DOC_BYTES
+        );
 
         // 4. Root-level note and deeply nested note resolution
         let root_content = "Root-level note content.";
@@ -3442,7 +3597,8 @@ Line 5: End of specification.";
             &serde_json::json!({ "uri": format!("ovp://source/{root_hash}") }),
         )
         .unwrap();
-        let root_doc: Value = serde_json::from_str(root_res["contents"][0]["text"].as_str().unwrap()).unwrap();
+        let root_doc: Value =
+            serde_json::from_str(root_res["contents"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(root_doc["markdown"], root_content);
 
         let nested_dir = tmp.path().join("Sources/topic/nested");
@@ -3457,7 +3613,8 @@ Line 5: End of specification.";
             &serde_json::json!({ "uri": format!("ovp://source/{nested_hash}") }),
         )
         .unwrap();
-        let nested_doc: Value = serde_json::from_str(nested_res["contents"][0]["text"].as_str().unwrap()).unwrap();
+        let nested_doc: Value =
+            serde_json::from_str(nested_res["contents"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(nested_doc["markdown"], nested_content);
 
         // 5. Conflicting cursor and explicit hashes validation
@@ -3470,7 +3627,10 @@ Line 5: End of specification.";
                 "expected_source_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
             }),
         );
-        assert!(conflict_call.is_err(), "conflicting cursor and expected_source_hash must be rejected");
+        assert!(
+            conflict_call.is_err(),
+            "conflicting cursor and expected_source_hash must be rejected"
+        );
         let err = conflict_call.unwrap_err();
         assert_eq!(err.code, -32602);
         assert!(err.message.contains("Conflicting expected hashes"));
@@ -3499,7 +3659,8 @@ Line 5: End of specification.";
             &serde_json::json!({ "uri": docs_uri }),
         )
         .unwrap();
-        let docs_res_doc: Value = serde_json::from_str(docs_res["contents"][0]["text"].as_str().unwrap()).unwrap();
+        let docs_res_doc: Value =
+            serde_json::from_str(docs_res["contents"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(docs_res_doc["markdown"], docs_content);
 
         // 7. Retain note identity in continuation cursor when unindexed note opened by hash is edited
@@ -3553,7 +3714,10 @@ Line 5: End of specification.";
                 "cursor": "ovp_cur_v1:aaaaaaaa:1:中a"
             }),
         );
-        assert!(bad_cursor_call.is_err(), "malformed cursor must return RpcError");
+        assert!(
+            bad_cursor_call.is_err(),
+            "malformed cursor must return RpcError"
+        );
         let bad_err = bad_cursor_call.unwrap_err();
         assert_eq!(bad_err.code, -32602);
 
@@ -3569,7 +3733,8 @@ Line 5: End of specification.";
             &serde_json::json!({ "uri": format!("ovp://source/{dup_hash}") }),
         )
         .unwrap();
-        let dup_doc: Value = serde_json::from_str(dup_res["contents"][0]["text"].as_str().unwrap()).unwrap();
+        let dup_doc: Value =
+            serde_json::from_str(dup_res["contents"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(dup_doc["markdown"], dup_content);
 
         // 10. Lifecycle move between pages: cursor retains identity across Raw -> Processed move
@@ -3624,7 +3789,8 @@ Line 5: End of specification.";
             &serde_json::json!({ "uri": format!("ovp://source/{huge_hash}") }),
         )
         .unwrap();
-        let huge_doc: Value = serde_json::from_str(huge_res["contents"][0]["text"].as_str().unwrap()).unwrap();
+        let huge_doc: Value =
+            serde_json::from_str(huge_res["contents"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(huge_doc["truncated"], true);
 
         // 12. Mismatched key identity: mistyped or unrelated key with valid cursor from Note A must be rejected
@@ -3638,7 +3804,11 @@ Line 5: End of specification.";
         )
         .unwrap_err();
         assert_eq!(mismatch_err.code, -32602);
-        assert!(mismatch_err.message.contains("Note not found for key `nonexistent/mistyped_note_b.md`"));
+        assert!(
+            mismatch_err
+                .message
+                .contains("Note not found for key `nonexistent/mistyped_note_b.md`")
+        );
 
         // 13. Duplicate unindexed notes: opening by hash, editing selected note before page 2 returns version_changed
         let dup_dir = tmp.path().join("00-Inbox/duplicates");
@@ -3802,7 +3972,12 @@ Line 5: End of specification.";
         let coexist_p2_val: Value = serde_json::from_str(&text_of(&coexist_p2)).unwrap();
         assert_eq!(coexist_p2_val["status"], "ok");
         assert_eq!(coexist_p2_val["offset_line"], 3);
-        assert!(coexist_p2_val["raw_content"].as_str().unwrap().contains("raw line 3"));
+        assert!(
+            coexist_p2_val["raw_content"]
+                .as_str()
+                .unwrap()
+                .contains("raw line 3")
+        );
 
         // 17. Unindexed uppercase .MD file and symlinked note resolve cleanly via emitted ovp://source/<hash> URI
         let upper_content = "Uppercase markdown note content.";
@@ -3827,7 +4002,8 @@ Line 5: End of specification.";
             &serde_json::json!({ "uri": upper_uri }),
         )
         .unwrap();
-        let upper_doc: Value = serde_json::from_str(upper_res["contents"][0]["text"].as_str().unwrap()).unwrap();
+        let upper_doc: Value =
+            serde_json::from_str(upper_res["contents"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(upper_doc["markdown"], upper_content);
 
         // 18. Notes inside symlinked folders resolve cleanly via emitted URI, and excluded root dirs reject direct reading
@@ -3858,7 +4034,8 @@ Line 5: End of specification.";
                 &serde_json::json!({ "uri": sym_uri }),
             )
             .unwrap();
-            let sym_doc: Value = serde_json::from_str(sym_res["contents"][0]["text"].as_str().unwrap()).unwrap();
+            let sym_doc: Value =
+                serde_json::from_str(sym_res["contents"][0]["text"].as_str().unwrap()).unwrap();
             assert_eq!(sym_doc["markdown"], ext_content);
         }
 
@@ -3883,14 +4060,20 @@ Line 5: End of specification.";
             "ovp_read_note",
             serde_json::json!({ "key": "Sources/.private-deadbeef.md" }),
         );
-        assert!(hidden_path_err.is_err(), "direct path reading of hidden file must be rejected");
+        assert!(
+            hidden_path_err.is_err(),
+            "direct path reading of hidden file must be rejected"
+        );
 
         let hidden_hash_err = call(
             &state,
             "ovp_read_note",
             serde_json::json!({ "key": "deadbeef" }),
         );
-        assert!(hidden_hash_err.is_err(), "hash lookup of hidden file must be rejected");
+        assert!(
+            hidden_hash_err.is_err(),
+            "hash lookup of hidden file must be rejected"
+        );
 
         // 20. Caller-supplied JSON cursor targeting non-markdown or hidden file via lifecycle path
         let proc_dir = tmp.path().join("50-Inbox/03-Processed/2026-09");
@@ -3904,7 +4087,11 @@ Line 5: End of specification.";
         // Note also that `parse_cursor` reads `path` / `p`; a `rel_path` key is
         // silently dropped, which would leave the cursor carrying no path.
         let guard_note_rel = "50-Inbox/03-Processed/2026-09/cursor-guard.md";
-        std::fs::write(tmp.path().join(guard_note_rel), "Line one\nLine two\nLine three").unwrap();
+        std::fs::write(
+            tmp.path().join(guard_note_rel),
+            "Line one\nLine two\nLine three",
+        )
+        .unwrap();
 
         let fake_cur_obj = serde_json::json!({
             "source_hash": "deadbeef12345678",
@@ -3921,7 +4108,10 @@ Line 5: End of specification.";
                 "cursor": fake_cur_str
             }),
         );
-        assert!(bypass_err.is_err(), "ineligible file reached via cursor lifecycle path must be rejected");
+        assert!(
+            bypass_err.is_err(),
+            "ineligible file reached via cursor lifecycle path must be rejected"
+        );
         let bypass_msg = bypass_err.unwrap_err().message;
         assert!(
             bypass_msg.contains("Conflicting target note"),
@@ -3938,12 +4128,7 @@ Line 5: End of specification.";
         std::fs::write(&stem_file1, identical_text).unwrap();
         std::fs::write(&stem_file2, identical_text).unwrap();
 
-        let stem_read = call(
-            &state,
-            "ovp_read_note",
-            serde_json::json!({ "key": stem8 }),
-        )
-        .unwrap();
+        let stem_read = call(&state, "ovp_read_note", serde_json::json!({ "key": stem8 })).unwrap();
         let stem_read_val: Value = serde_json::from_str(&text_of(&stem_read)).unwrap();
         assert_eq!(stem_read_val["status"], "ok");
 
@@ -3961,7 +4146,11 @@ Line 5: End of specification.";
         )
         .unwrap_err();
         assert_eq!(conf_err.code, -32602);
-        assert!(conf_err.message.contains("Multiple notes match content hash stem"));
+        assert!(
+            conf_err
+                .message
+                .contains("Multiple notes match content hash stem")
+        );
 
         // 22. Ambiguity check between stem-named note and non-stem note sharing the same hash prefix
         let plain_file = dup_stem_dir.join("plain-unindexed-note.md");
@@ -3991,13 +4180,21 @@ Line 5: End of specification.";
         )
         .unwrap_err();
         assert_eq!(ambig_err.code, -32602);
-        assert!(ambig_err.message.contains("Multiple notes match content hash stem"));
+        assert!(
+            ambig_err
+                .message
+                .contains("Multiple notes match content hash stem")
+        );
 
         // 23. Relative-path alias continuation across lifecycle moves
         let raw_rel_dir = tmp.path().join("50-Inbox/01-Raw/2026-09");
         std::fs::create_dir_all(&raw_rel_dir).unwrap();
         let raw_rel_file = raw_rel_dir.join("article-lifecycle1.md");
-        std::fs::write(&raw_rel_file, "First line of article\nSecond line of article\nThird line").unwrap();
+        std::fs::write(
+            &raw_rel_file,
+            "First line of article\nSecond line of article\nThird line",
+        )
+        .unwrap();
 
         // Open with relative key "2026-09/article-lifecycle1.md" and line_limit=1
         let rel_key = "2026-09/article-lifecycle1.md";
