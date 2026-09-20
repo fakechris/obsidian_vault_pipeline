@@ -3902,6 +3902,7 @@ mod tests {
             url: Some(format!("https://example.test/{sha256}")),
             origin: None,
             annotation: None,
+            meta: Default::default(),
             rel_path: rel_path.map(str::to_string),
             date: date.map(str::to_string),
             content_date: None,

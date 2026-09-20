@@ -44,6 +44,14 @@ pub struct Query {
     /// URL entity id filter (`github:owner/repo`), exact match over a
     /// source's `entities`. Source-level like `tag`: excludes tagless kinds.
     pub entity: Option<String>,
+    /// Custom frontmatter filters (`SourceRow::meta`), exact key AND value.
+    /// Several pairs are ANDed — narrowing is the only useful semantics for
+    /// provenance keys, where `x_producer=bot x_run=7` means one run of one
+    /// producer, not the union of two unrelated sets.
+    ///
+    /// Source-level like `tag` and `entity`: a meta filter excludes the kinds
+    /// that carry no frontmatter (packs/claims/runs/cards/units).
+    pub meta: Vec<(String, String)>,
 }
 
 /// One result row, kind-tagged, with a printable line and a link target.
@@ -106,6 +114,14 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
         None => true,
         Some(e) => s.entities.iter().any(|have| have == e),
     };
+    // Exact on both halves. A substring match would make `--meta x_id=7`
+    // also return `x_id=1173`, which for an identity key is a wrong answer
+    // rather than a loose one; `--term` is the fuzzy axis.
+    let meta_ok = |s: &crate::model::SourceRow| {
+        q.meta
+            .iter()
+            .all(|(k, v)| s.meta.get(k).is_some_and(|have| have == v))
+    };
 
     let mut hits = Vec::new();
 
@@ -117,7 +133,11 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
         for s in &model.sources {
             // Cross-axis filters narrow the CONTRIBUTING sources (`--kind
             // entities --tag agent` = entities of agent-tagged sources).
-            if !status_ok(source_status_str(s.status)) || !date_ok(s.date.as_deref()) || !tag_ok(s) {
+            if !status_ok(source_status_str(s.status))
+                || !date_ok(s.date.as_deref())
+                || !tag_ok(s)
+                || !meta_ok(s)
+            {
                 continue;
             }
             for e in &s.entities {
@@ -153,7 +173,10 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
         for s in &model.sources {
             // `--kind tags --entity github:x/y` = tags of sources mentioning
             // that entity; the `tag` filter narrows the OUTPUT rows below.
-            if !status_ok(source_status_str(s.status)) || !date_ok(s.date.as_deref()) || !entity_ok(s)
+            if !status_ok(source_status_str(s.status))
+                || !date_ok(s.date.as_deref())
+                || !entity_ok(s)
+                || !meta_ok(s)
             {
                 continue;
             }
@@ -198,7 +221,12 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
     if kind_ok(QueryKind::Sources) {
         for s in &model.sources {
             let status = source_status_str(s.status);
-            if !status_ok(status) || !date_ok(s.date.as_deref()) || !tag_ok(s) || !entity_ok(s) {
+            if !status_ok(status)
+                || !date_ok(s.date.as_deref())
+                || !tag_ok(s)
+                || !entity_ok(s)
+                || !meta_ok(s)
+            {
                 continue;
             }
             let title = s.title.as_deref().unwrap_or("(untitled)");
@@ -250,7 +278,12 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
     if kind_ok(QueryKind::Packs) {
         for p in &model.packs {
             // Packs/claims/runs carry no tags; a tag filter excludes them.
-            if tag.is_some() || entity.is_some() || !status_ok("pack") || !date_ok(p.date.as_deref()) {
+            if tag.is_some()
+                || entity.is_some()
+                || !q.meta.is_empty()
+                || !status_ok("pack")
+                || !date_ok(p.date.as_deref())
+            {
                 continue;
             }
             let cards_joined = p.card_titles.join(" | ");
@@ -281,7 +314,12 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
         for c in &model.claims {
             let status = claim_status_str(c.status);
             // Claims carry no date or tags; either filter excludes them.
-            if !status_ok(status) || q.date.is_some() || tag.is_some() || entity.is_some() {
+            if !status_ok(status)
+                || q.date.is_some()
+                || tag.is_some()
+                || entity.is_some()
+                || !q.meta.is_empty()
+            {
                 continue;
             }
             let theme = c.theme.as_deref().unwrap_or("");
@@ -304,7 +342,12 @@ pub fn run_query(model: &IndexModel, q: &Query) -> Vec<Hit> {
 
     if kind_ok(QueryKind::Runs) {
         for r in &model.runs {
-            if tag.is_some() || entity.is_some() || !status_ok("run") || !date_ok(Some(&r.date)) {
+            if tag.is_some()
+                || entity.is_some()
+                || !q.meta.is_empty()
+                || !status_ok("run")
+                || !date_ok(Some(&r.date))
+            {
                 continue;
             }
             if !matches(&[&r.run_id, &r.date]) {
@@ -333,7 +376,7 @@ pub fn run_evidence_query(evidence: &EvidenceModel, q: &Query, limit: usize) -> 
     let mut scored: Vec<(f64, String, Hit)> = Vec::new();
 
     // Evidence rows carry no date or tags; either filter excludes them.
-    if q.date.is_some() || q.tag.is_some() || q.entity.is_some() {
+    if q.date.is_some() || q.tag.is_some() || q.entity.is_some() || !q.meta.is_empty() {
         return Vec::new();
     }
 
@@ -456,7 +499,7 @@ pub fn claim_status_str(s: ClaimStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use crate::evidence::{CardEvidenceRow, EVIDENCE_SCHEMA, EvidenceModel, UnitEvidenceRow};
-    use crate::query::{Query, QueryKind, run_evidence_query};
+    use crate::query::{Query, QueryKind, run_evidence_query, run_query};
 
     fn evidence() -> EvidenceModel {
         EvidenceModel {
@@ -486,6 +529,154 @@ mod tests {
             }],
             warnings: vec![],
         }
+    }
+
+    /// Build a model with two sources carrying different custom keys.
+    fn meta_model() -> crate::model::IndexModel {
+        use crate::model::{SourceRow, SourceStatus};
+        let mut a = SourceRow::blank("sha-a", SourceStatus::Processed);
+        a.title = Some("Alpha".into());
+        a.meta = [
+            ("clipped_from".to_string(), "pinboard".to_string()),
+            ("x_capture_id".to_string(), "abc".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let mut b = SourceRow::blank("sha-b", SourceStatus::Processed);
+        b.title = Some("Beta".into());
+        b.meta = [("clipped_from".to_string(), "clipper".to_string())]
+            .into_iter()
+            .collect();
+        crate::model::IndexModel {
+            schema: crate::model::INDEX_SCHEMA.into(),
+            date: "2026-09-20".into(),
+            built_at: None,
+            run_id: None,
+            totals: crate::model::Totals::default(),
+            sources: vec![a, b],
+            packs: vec![],
+            claims: vec![],
+            runs: vec![],
+            ops: crate::model::OpsState::default(),
+        }
+    }
+
+    #[test]
+    fn meta_filter_matches_exact_key_and_value() {
+        let hits = run_query(
+            &meta_model(),
+            &Query {
+                kind: Some(QueryKind::Sources),
+                meta: vec![("clipped_from".into(), "pinboard".into())],
+                ..Default::default()
+            },
+        );
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].line.contains("Alpha"), "{}", hits[0].line);
+    }
+
+    /// Several pairs narrow, they do not union.
+    #[test]
+    fn meta_filters_are_anded() {
+        let q = |pairs: Vec<(String, String)>| {
+            run_query(
+                &meta_model(),
+                &Query {
+                    kind: Some(QueryKind::Sources),
+                    meta: pairs,
+                    ..Default::default()
+                },
+            )
+            .len()
+        };
+        assert_eq!(
+            q(vec![
+                ("clipped_from".into(), "pinboard".into()),
+                ("x_capture_id".into(), "abc".into())
+            ]),
+            1
+        );
+        // Both keys exist in the corpus but never on the SAME source.
+        assert_eq!(
+            q(vec![
+                ("clipped_from".into(), "clipper".into()),
+                ("x_capture_id".into(), "abc".into())
+            ]),
+            0
+        );
+    }
+
+    /// An identity key must not match by prefix: `x_id=7` returning `x_id=1173`
+    /// would be a wrong answer, not a loose one.
+    #[test]
+    fn meta_value_match_is_exact_not_substring() {
+        let hits = run_query(
+            &meta_model(),
+            &Query {
+                kind: Some(QueryKind::Sources),
+                meta: vec![("x_capture_id".into(), "ab".into())],
+                ..Default::default()
+            },
+        );
+        assert!(hits.is_empty(), "{hits:?}");
+    }
+
+    /// The vocabulary listings aggregate over CONTRIBUTING sources, so a meta
+    /// filter has to narrow them too. Otherwise `--kind tags --meta k=v`
+    /// returns the whole vocabulary even when no source matches, which reads
+    /// as "these tags exist for that filter" and is simply false.
+    #[test]
+    fn meta_filter_narrows_the_tag_and_entity_vocabularies() {
+        let mut m = meta_model();
+        m.sources[0].tags = vec!["alpha-tag".into()];
+        m.sources[0].entities = vec!["github:a/a".into()];
+        m.sources[1].tags = vec!["beta-tag".into()];
+        m.sources[1].entities = vec!["github:b/b".into()];
+
+        for (kind, want, unwanted) in [
+            (QueryKind::Tags, "alpha-tag", "beta-tag"),
+            (QueryKind::Entities, "github:a/a", "github:b/b"),
+        ] {
+            let hits = run_query(
+                &m,
+                &Query {
+                    kind: Some(kind),
+                    meta: vec![("clipped_from".into(), "pinboard".into())],
+                    ..Default::default()
+                },
+            );
+            let lines: Vec<&str> = hits.iter().map(|h| h.line.as_str()).collect();
+            assert!(lines.iter().any(|l| l.contains(want)), "{kind:?}: {lines:?}");
+            assert!(
+                !lines.iter().any(|l| l.contains(unwanted)),
+                "{kind:?} leaked a non-matching source: {lines:?}"
+            );
+        }
+    }
+
+    /// Source-level axis, like tag and entity: a meta filter must not return
+    /// packs/claims/runs, which carry no frontmatter at all.
+    #[test]
+    fn meta_filter_excludes_frontmatterless_kinds() {
+        let mut m = meta_model();
+        m.packs = vec![crate::model::PackRow {
+            pack_dir: "40-Resources/Reader/a".into(),
+            title: "Alpha".into(),
+            date: None,
+            units: 1,
+            cards: 1,
+            json_repaired: false,
+            card_titles: vec![],
+            source_sha256: Some("sha-a".into()),
+        }];
+        let hits = run_query(
+            &m,
+            &Query {
+                meta: vec![("clipped_from".into(), "pinboard".into())],
+                ..Default::default()
+            },
+        );
+        assert!(hits.iter().all(|h| h.kind == "source"), "{hits:?}");
     }
 
     #[test]

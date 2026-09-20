@@ -194,7 +194,7 @@ fn write_api_tree(
     )?;
     write_json(&api.join("flow.json"), &bodies::flow_body(public))?;
     write_json(&api.join("settings.json"), &bodies::settings_public_body(Some(public)))?;
-    let empty = Query { kind: None, status: None, date: None, term: None, tag: None , entity: None };
+    let empty = Query::default();
     write_json(&api.join("search-index.json"), &bodies::find_body(public, &empty))?;
     files += 6;
 
@@ -558,6 +558,7 @@ mod tests {
             url: Some(format!("https://ex.com/{sha}")),
             origin: None,
             annotation: None,
+            meta: Default::default(),
             rel_path: Some("50-Inbox/01-Raw/x.md".into()),
             date: Some("2026-07-01".into()),
             content_date: None,

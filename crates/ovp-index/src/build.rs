@@ -18,7 +18,7 @@ use ovp_domain::VaultLayout;
 use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_ID, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
 use ovp_domain::tags::{TagAliases, TagsInferredFile, canonical_tags};
-use ovp_domain::units::read_source_from_path;
+use ovp_domain::units::{read_source_from_path, read_source_with_meta};
 use ovp_intake::vaultops::{hex_sha256, read_jsonl, rel_to};
 use ovp_intake::{IntakeAction, read_intake_ledger, read_pinboard_ledger};
 use serde::Deserialize;
@@ -458,11 +458,15 @@ fn attach_tags(vault_root: &Path, rows: &mut [SourceRow]) -> Result<usize, Strin
         } else {
             recorded
         };
-        let Ok(doc) = read_source_from_path(&path) else {
+        // One read for both the typed doc and the custom keys: this loop
+        // walks every source on every build, so a second read_to_string per
+        // note to fetch the meta would be real I/O for nothing.
+        let Ok((doc, meta)) = read_source_with_meta(&path) else {
             continue;
         };
         // Same truth rule as tags: the note's current frontmatter wins.
         row.annotation = doc.annotation.clone();
+        row.meta = meta;
         row.tags = canonical_tags(&doc.tags, &aliases);
         if !row.tags.is_empty() {
             tagged += 1;

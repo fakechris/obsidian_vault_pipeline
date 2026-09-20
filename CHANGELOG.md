@@ -58,6 +58,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run.
 
 ### Added
+- Custom frontmatter keys reach the index and are filterable. A capture
+  source's own keys (a clipper property, a bot's capture id) already survived
+  intake (`fs::rename`) and enrichment (the block is re-emitted verbatim) —
+  they simply had nowhere to land, because `ClippingFrontmatter` is a fixed
+  struct and dropped them at parse. `ovp2 pinboard`'s own `clipped_from` was
+  the in-tree casualty. They now flow to `SourceRow.meta` and are queryable
+  via `ovp2 find --meta key=value` (repeatable, ANDed, exact on both halves)
+  and the MCP `find` tool's `meta` object (#483).
+  Admission is narrow on purpose: the `x_`/`capture_` prefixes, plus a fixed
+  allow-list for `clipped_from`. The prefix convention is what lets any
+  external producer claim a key without an OVP change per tool; anything else
+  is dropped, because an open pass-through would make the index a mirror of
+  arbitrary user YAML and turn every key into a query surface and a
+  compatibility obligation. Scalars only — a list or map has no faithful
+  flat-string form. `SourceDoc` stays typed (invariant #3): the map travels
+  beside it from `read_source_with_meta`, never inside it. Shadow schema
+  bumped to v7 (new `source_meta` table) — `ovp2 index` rebuilds it.
 - `ovp2 claim <key> [--json]` — the evidence closure of one durable claim on
   the CLI. The closure moved to `ovp_memory::closure` and is now the single
   implementation behind the CLI verb, the MCP `claim` tool, and the

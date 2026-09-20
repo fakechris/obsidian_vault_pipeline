@@ -30,8 +30,8 @@ pub use critic::{
     CoverageGap, CriticReply, FaithDefect, RepairAction, RepairLog, CRITIC_PROMPT_ID,
 };
 pub use harness::{
-    extract_units, read_source_from_path, run_unit_extraction, run_unit_extraction_repaired,
-    RepairedRun, UnitExtractionRun,
+    extract_units, read_source_from_path, read_source_with_meta, run_unit_extraction,
+    run_unit_extraction_repaired, RepairedRun, UnitExtractionRun,
 };
 pub use parser::{parse_envelope, ParseError, RawUnit};
 pub use prompt::{build_unit_prompt, unit_model_request, UNIT_PROMPT_ID, UNIT_SCHEMA_VERSION};

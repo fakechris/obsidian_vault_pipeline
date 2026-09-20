@@ -30,11 +30,12 @@ use crate::evidence::EvidenceModel;
 use crate::model::IndexModel;
 
 const SQLITE_FILE: &str = "read-model.sqlite";
+// v7: source_meta (custom frontmatter keys carried to the index, INV-621).
 // v5: claims.patched_by (human patch ledger overlay, M37). A version
 // bump is MANDATORY for any DDL change: the reader trusts the stored
 // version, so an old shadow without the column would otherwise pass the
 // check and then fail at SELECT time instead of requesting a rebuild.
-const SCHEMA_VERSION: &str = "6";
+const SCHEMA_VERSION: &str = "7";
 /// The FTS analyzer version, stamped into `meta` — index-side and query-side
 /// tokenization MUST match, so any change to [`tokenize_for_fts`] bumps this
 /// and the next build re-tokenizes everything (fresh-file builds make that
@@ -179,6 +180,9 @@ CREATE INDEX idx_source_tags_sha ON source_tags(sha256);
 CREATE TABLE source_entities(sha256 TEXT NOT NULL, entity TEXT NOT NULL);
 CREATE INDEX idx_source_entities ON source_entities(entity, sha256);
 CREATE INDEX idx_source_entities_sha ON source_entities(sha256);
+CREATE TABLE source_meta(sha256 TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX idx_source_meta ON source_meta(key, value, sha256);
+CREATE INDEX idx_source_meta_sha ON source_meta(sha256);
 CREATE TABLE packs(
   pack_dir TEXT NOT NULL, title TEXT NOT NULL, date TEXT,
   units INTEGER NOT NULL, cards INTEGER NOT NULL,
@@ -381,6 +385,9 @@ fn build_into(
         let mut ent = tx
             .prepare("INSERT INTO source_entities(sha256, entity) VALUES(?1,?2)")
             .map_err(|e| format!("prepare source_entities: {e}"))?;
+        let mut smeta = tx
+            .prepare("INSERT INTO source_meta(sha256, key, value) VALUES(?1,?2,?3)")
+            .map_err(|e| format!("prepare source_meta: {e}"))?;
         let mut src_fts = tx
             .prepare("INSERT INTO sources_fts(rowid, text) VALUES(?1,?2)")
             .map_err(|e| format!("prepare sources_fts: {e}"))?;
@@ -440,6 +447,15 @@ fn build_into(
             for entity in &s.entities {
                 ent.execute((&s.sha256, entity))
                     .map_err(|e| format!("entity {}: {e}", s.sha256))?;
+            }
+            // Deliberately NOT in `fts_text`: a capture id or a producer name
+            // is an exact-match facet (`--meta k=v`), not prose. Folding it
+            // into full-text would make every source match its own producer's
+            // name as if the word appeared in the article.
+            for (key, value) in &s.meta {
+                smeta
+                    .execute((&s.sha256, key, value))
+                    .map_err(|e| format!("meta {}: {e}", s.sha256))?;
             }
         }
 
@@ -887,6 +903,20 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
         .map_err(|e| format!("reading source_entities: {e}"))?
         .into_iter()
         .for_each(|(sha, entity)| entities_by_sha.entry(sha).or_default().push(entity));
+    let mut meta_by_sha: HashMap<String, std::collections::BTreeMap<String, String>> =
+        HashMap::new();
+    conn.prepare("SELECT sha256, key, value FROM source_meta ORDER BY rowid")
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|e| format!("reading source_meta: {e}"))?
+        .into_iter()
+        .for_each(|(sha, key, value)| {
+            meta_by_sha.entry(sha).or_default().insert(key, value);
+        });
 
     let sources = conn
         .prepare(
@@ -925,6 +955,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                 tags_by_sha.remove(&row.0).unwrap_or_default();
             Ok(crate::model::SourceRow {
                 entities: entities_by_sha.remove(&row.0).unwrap_or_default(),
+                meta: meta_by_sha.remove(&row.0).unwrap_or_default(),
                 sha256: row.0,
                 status: parse_enum(&row.1, "source status")?,
                 title: row.2,
@@ -1447,6 +1478,12 @@ mod tests {
                 url: Some("https://e.x/a?q=1&z=2".into()),
                 origin: Some("pinboard".into()),
                 annotation: Some("my own note: 值得再读".into()),
+                meta: [
+                    ("clipped_from".to_string(), "pinboard".to_string()),
+                    ("x_capture_id".to_string(), "abc123".to_string()),
+                ]
+                .into_iter()
+                .collect(),
                 rel_path: Some("50-Inbox/03-Processed/a.md".into()),
                 date: Some("2026-08-01".into()),
                 content_date: Some("2026-07-30".into()),
