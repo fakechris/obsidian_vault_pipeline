@@ -36,6 +36,18 @@ pub enum IntakeAction {
     /// knowledge-base writeup and a 46k-char CUDA article alongside the three
     /// real navigation pages. So the operator says so, and the pipeline obeys.
     Skipped,
+    /// A needs-content capture whose enrichment fetch kept failing: closed by
+    /// the PIPELINE after [`crate::MAX_ENRICH_ATTEMPTS`] failed attempts or
+    /// [`crate::MAX_ENRICH_PENDING_SECS`] since the first one. Terminal and
+    /// hash-keyed like `Skipped` — editing the file (or pasting the content
+    /// in) changes the hash and re-evaluates it — but unlike `Skipped` this
+    /// is a machine decision, not operator intent, so
+    /// `ovp2 daily --retry-unavailable` can reopen the whole set.
+    ///
+    /// Without this state every unreachable URL was re-fetched on every run,
+    /// forever: a 404 bookmark at `every 4h` = six wasted fetches a day, and a
+    /// "failed" line in every report that nobody could make go away.
+    ContentUnavailable,
 }
 
 /// One capture-file disposition.
@@ -93,21 +105,25 @@ pub fn known_urls(records: &[IntakeRecord]) -> HashSet<String> {
         .collect()
 }
 
-/// Hashes previously flagged NeedsContent / Unparseable / Skipped — skipped
-/// quietly on later sweeps (the record exists once; editing the file changes
-/// its hash and re-evaluates it).
+/// Hashes previously flagged NeedsContent / Unparseable / Skipped /
+/// ContentUnavailable — skipped quietly on later sweeps (editing the file
+/// changes its hash and re-evaluates it). Later records win per hash, so a
+/// NeedsContent capture later closed as ContentUnavailable reads as closed.
 ///
-/// The three are NOT equivalent downstream: NeedsContent/Unparseable are
-/// PENDING (enrichment retries them), while Skipped is TERMINAL by operator
-/// decision. Callers must branch on the returned action — see
-/// [`is_pending_flag`].
+/// The four are NOT equivalent downstream: NeedsContent/Unparseable are
+/// PENDING (enrichment retries them), while Skipped (operator) and
+/// ContentUnavailable (pipeline) are TERMINAL. Callers must branch on the
+/// returned action — see [`is_pending_flag`] and [`reoffer_flag`].
 pub fn flagged_hashes(records: &[IntakeRecord]) -> HashMap<String, IntakeAction> {
     records
         .iter()
         .filter(|r| {
             matches!(
                 r.action,
-                IntakeAction::NeedsContent | IntakeAction::Unparseable | IntakeAction::Skipped
+                IntakeAction::NeedsContent
+                    | IntakeAction::Unparseable
+                    | IntakeAction::Skipped
+                    | IntakeAction::ContentUnavailable
             )
         })
         .map(|r| (r.sha256.clone(), r.action))
@@ -117,12 +133,22 @@ pub fn flagged_hashes(records: &[IntakeRecord]) -> HashMap<String, IntakeAction>
 /// Whether a flagged capture is still WAITING on something (enrichment, an
 /// operator fix) rather than closed. `Skipped` is closed: re-fetching a page
 /// the operator has excluded is exactly the waste this tag exists to stop.
+/// `ContentUnavailable` is closed too: the pipeline already spent its attempt
+/// budget on it.
 pub fn is_pending_flag(action: IntakeAction) -> bool {
     match action {
         IntakeAction::NeedsContent | IntakeAction::Unparseable => true,
-        IntakeAction::Skipped => false,
+        IntakeAction::Skipped | IntakeAction::ContentUnavailable => false,
         IntakeAction::Ingested | IntakeAction::Duplicate => false,
     }
+}
+
+/// Whether the sweep should hand a previously-flagged capture back to the
+/// enrichment phases this run. Pending flags always; `ContentUnavailable`
+/// only under `--retry-unavailable` (the operator reopening the closed set);
+/// `Skipped` never — that is intent, and no flag overrides it.
+pub fn reoffer_flag(action: IntakeAction, retry_unavailable: bool) -> bool {
+    is_pending_flag(action) || (retry_unavailable && action == IntakeAction::ContentUnavailable)
 }
 
 #[cfg(test)]
@@ -165,5 +191,32 @@ mod tests {
 
         let flagged = flagged_hashes(&records);
         assert_eq!(flagged.get("h3"), Some(&IntakeAction::NeedsContent));
+    }
+
+    #[test]
+    fn content_unavailable_is_terminal_and_the_later_record_wins() {
+        let records = vec![
+            rec(IntakeAction::NeedsContent, "h1", Some("https://a")),
+            rec(IntakeAction::ContentUnavailable, "h1", Some("https://a")),
+            rec(IntakeAction::NeedsContent, "h2", Some("https://b")),
+        ];
+        let flagged = flagged_hashes(&records);
+        assert_eq!(flagged.get("h1"), Some(&IntakeAction::ContentUnavailable));
+        assert_eq!(flagged.get("h2"), Some(&IntakeAction::NeedsContent));
+        assert!(!is_pending_flag(IntakeAction::ContentUnavailable));
+        assert!(
+            !known_content_hashes(&records).contains("h1"),
+            "still re-evaluable by content: an edit must re-enter the pipeline"
+        );
+    }
+
+    #[test]
+    fn reoffer_reopens_unavailable_only_under_the_flag_and_never_skipped() {
+        assert!(reoffer_flag(IntakeAction::NeedsContent, false));
+        assert!(reoffer_flag(IntakeAction::Unparseable, false));
+        assert!(!reoffer_flag(IntakeAction::ContentUnavailable, false));
+        assert!(reoffer_flag(IntakeAction::ContentUnavailable, true));
+        assert!(!reoffer_flag(IntakeAction::Skipped, true));
+        assert!(!reoffer_flag(IntakeAction::Ingested, true));
     }
 }

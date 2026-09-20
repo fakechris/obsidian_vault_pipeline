@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- needs-content captures no longer retry forever: a capture whose enrichment
+  fetch failed 3 times (`MAX_ENRICH_ATTEMPTS`) or for 72h since the first
+  failure is closed as `IntakeAction::ContentUnavailable` — terminal and
+  hash-keyed like `ovp/skip`, so editing the file re-enters intake. Attempts
+  are counted in the new append-only `.ovp/enrich-attempts.jsonl`; the daily
+  summary and run report (`intake.content_unavailable`) show how many are
+  closed; `ovp2 doctor` lists them (`content-unavailable`, INFO) with the last
+  error; `ovp2 daily --retry-unavailable` reopens the set for one run.
+  **Compatibility:** `content_unavailable` is a new intake-ledger variant and
+  `read_jsonl` fails the whole ledger on one unknown line — install the new
+  sidecar BEFORE any run that can write it; an older binary reading such a
+  ledger errors on every intake/daily/index run.
 - claims_zh tail: a claims backlog left by crystal-synth now drains in one
   run instead of being throttled to the daily enqueue budget
   (`auto_max_per_run`, default 30). The tail budget is a separate config key

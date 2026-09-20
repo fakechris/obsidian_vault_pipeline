@@ -15,25 +15,25 @@ use std::path::PathBuf;
 
 use ovp_console::{write_console, write_ops_pages};
 use ovp_daily::{
-    plan_daily, read_daily_ledger, run_daily_with_progress, succeeded_hashes, CaptureTier,
-    DailyConfig, DailyRunRecord, RecentSource, RunReport, RunStatus, RECENT_RING_CAP,
+    CaptureTier, DailyConfig, DailyRunRecord, RECENT_RING_CAP, RecentSource, RunReport, RunStatus,
+    plan_daily, read_daily_ledger, run_daily_with_progress, succeeded_hashes,
 };
 use ovp_domain::VaultLayout;
+use ovp_enrich::github::{
+    FixtureGitHubFetch, GitHubFetch, enrich_github_repos_with_progress,
+    find_truncated_github_notes, parse_github_repo_url,
+};
+use ovp_enrich::web_fetch::{FixtureWebFetch, WebFetch, enrich_needs_content_with_progress};
 use ovp_index::{
     build_evidence, build_index, build_index_with_progress, write_evidence, write_index,
 };
-use ovp_enrich::github::{
-    enrich_github_repos_with_progress, find_truncated_github_notes, parse_github_repo_url,
-    FixtureGitHubFetch, GitHubFetch,
-};
-use ovp_enrich::web_fetch::{enrich_needs_content_with_progress, FixtureWebFetch, WebFetch};
 use ovp_intake::{
-    append_pipeline_event, sweep_intake, sync_pinboard, FixturePinboardFetch, IntakeConfig,
-    PinboardFetch, PipelineLogEvent,
+    EnrichOutcome, FixturePinboardFetch, IntakeConfig, PinboardFetch, PipelineLogEvent,
+    append_pipeline_event, now_unix_secs, record_enrich_outcomes, sweep_intake, sync_pinboard,
 };
 
-use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
+use crate::commands::client::{ClientKind, build_client};
 
 // `sayln!` (println + flush) now lives in `crate::progress` (shared across all
 // commands, re-exported crate-wide via `#[macro_export]`). Daily runs are
@@ -68,6 +68,8 @@ pub struct DailyArgs {
     pub pinboard_max: Option<usize>,
     pub no_lifecycle: bool,
     pub retry_blocked: bool,
+    /// Re-offer captures closed as `content_unavailable` to enrichment.
+    pub retry_unavailable: bool,
     /// Capture thrift: focused | balanced | comprehensive (worth gate before `$` reader).
     pub capture_tier: CaptureTier,
     /// Web fetch fixture directory for enriching needs-content sources.
@@ -155,9 +157,17 @@ fn run_inner(
     heartbeat: Option<&ovp_daily::HeartbeatGuard>,
 ) -> Result<(), CliError> {
     let layout = VaultLayout::new();
-    let inbox = args.inbox.clone().unwrap_or_else(|| args.vault_root.join(layout.inbox_raw_dir()));
+    let inbox = args
+        .inbox
+        .clone()
+        .unwrap_or_else(|| args.vault_root.join(layout.inbox_raw_dir()));
     let ledger_path = args.vault_root.join(layout.daily_ledger());
-    let intake_cfg = IntakeConfig::new(args.vault_root.clone(), args.date.clone(), args.run_id.clone());
+    let mut intake_cfg = IntakeConfig::new(
+        args.vault_root.clone(),
+        args.date.clone(),
+        args.run_id.clone(),
+    );
+    intake_cfg.retry_unavailable = args.retry_unavailable;
 
     let mut report = RunReport::new(&args.run_id, &args.date);
     sayln!("daily [{}]: vault {}", args.date, args.vault_root.display());
@@ -181,9 +191,15 @@ fn run_inner(
     // the entire vault; capture is best-effort relative to the reader loop.
     let pinboard_skip = if args.pinboard_live
         && args.pinboard_fixture.is_none()
-        && std::env::var("PINBOARD_TOKEN").ok().filter(|t| !t.trim().is_empty()).is_none()
+        && std::env::var("PINBOARD_TOKEN")
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+            .is_none()
     {
-        Some("PINBOARD_TOKEN is not set (add it to .ovp/providers.toml to enable live capture)".to_string())
+        Some(
+            "PINBOARD_TOKEN is not set (add it to .ovp/providers.toml to enable live capture)"
+                .to_string(),
+        )
     } else {
         None
     };
@@ -262,7 +278,9 @@ fn run_inner(
         let sweep = sweep_intake(&intake_cfg, &done, args.dry_run).map_err(CliError::Io)?;
         sayln!(
             "  intake: {} ingested, {} duplicate(s), {} needs-content, {} unparseable{}{}{}",
-            sweep.ingested.len(), sweep.duplicates.len(), sweep.needs_content.len(),
+            sweep.ingested.len(),
+            sweep.duplicates.len(),
+            sweep.needs_content.len(),
             sweep.unparseable.len(),
             // Surfaced, not silent: a capture the pipeline declined to read
             // must show up in the run's own summary, or `ovp/skip` becomes a
@@ -273,13 +291,37 @@ fn run_inner(
                 format!(", {} skipped by tag", sweep.skipped.len())
             },
             if sweep.already_flagged > 0 {
-                format!(" ({} previously flagged)", sweep.already_flagged)
+                format!(
+                    " ({} previously flagged{})",
+                    sweep.already_flagged,
+                    if sweep.already_unavailable > 0 {
+                        format!(
+                            ", {} closed as content-unavailable{}",
+                            sweep.already_unavailable,
+                            if args.retry_unavailable {
+                                " — reopened this run"
+                            } else {
+                                ""
+                            }
+                        )
+                    } else {
+                        String::new()
+                    }
+                )
             } else {
                 String::new()
             },
-            if args.dry_run { " — dry-run, nothing moved" } else { "" },
+            if args.dry_run {
+                " — dry-run, nothing moved"
+            } else {
+                ""
+            },
         );
-        dry_run_pending_ingest = if args.dry_run { sweep.ingested.len() } else { 0 };
+        dry_run_pending_ingest = if args.dry_run {
+            sweep.ingested.len()
+        } else {
+            0
+        };
         sweep_needs_content = sweep.needs_content.clone();
         // Previously-flagged captures (earlier failed fetches, or a sweep run
         // outside `daily`) stay pending — the enrichment phases below retry
@@ -308,9 +350,7 @@ fn run_inner(
     if (args.web_fetch_fixture.is_some() || args.web_fetch_live) && !args.dry_run {
         let needs_content_items: Vec<(String, String)> = sweep_needs_content
             .iter()
-            .filter_map(|rec| {
-                rec.url.as_ref().map(|u| (rec.from.clone(), u.clone()))
-            })
+            .filter_map(|rec| rec.url.as_ref().map(|u| (rec.from.clone(), u.clone())))
             .chain(
                 sweep_flagged_pending
                     .iter()
@@ -332,7 +372,12 @@ fn run_inner(
                     Some(rw) => append_pipeline_event(
                         &pipeline_log,
                         &source_enriched_event(
-                            &args, "web", &r.file_path, &r.url, rw, r.fetch.title.as_deref(),
+                            &args,
+                            "web",
+                            &r.file_path,
+                            &r.url,
+                            rw,
+                            r.fetch.title.as_deref(),
                         ),
                     ),
                     None => Ok(()),
@@ -342,18 +387,97 @@ fn run_inner(
             let failed = results.iter().filter(|r| !r.updated).count();
             enriched_total += enriched;
             enrich_failed_total += failed;
+            // Fetch-attributable outcomes go to the attempt ledger; a capture
+            // that has spent its budget (3 failures or 72h) is closed as
+            // content_unavailable HERE, so the next sweep stops re-offering
+            // it. Before this, an unreachable URL was fetched on every run.
+            //
+            // A LOCAL write failure (fetch returned content, `update_source_body`
+            // could not write it — read-only file, full disk) is deliberately
+            // NOT counted: `content_unavailable` means "the content cannot be
+            // had", and closing a reachable capture over a permissions problem
+            // would strand it even after the operator fixes the permissions.
+            // Those are surfaced as warnings below instead.
+            let mut local_write_failures: Vec<&str> = Vec::new();
+            let mut outcomes: Vec<EnrichOutcome> = Vec::new();
+            for r in &results {
+                let fetched_something = r
+                    .fetch
+                    .content
+                    .as_deref()
+                    .is_some_and(|c| !c.trim().is_empty());
+                if !r.updated && fetched_something {
+                    local_write_failures.push(&r.file_path);
+                    continue;
+                }
+                outcomes.push(EnrichOutcome {
+                    from: r.file_path.clone(),
+                    url: r.url.clone(),
+                    ok: r.updated,
+                    error: if r.updated {
+                        None
+                    } else {
+                        Some(
+                            r.fetch
+                                .error
+                                .clone()
+                                .unwrap_or_else(|| "fetch returned no content".into()),
+                        )
+                    },
+                });
+            }
+            let closed = record_enrich_outcomes(
+                &args.vault_root,
+                &args.run_id,
+                &args.date,
+                now_unix_secs(),
+                &outcomes,
+            )
+            .map_err(CliError::Io)?;
             sayln!(
-                "  enrich: {} needs-content URL(s), {} enriched, {} failed",
-                needs_content_items.len(), enriched, failed,
+                "  enrich: {} needs-content URL(s), {} enriched, {} failed{}",
+                needs_content_items.len(),
+                enriched,
+                failed,
+                if closed.unavailable.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", {} closed as content-unavailable (edit the file, tag ovp/skip, \
+                         or rerun with --retry-unavailable)",
+                        closed.unavailable.len()
+                    )
+                },
             );
             for r in &results {
                 if !r.updated
-                    && let Some(err) = &r.fetch.error {
-                        sayln!("    skip {}: {err}", r.url);
-                    }
+                    && let Some(err) = &r.fetch.error
+                {
+                    sayln!("    skip {}: {err}", r.url);
+                }
             }
-            // Counts are reported above first, so the operator sees what the
-            // halted batch did manage before the run fails.
+            for rec in &closed.unavailable {
+                sayln!(
+                    "    closed {}: {}",
+                    rec.from,
+                    rec.note.as_deref().unwrap_or("")
+                );
+            }
+            // Fetched fine, could not write: a local problem the operator can
+            // fix, so it must be loud AND must not count toward closure.
+            for path in &local_write_failures {
+                let msg = format!(
+                    "enrich: fetched content for {path} but could not write it \
+                     (check file permissions / disk space); not counted as content-unavailable"
+                );
+                sayln!("    WARN {msg}");
+                report.warnings.push(msg);
+            }
+            if let Some(intake) = report.intake.as_mut() {
+                intake.content_unavailable += closed.unavailable.len();
+            }
+            // Counts and closures are reported above first, so the operator sees
+            // what the halted batch did manage before the run fails.
             if let Some(e) = halt {
                 return Err(CliError::Io(format!("enrich journal: {e}")));
             }
@@ -374,9 +498,9 @@ fn run_inner(
         let github_items: Vec<(String, String)> = sweep_needs_content
             .iter()
             .filter_map(|rec| {
-                rec.url.as_ref().and_then(|u| {
-                    parse_github_repo_url(u).map(|_| (rec.from.clone(), u.clone()))
-                })
+                rec.url
+                    .as_ref()
+                    .and_then(|u| parse_github_repo_url(u).map(|_| (rec.from.clone(), u.clone())))
             })
             .chain(sweep_flagged_pending.iter().filter_map(|(from, url)| {
                 url.as_ref()
@@ -415,13 +539,17 @@ fn run_inner(
             enrich_failed_total += failed;
             sayln!(
                 "  github: {} repo URL(s) ({} truncated-note repairs), {} enriched, {} failed",
-                github_items.len(), repair_count, written, failed,
+                github_items.len(),
+                repair_count,
+                written,
+                failed,
             );
             for r in &results {
                 if !r.written
-                    && let Some(err) = &r.fetch.error {
-                        sayln!("    skip {}/{}: {err}", r.owner, r.repo);
-                    }
+                    && let Some(err) = &r.fetch.error
+                {
+                    sayln!("    skip {}/{}: {err}", r.owner, r.repo);
+                }
             }
             if let Some(e) = halt {
                 return Err(CliError::Io(format!("github enrich journal: {e}")));
@@ -431,11 +559,13 @@ fn run_inner(
 
     // Phase 3 — plan.
     let ledger = read_daily_ledger(&ledger_path).map_err(CliError::Io)?;
-    let work = plan_daily(&inbox, &args.vault_root, &ledger, args.retry_blocked)
-        .map_err(CliError::Io)?;
+    let work =
+        plan_daily(&inbox, &args.vault_root, &ledger, args.retry_blocked).map_err(CliError::Io)?;
     sayln!(
         "  plan: {} new source(s), {} skipped, {} blocked",
-        work.todo.len(), work.skipped.len(), work.blocked.len()
+        work.todo.len(),
+        work.skipped.len(),
+        work.blocked.len()
     );
     // Drain estimate — the operator is otherwise blind to how many runs the
     // backlog needs to clear at the current cap. `daily` processes at most
@@ -452,8 +582,11 @@ fn run_inner(
         );
     }
     for item in &work.blocked {
-        sayln!("    blocked ({} failures): {} — rerun with --retry-blocked after review",
-            item.prior_failures, item.rel);
+        sayln!(
+            "    blocked ({} failures): {} — rerun with --retry-blocked after review",
+            item.prior_failures,
+            item.rel
+        );
     }
     if args.dry_run {
         for item in &work.todo {
@@ -491,9 +624,12 @@ fn run_inner(
         .cache_dir
         .clone()
         .unwrap_or_else(|| args.vault_root.join(layout.daily_cassette_dir()));
-    let usage_ledger = args.vault_root.join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
-    let mut make_client =
-        || build_client(args.client_kind, &cache_dir, Some(&usage_ledger)).map_err(|e| e.to_string());
+    let usage_ledger = args
+        .vault_root
+        .join(crate::commands::usage_cmd::USAGE_LEDGER_REL);
+    let mut make_client = || {
+        build_client(args.client_kind, &cache_dir, Some(&usage_ledger)).map_err(|e| e.to_string())
+    };
     let cfg = DailyConfig {
         vault_root: args.vault_root.clone(),
         date: args.date.clone(),
@@ -542,7 +678,10 @@ fn run_inner(
                 rec.pack_dir.as_deref().unwrap_or("?"),
                 rec.units,
                 rec.cards,
-                rec.moved_to.as_deref().map(|m| format!(" moved→{m}")).unwrap_or_default(),
+                rec.moved_to
+                    .as_deref()
+                    .map(|m| format!(" moved→{m}"))
+                    .unwrap_or_default(),
             ),
             RunStatus::Failed => sayln!(
                 "  FAIL {} — {}",
@@ -574,8 +713,12 @@ fn run_inner(
             recent_ring.drain(0..overflow);
         }
         if let Some(hb) = heartbeat
-            && let Some(w) =
-                hb.progress(processed_so_far, total_planned, Some(&rec.source_path), &recent_ring)
+            && let Some(w) = hb.progress(
+                processed_so_far,
+                total_planned,
+                Some(&rec.source_path),
+                &recent_ring,
+            )
         {
             sayln!("  warn {w}");
         }
@@ -616,50 +759,53 @@ fn run_inner(
     if daily.capped > 0 {
         sayln!(
             "  capped: {} source(s) left for the next run (--max-sources {})",
-            daily.capped, cfg.max_sources
+            daily.capped,
+            cfg.max_sources
         );
     }
 
     // Phase 4.5 — image download for succeeded packs (optional).
-    if !args.no_images && !args.dry_run
-        && let Some(mut downloader) = build_image_downloader(&args)? {
-            let succeeded_packs: Vec<PathBuf> = daily
-                .processed
-                .iter()
-                .filter(|r| r.status == RunStatus::Succeeded)
-                .filter_map(|r| r.pack_dir.as_ref())
-                .map(|d| args.vault_root.join(d))
-                .collect();
-            if !succeeded_packs.is_empty() {
-                use ovp_enrich::image_download::{
-                    process_pack_images, ImageDownloadConfig,
-                };
-                let img_config = ImageDownloadConfig {
-                    attachments_dir: PathBuf::from("attachments"),
-                    ..Default::default()
-                };
-                let mut total_images = 0usize;
-                let mut total_downloaded = 0usize;
-                for pack_dir in &succeeded_packs {
-                    let results = process_pack_images(
-                        pack_dir,
-                        &args.vault_root,
-                        downloader.as_mut(),
-                        &img_config,
-                    );
-                    for r in &results {
-                        total_images += r.images_found;
-                        total_downloaded += r.images_downloaded;
-                    }
-                }
-                if total_images > 0 {
-                    sayln!(
-                        "  images: {} found, {} downloaded across {} pack(s)",
-                        total_images, total_downloaded, succeeded_packs.len()
-                    );
+    if !args.no_images
+        && !args.dry_run
+        && let Some(mut downloader) = build_image_downloader(&args)?
+    {
+        let succeeded_packs: Vec<PathBuf> = daily
+            .processed
+            .iter()
+            .filter(|r| r.status == RunStatus::Succeeded)
+            .filter_map(|r| r.pack_dir.as_ref())
+            .map(|d| args.vault_root.join(d))
+            .collect();
+        if !succeeded_packs.is_empty() {
+            use ovp_enrich::image_download::{ImageDownloadConfig, process_pack_images};
+            let img_config = ImageDownloadConfig {
+                attachments_dir: PathBuf::from("attachments"),
+                ..Default::default()
+            };
+            let mut total_images = 0usize;
+            let mut total_downloaded = 0usize;
+            for pack_dir in &succeeded_packs {
+                let results = process_pack_images(
+                    pack_dir,
+                    &args.vault_root,
+                    downloader.as_mut(),
+                    &img_config,
+                );
+                for r in &results {
+                    total_images += r.images_found;
+                    total_downloaded += r.images_downloaded;
                 }
             }
+            if total_images > 0 {
+                sayln!(
+                    "  images: {} found, {} downloaded across {} pack(s)",
+                    total_images,
+                    total_downloaded,
+                    succeeded_packs.len()
+                );
+            }
         }
+    }
 
     // Phase 4.6 — auto source-work (deep summary + EN→zh) for succeeded sources.
     // Config: `.ovp/source-work.toml` (defaults: auto_summarize + auto_translate on).
@@ -697,16 +843,18 @@ fn run_inner(
                     );
                     // Prefer pack source.md if body still empty.
                     if cand.body.is_none()
-                        && let Some(pack) = r.pack_dir.as_deref() {
-                            for name in ["source.md", "source-support.md", "reader.md"] {
-                                let rel = format!("{pack}/{name}");
-                                if let Ok(s) = std::fs::read_to_string(args.vault_root.join(&rel))
-                                    && !s.trim().is_empty() {
-                                        cand.body = Some(s);
-                                        break;
-                                    }
+                        && let Some(pack) = r.pack_dir.as_deref()
+                    {
+                        for name in ["source.md", "source-support.md", "reader.md"] {
+                            let rel = format!("{pack}/{name}");
+                            if let Ok(s) = std::fs::read_to_string(args.vault_root.join(&rel))
+                                && !s.trim().is_empty()
+                            {
+                                cand.body = Some(s);
+                                break;
                             }
                         }
+                    }
                     cand
                 })
                 .collect();
@@ -758,8 +906,8 @@ fn run_inner(
     let report_rel =
         ovp_daily::write_run_report(&args.vault_root, &report).map_err(CliError::Io)?;
 
-    let model = build_index(&args.vault_root, &args.date, Some(&args.run_id))
-        .map_err(CliError::Io)?;
+    let model =
+        build_index(&args.vault_root, &args.date, Some(&args.run_id)).map_err(CliError::Io)?;
 
     // Heartbeat counts: populated once the model is built so BOTH the clean
     // completion and the failed-source (Gate) exit below finalize with real
@@ -786,8 +934,12 @@ fn run_inner(
     if !args.no_digest {
         let data = ovp_memory::digest::collect_digest_data(&model, &args.date);
         let content = ovp_memory::digest::render_plain_digest(&data);
-        if let Ok(dpath) = ovp_memory::digest::write_digest(&args.vault_root, &args.date, &content) {
-            let drel = dpath.strip_prefix(&args.vault_root).unwrap_or(&dpath).display();
+        if let Ok(dpath) = ovp_memory::digest::write_digest(&args.vault_root, &args.date, &content)
+        {
+            let drel = dpath
+                .strip_prefix(&args.vault_root)
+                .unwrap_or(&dpath)
+                .display();
             sayln!("  digest: {drel}");
         }
     }
@@ -799,8 +951,13 @@ fn run_inner(
             ..Default::default()
         };
         let wm_content = ovp_memory::working_memory::build_working_memory(&model, &wm_args);
-        if let Ok(wm_path) = ovp_memory::working_memory::write_working_memory(&args.vault_root, &wm_content) {
-            let wm_rel = wm_path.strip_prefix(&args.vault_root).unwrap_or(&wm_path).display();
+        if let Ok(wm_path) =
+            ovp_memory::working_memory::write_working_memory(&args.vault_root, &wm_content)
+        {
+            let wm_rel = wm_path
+                .strip_prefix(&args.vault_root)
+                .unwrap_or(&wm_path)
+                .display();
             sayln!("  working-memory: {wm_rel}");
         }
     }
@@ -808,7 +965,8 @@ fn run_inner(
     let failed = daily.failed();
     sayln!(
         "  done: {} processed, {failed} failed, {} skipped (report: {report_rel})",
-        daily.processed.len(), daily.skipped
+        daily.processed.len(),
+        daily.skipped
     );
     sayln!("  index: {index_rel} · evidence: {evidence_rel} · console: {console_rel}");
 
@@ -816,11 +974,12 @@ fn run_inner(
     // auto-run crystal-themes — a cold model cache means a surprise ~450MB
     // download — but the operator should know when new packs are unthemed.
     if let Some(n) = stale_theme_packs(&args.vault_root, &model)
-        && n > 0 {
-            sayln!(
-                "  themes: {n} pack(s) not in .ovp/crystal/themes.json — run `ovp2 crystal-themes` to re-theme"
-            );
-        }
+        && n > 0
+    {
+        sayln!(
+            "  themes: {n} pack(s) not in .ovp/crystal/themes.json — run `ovp2 crystal-themes` to re-theme"
+        );
+    }
 
     // Tag-bootstrap increment (T1, docs/stage-tags-product.md §2): classify
     // sources that arrived untagged into the closed vocabulary. Best-effort —
@@ -840,7 +999,9 @@ fn run_inner(
     }) {
         Ok(n) if n > 0 => {
             if let Err(e) = rebuild_projection(&args.vault_root, &args.date, &args.run_id) {
-                sayln!("  tags: projection refresh after bootstrap failed ({e}) — next rebuild will surface them");
+                sayln!(
+                    "  tags: projection refresh after bootstrap failed ({e}) — next rebuild will surface them"
+                );
             }
         }
         Ok(_) => {}
@@ -891,8 +1052,11 @@ fn run_inner(
     if failed > 0 {
         // Honest retry guidance: a 3rd failure means the source is now
         // BLOCKED, not silently retried.
-        let prior: std::collections::HashMap<&str, usize> =
-            work.todo.iter().map(|i| (i.sha256.as_str(), i.prior_failures)).collect();
+        let prior: std::collections::HashMap<&str, usize> = work
+            .todo
+            .iter()
+            .map(|i| (i.sha256.as_str(), i.prior_failures))
+            .collect();
         let newly_blocked = daily
             .processed
             .iter()
@@ -1012,7 +1176,11 @@ enum RefreshDecision {
 /// the old behavior); otherwise every Nth source is a candidate, and
 /// `elapsed_since_last` (seconds since the previous rebuild, `None` = never)
 /// debounces a candidate that would fire within [`REFRESH_DEBOUNCE_SECS`].
-fn refresh_decision(every: usize, processed: usize, elapsed_since_last: Option<u64>) -> RefreshDecision {
+fn refresh_decision(
+    every: usize,
+    processed: usize,
+    elapsed_since_last: Option<u64>,
+) -> RefreshDecision {
     if every == 0 || processed == 0 || !processed.is_multiple_of(every) {
         return RefreshDecision::Skip;
     }
@@ -1060,18 +1228,14 @@ fn rebuild_projection(
 /// projection. `None` = nothing to hint about (no packs); a missing or
 /// corrupt themes.json counts every pack as unthemed (the hint is exactly
 /// how the operator learns to run `crystal-themes`). Pure read; never blocks.
-fn stale_theme_packs(
-    vault_root: &std::path::Path,
-    model: &ovp_index::IndexModel,
-) -> Option<usize> {
+fn stale_theme_packs(vault_root: &std::path::Path, model: &ovp_index::IndexModel) -> Option<usize> {
     if model.packs.is_empty() {
         return None;
     }
-    let themes = ovp_domain::crystal::themes::ThemesFile::load(
-        &vault_root.join(".ovp/crystal/themes.json"),
-    )
-    .ok()
-    .flatten();
+    let themes =
+        ovp_domain::crystal::themes::ThemesFile::load(&vault_root.join(".ovp/crystal/themes.json"))
+            .ok()
+            .flatten();
     let count = match &themes {
         Some(t) => model
             .packs
@@ -1188,7 +1352,9 @@ fn pinboard_error_is_soft(err: &str) -> bool {
 
 fn build_pinboard_fetch(args: &DailyArgs) -> Result<Box<dyn PinboardFetch>, CliError> {
     if args.pinboard_live && args.pinboard_fixture.is_some() {
-        return Err(CliError::Io("pass either --pinboard-fixture or --pinboard-live, not both".into()));
+        return Err(CliError::Io(
+            "pass either --pinboard-fixture or --pinboard-live, not both".into(),
+        ));
     }
     if let Some(path) = &args.pinboard_fixture {
         return Ok(Box::new(FixturePinboardFetch::new(path)));
@@ -1198,7 +1364,9 @@ fn build_pinboard_fetch(args: &DailyArgs) -> Result<Box<dyn PinboardFetch>, CliE
 
 #[cfg(feature = "pinboard-live")]
 pub fn live_pinboard_fetch() -> Result<Box<dyn PinboardFetch>, CliError> {
-    Ok(Box::new(ovp_intake::LivePinboardFetch::from_env().map_err(CliError::Io)?))
+    Ok(Box::new(
+        ovp_intake::LivePinboardFetch::from_env().map_err(CliError::Io)?,
+    ))
 }
 
 #[cfg(not(feature = "pinboard-live"))]
@@ -1225,7 +1393,9 @@ fn build_web_fetcher(args: &DailyArgs) -> Result<Box<dyn WebFetch>, CliError> {
 #[cfg(feature = "web-fetch-live")]
 fn live_web_fetch() -> Result<Box<dyn WebFetch>, CliError> {
     use ovp_enrich::web_fetch::LiveWebFetch;
-    Ok(Box::new(LiveWebFetch::with_defaults().map_err(CliError::Io)?))
+    Ok(Box::new(
+        LiveWebFetch::with_defaults().map_err(CliError::Io)?,
+    ))
 }
 
 #[cfg(not(feature = "web-fetch-live"))]
@@ -1300,8 +1470,8 @@ fn live_image_download() -> Result<Box<dyn ovp_enrich::image_download::ImageDown
 #[cfg(test)]
 mod tests {
     use super::{
-        cards_zh_tail, drain_runs, rebuild_projection, refresh_decision, run, stale_theme_packs,
-        DailyArgs, RefreshDecision, REFRESH_DEBOUNCE_SECS,
+        DailyArgs, REFRESH_DEBOUNCE_SECS, RefreshDecision, cards_zh_tail, drain_runs,
+        rebuild_projection, refresh_decision, run, stale_theme_packs,
     };
     use crate::commands::client::ClientKind;
 
@@ -1329,7 +1499,10 @@ mod tests {
         // a file over it.
         std::fs::create_dir_all(vault.join(".ovp/index/index.json")).unwrap();
         let res = rebuild_projection(vault, "2026-07-12", "daily-test");
-        assert!(res.is_err(), "a failed projection write must be a catchable Err");
+        assert!(
+            res.is_err(),
+            "a failed projection write must be a catchable Err"
+        );
     }
 
     #[test]
@@ -1407,6 +1580,7 @@ mod tests {
             pinboard_max: None,
             no_lifecycle: false,
             retry_blocked: false,
+            retry_unavailable: false,
             capture_tier: ovp_daily::CaptureTier::Balanced,
             web_fetch_fixture: None,
             web_fetch_live: false,
@@ -1432,8 +1606,7 @@ mod tests {
         // Simulate the legitimate active run: hold the lock and write its
         // "running" heartbeat.
         let _held = ovp_intake::RunLock::acquire(&vault).expect("acquire lock");
-        let (active_guard, _) =
-            ovp_daily::HeartbeatGuard::start(&vault, "daily-active");
+        let (active_guard, _) = ovp_daily::HeartbeatGuard::start(&vault, "daily-active");
         // Keep the active guard alive (its Drop would otherwise write aborted).
         let active = ovp_daily::read_last_run(&vault).unwrap().unwrap();
         assert_eq!(active.status, ovp_daily::LastRunStatus::Running);
@@ -1446,7 +1619,10 @@ mod tests {
         // The heartbeat is still the ACTIVE run's untouched "running" record.
         let after = ovp_daily::read_last_run(&vault).unwrap().unwrap();
         assert_eq!(after.status, ovp_daily::LastRunStatus::Running);
-        assert_eq!(after.run_id, "daily-active", "contender must not overwrite the heartbeat");
+        assert_eq!(
+            after.run_id, "daily-active",
+            "contender must not overwrite the heartbeat"
+        );
 
         // Finalize the active run so its guard's Drop doesn't write aborted.
         active_guard.finalize_completed(ovp_daily::RunCounts::default());
@@ -1546,10 +1722,7 @@ mod tests {
         // No packs → no hint at all.
         assert_eq!(stale_theme_packs(vault, &model_with_packs(&[])), None);
         // Packs but no themes.json → everything is unthemed.
-        let model = model_with_packs(&[
-            "40-Resources/Reader/case-a",
-            "40-Resources/Reader/case-b",
-        ]);
+        let model = model_with_packs(&["40-Resources/Reader/case-a", "40-Resources/Reader/case-b"]);
         assert_eq!(stale_theme_packs(vault, &model), Some(2));
         // themes.json covering case-a only → one stale pack.
         let store = vault.join(".ovp/crystal");

@@ -94,6 +94,11 @@ pub struct IntakeConfig {
     pub run_id: String,
     pub min_reader_body_chars: usize,
     pub anydoc_options: AnydocOptions,
+    /// Re-offer captures closed as `content_unavailable` to enrichment this
+    /// run (`ovp2 daily --retry-unavailable`). Mirrors the reader's
+    /// `--retry-blocked`: the closed set is reopened once, and a capture that
+    /// fails again goes straight back to closed.
+    pub retry_unavailable: bool,
 }
 
 impl IntakeConfig {
@@ -104,6 +109,7 @@ impl IntakeConfig {
             run_id,
             min_reader_body_chars: MIN_READER_BODY_CHARS,
             anydoc_options: AnydocOptions::default(),
+            retry_unavailable: false,
         }
     }
 }
@@ -118,9 +124,15 @@ pub struct SweepOutcome {
     pub unparseable: Vec<IntakeRecord>,
     /// Captures the operator excluded with `ovp/skip`.
     pub skipped: Vec<IntakeRecord>,
-    /// Files whose hash was already flagged needs_content/unparseable/skipped
-    /// on an earlier sweep — still sitting in a capture dir, skipped quietly.
+    /// Files whose hash was already flagged needs_content/unparseable/skipped/
+    /// content_unavailable on an earlier sweep — still sitting in a capture
+    /// dir, skipped quietly.
     pub already_flagged: usize,
+    /// The subset of `already_flagged` closed as `content_unavailable`: the
+    /// enrichment budget is spent, they wait for an edit, `ovp/skip`, or
+    /// `--retry-unavailable`. Counted so the run summary and report can say
+    /// how much of the capture backlog is closed rather than pending.
+    pub already_unavailable: usize,
     /// The already-flagged files as `(from, url)` pairs, so the enrichment
     /// phases can RETRY them (a fetch that failed on an earlier run, or a
     /// sweep that ran outside `daily`, must not strand a capture forever).
@@ -175,11 +187,16 @@ pub fn sweep_intake(
 
             if let Some(prev) = flagged.get(&sha256) {
                 outcome.already_flagged += 1;
+                if *prev == IntakeAction::ContentUnavailable {
+                    outcome.already_unavailable += 1;
+                }
                 // Only PENDING flags go back to enrichment. A capture the
                 // operator skipped is closed: re-fetching it every run is the
                 // waste `ovp/skip` exists to stop, and at `every 4h` that waste
-                // is six times a day.
-                if crate::ledger::is_pending_flag(*prev) {
+                // is six times a day. A capture the pipeline closed as
+                // content_unavailable is closed the same way, unless the
+                // operator reopens the set with `--retry-unavailable`.
+                if crate::ledger::reoffer_flag(*prev, cfg.retry_unavailable) {
                     // Parse best-effort for the URL so enrichment can retry this
                     // previously-flagged capture (it is still pending, not done).
                     let url = read_source_from_path(&path)

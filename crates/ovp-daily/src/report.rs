@@ -23,6 +23,11 @@ pub struct IntakeSummary {
     pub needs_content: usize,
     pub unparseable: usize,
     pub already_flagged: usize,
+    /// Captures closed as `content_unavailable` (enrichment budget spent):
+    /// the ones the sweep saw already closed PLUS the ones this run closed.
+    /// `#[serde(default)]` so reports written before the field parse.
+    #[serde(default)]
+    pub content_unavailable: usize,
 }
 
 impl From<&SweepOutcome> for IntakeSummary {
@@ -33,6 +38,7 @@ impl From<&SweepOutcome> for IntakeSummary {
             needs_content: o.needs_content.len(),
             unparseable: o.unparseable.len(),
             already_flagged: o.already_flagged,
+            content_unavailable: o.already_unavailable,
         }
     }
 }
