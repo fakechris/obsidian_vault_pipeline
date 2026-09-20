@@ -303,7 +303,7 @@ fn handle_tools_list() -> Result<Value, RpcError> {
             },
             {
                 "name": "find",
-                "description": "Query the OVP index: sources, packs, claims, runs, tags, entities. Filter by kind, status, date, tag, entity, or free-text term.",
+                "description": "Query the OVP index: sources, packs, claims, runs, tags, entities. Filter by kind, status, date, tag, entity, custom frontmatter meta, or free-text term.",
                 "readOnly": true,
                 "annotations": {
                     "readOnly": true,
@@ -317,7 +317,8 @@ fn handle_tools_list() -> Result<Value, RpcError> {
                         "status": { "type": "string" },
                         "date": { "type": "string", "description": "Date prefix (YYYY or YYYY-MM or YYYY-MM-DD)" },
                         "tag": { "type": "string", "description": "Canonical tag filter over sources (kind=tags lists the vocabulary)" },
-                        "entity": { "type": "string", "description": "URL entity id filter over sources, e.g. github:owner/repo (kind=entities lists the index)" }
+                        "entity": { "type": "string", "description": "URL entity id filter over sources, e.g. github:owner/repo (kind=entities lists the index)" },
+                        "meta": { "type": "object", "description": "Custom frontmatter filter over sources, exact key and value, several keys ANDed (e.g. {\"x_capture_id\": \"abc\"}). Keys are those the capture source wrote: x_*, capture_*, or clipped_from" }
                     }
                 }
             },
@@ -935,6 +936,28 @@ fn tool_find(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             .get("entity")
             .and_then(|v| v.as_str())
             .map(String::from),
+        // `{"meta": {"x_capture_id": "abc"}}`. Scalars are accepted in the
+        // JSON shapes an agent actually emits (a number or bool it did not
+        // quote) and compared as the strings the index stores; a nested
+        // object or array has no such form and is ignored rather than
+        // silently matching nothing.
+        meta: args
+            .get("meta")
+            .and_then(|v| v.as_object())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| {
+                        let v = match v {
+                            Value::String(s) => s.clone(),
+                            Value::Number(n) => n.to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            _ => return None,
+                        };
+                        Some((k.clone(), v))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
 
     let hits = run_query(&model, &query);
@@ -959,6 +982,7 @@ fn tool_search(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         term,
         tag: None,
         entity: None,
+        ..Default::default()
     };
     let hits = run_query(&model, &query);
     let text = serde_json::to_string_pretty(&hits).unwrap_or_else(|_| "[]".into());

@@ -45,6 +45,11 @@ impl PublicView {
             // `annotation` is the reader's own words about the source — as
             // personal as tags, and often more candid. Private by default.
             s.annotation = None;
+            // `meta` is the capture source's own provenance: producer names,
+            // capture ids, run ids. That is the operator's pipeline internals
+            // — the same class as `last_run_id`, which is already cleared —
+            // and it is meaningless to a public reader. Private by default.
+            s.meta.clear();
             // `author` is KEPT, deliberately: it is the byline of an article
             // that is already public, and the `url` beside it names the same
             // person or org anyway. This scrubber works by deletion, so every
@@ -145,6 +150,9 @@ mod tests {
             url: Some("https://example.com".into()),
             origin: None,
             annotation: Some("secret personal note".into()),
+            meta: [("x_capture_id".to_string(), "internal-42".to_string())]
+                .into_iter()
+                .collect(),
             rel_path: Some("50-Inbox/01-Raw/2026-07/secret.md".into()),
             date: Some("2026-07-01".into()),
             content_date: None,
@@ -219,6 +227,8 @@ mod tests {
         assert!(m.sources[0].tags.is_empty());
         assert!(m.sources[0].tags_inferred.is_empty());
         assert_eq!(m.sources[0].annotation, None);
+        // Capture provenance is pipeline internals, not public metadata.
+        assert!(m.sources[0].meta.is_empty(), "{:?}", m.sources[0].meta);
         // URL entities are public content (unlike personal tags) — they survive.
         assert_eq!(m.sources[0].entities, vec!["github:owner/repo".to_string()]);
         // Only the durable claim survives, citing only the public case.

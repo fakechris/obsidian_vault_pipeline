@@ -1572,6 +1572,7 @@ fn handle_find(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>>
         term: params.get("term").cloned(),
         tag,
         entity: params.get("entity").cloned(),
+        ..Default::default()
     };
 
     let body = bodies::find_body(&model, &query).to_string();
@@ -1609,6 +1610,7 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
         term: term.clone(),
         tag: None,
         entity: None,
+        ..Default::default()
     };
     let mut hits = bodies::find_body(&model, &query)
         .as_array()
@@ -5970,6 +5972,7 @@ mod tests {
                 url: Some("https://example.com/good".into()),
                 origin: None,
                 annotation: None,
+                meta: Default::default(),
                 rel_path: Some(rel_path.into()),
                 date: Some("2026-07-09".into()),
                 content_date: None,
@@ -7077,6 +7080,7 @@ mod tests {
             url: None,
             origin: None,
             annotation: None,
+            meta: Default::default(),
             rel_path: Some(format!("50-Inbox/01-Raw/2026-07/{file}")),
             date: None,
             content_date: None,

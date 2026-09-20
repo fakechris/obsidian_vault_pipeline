@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ovp_core::{
@@ -132,6 +133,75 @@ struct ClippingFrontmatter {
     #[serde(default)]
     source_published_at: Option<String>,
 }
+
+/// Frontmatter keys carried into the index verbatim despite not being part of
+/// the typed schema. Two admission rules, both narrow on purpose:
+///
+/// 1. **Prefix `x_` or `capture_`.** Any external producer — a web clipper
+///    property, a bot's own capture id — can claim a key under these without
+///    an OVP change per tool. That scalability is exactly why the issue
+///    rejected "one typed field per producer".
+/// 2. **[`META_ALLOW_LIST`].** Keys already written in the wild that predate
+///    the convention, so existing vaults gain the facet without a rewrite.
+///
+/// Anything else is dropped. An open pass-through would make the index a
+/// mirror of arbitrary user YAML, and every key in it becomes a query surface
+/// and a compatibility obligation the moment someone filters on it.
+pub const META_KEY_PREFIXES: [&str; 2] = ["x_", "capture_"];
+
+/// Non-prefixed keys admitted for history. `clipped_from` is written by
+/// `ovp2 pinboard` itself, whose own comment concedes the parser ignores it.
+pub const META_ALLOW_LIST: [&str; 1] = ["clipped_from"];
+
+/// Whether a frontmatter key is carried into `SourceRow.meta`.
+fn meta_key_admitted(key: &str) -> bool {
+    META_KEY_PREFIXES.iter().any(|p| key.starts_with(p))
+        || META_ALLOW_LIST.contains(&key)
+}
+
+/// Render a YAML scalar as the string the index stores. Returns `None` for
+/// sequences and mappings: `meta` is a flat string map because that is what
+/// `--meta k=v` can compare against, and silently flattening a nested value
+/// would invent a serialization the operator never wrote.
+fn meta_scalar(value: &serde_yaml::Value) -> Option<String> {
+    match value {
+        serde_yaml::Value::String(s) => Some(s.clone()),
+        serde_yaml::Value::Number(n) => Some(n.to_string()),
+        serde_yaml::Value::Bool(b) => Some(b.to_string()),
+        // Null, Sequence, Mapping, Tagged: no faithful scalar form.
+        _ => None,
+    }
+}
+
+/// Admitted custom frontmatter keys of one note, as flat strings.
+///
+/// Never an error: a note with no frontmatter, unparseable YAML, or nothing
+/// admissible yields an empty map. This runs over every source on every index
+/// build, and a malformed custom key must not be able to fail the build — the
+/// typed parse (`parse_clipping`) is where YAML errors are reported.
+/// Read as a plain map, NOT through [`ClippingFrontmatter`]. A
+/// `#[serde(flatten)]` field there would look tidier but routes the whole
+/// struct through serde's `Content` buffering, which cannot represent a YAML
+/// tagged value (`key: !foo bar`) — so one unknown tag anywhere in the
+/// frontmatter would fail `parse_clipping` outright and turn a note that reads
+/// fine today into an unreadable one. Custom keys must never be able to break
+/// the typed parse, so the two reads stay separate.
+pub fn capture_meta(raw: &str) -> BTreeMap<String, String> {
+    let Some(fm_str) = split_frontmatter(raw).0 else {
+        return BTreeMap::new();
+    };
+    let Ok(map) = serde_yaml::from_str::<BTreeMap<String, serde_yaml::Value>>(fm_str) else {
+        return BTreeMap::new();
+    };
+    // Known keys are excluded by the admission rule itself: none of them carry
+    // an `x_`/`capture_` prefix and none is on the allow-list.
+    map.into_iter()
+        .filter(|(k, _)| meta_key_admitted(k))
+        .filter_map(|(k, v)| meta_scalar(&v).map(|s| (k, s)))
+        .collect()
+}
+
+
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -457,6 +527,106 @@ mod clipping_tests {
     fn body_line_offset_zero_without_frontmatter() {
         let doc = parse_clipping("Just a body, no frontmatter.\n\nMore.").unwrap();
         assert_eq!(doc.body_line_offset, 0);
+    }
+}
+
+#[cfg(test)]
+mod capture_meta_tests {
+    use super::{capture_meta, parse_clipping};
+
+    fn note(extra: &str) -> String {
+        format!(
+            "---\ntitle: \"T\"\nsource: \"https://e.x/p\"\ntags:\n  - \"clippings\"\n{extra}---\nThe source body.\n"
+        )
+    }
+
+    /// The whole point: a producer's own key reaches the index.
+    #[test]
+    fn admits_prefixed_and_allow_listed_keys() {
+        let m = capture_meta(&note(
+            "clipped_from: pinboard\nx_capture_id: abc123\ncapture_run: r-7\n",
+        ));
+        assert_eq!(m.get("clipped_from").map(String::as_str), Some("pinboard"));
+        assert_eq!(m.get("x_capture_id").map(String::as_str), Some("abc123"));
+        assert_eq!(m.get("capture_run").map(String::as_str), Some("r-7"));
+        assert_eq!(m.len(), 3);
+    }
+
+    /// `flatten` sees every key serde did not claim by name. If a typed field
+    /// ever stopped being claimed, it would silently start showing up as a
+    /// custom key AND as its typed field — so pin that it does not, including
+    /// for `note`, which is only reachable as an alias of `annotation`.
+    #[test]
+    fn known_keys_do_not_leak_into_meta() {
+        let raw = "---\ntitle: \"T\"\nsource: \"https://e.x/p\"\npublished: 2026-01-02\nauthor: \"A\"\ntags:\n  - \"t\"\nnote: \"my own words\"\nsource_type: arxiv-paper\narxiv_id: \"2401.1\"\n---\nBody.\n";
+        assert!(capture_meta(raw).is_empty(), "{:?}", capture_meta(raw));
+
+        // ...and the typed parse still sees them, i.e. flatten did not eat them.
+        let doc = parse_clipping(raw).unwrap();
+        assert_eq!(doc.title, "T");
+        assert_eq!(doc.source_url, "https://e.x/p");
+        assert_eq!(doc.author.as_deref(), Some("A"));
+        assert_eq!(doc.annotation.as_deref(), Some("my own words"));
+        assert_eq!(doc.tags, vec!["t".to_string()]);
+    }
+
+    /// Unadmitted keys are dropped, never an error — an arbitrary YAML key is
+    /// not the index's business and must not become a query surface.
+    #[test]
+    fn unadmitted_keys_are_dropped_silently() {
+        let m = capture_meta(&note(
+            "created: 2026-01-02\nrandom_key: v\ncssclass: wide\n",
+        ));
+        assert!(m.is_empty(), "{m:?}");
+    }
+
+    /// Only scalars: a list or map has no faithful flat-string form, and
+    /// inventing one would fabricate a value the operator never wrote.
+    #[test]
+    fn non_scalar_values_are_dropped_scalars_are_stringified() {
+        let m = capture_meta(&note(
+            "x_list:\n  - a\n  - b\nx_map:\n  k: v\nx_num: 42\nx_bool: true\nx_null:\nx_str: s\n",
+        ));
+        assert_eq!(m.get("x_num").map(String::as_str), Some("42"));
+        assert_eq!(m.get("x_bool").map(String::as_str), Some("true"));
+        assert_eq!(m.get("x_str").map(String::as_str), Some("s"));
+        assert!(!m.contains_key("x_list"));
+        assert!(!m.contains_key("x_map"));
+        assert!(!m.contains_key("x_null"));
+    }
+
+    /// A custom key must never be able to break the TYPED parse. An unknown
+    /// YAML tag (`!foo`) is the sharp case: it is valid YAML, it parsed fine
+    /// before custom keys were carried, and a note that stops parsing stops
+    /// being readable at all.
+    #[test]
+    fn an_unknown_yaml_tag_does_not_break_the_typed_parse() {
+        let raw = "---\ntitle: \"T\"\nsource: \"https://e.x/p\"\nrandom: !foo bar\n---\nBody.\n";
+        let doc = parse_clipping(raw).expect("tagged value must not fail the parse");
+        assert_eq!(doc.title, "T");
+        assert_eq!(doc.source_url, "https://e.x/p");
+        // Unadmitted, so it is simply absent from meta.
+        assert!(capture_meta(raw).is_empty());
+    }
+
+    /// Same, for a tagged value under an ADMITTED key: the key is dropped
+    /// (no faithful scalar form) but the note still parses.
+    #[test]
+    fn a_tagged_value_under_an_admitted_key_is_dropped_not_fatal() {
+        let raw = "---\ntitle: \"T\"\nx_thing: !foo bar\nx_ok: plain\n---\nBody.\n";
+        let doc = parse_clipping(raw).expect("tagged value must not fail the parse");
+        assert_eq!(doc.title, "T");
+        let m = capture_meta(raw);
+        assert_eq!(m.get("x_ok").map(String::as_str), Some("plain"));
+        assert!(!m.contains_key("x_thing"), "{m:?}");
+    }
+
+    /// Runs over every source on every index build, so it must never fail one.
+    #[test]
+    fn malformed_or_absent_frontmatter_yields_empty_not_error() {
+        assert!(capture_meta("no frontmatter at all\n").is_empty());
+        assert!(capture_meta("---\nx_a: [unclosed\n---\nbody\n").is_empty());
+        assert!(capture_meta("").is_empty());
     }
 }
 

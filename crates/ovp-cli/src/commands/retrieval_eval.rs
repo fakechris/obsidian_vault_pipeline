@@ -820,6 +820,7 @@ mod tests {
             url: None,
             origin: None,
             annotation: None,
+            meta: Default::default(),
             rel_path: None,
             date: None,
             content_date: None,

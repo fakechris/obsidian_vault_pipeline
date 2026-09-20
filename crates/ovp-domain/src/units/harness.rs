@@ -25,6 +25,26 @@ pub fn read_source_from_path(path: &Path) -> Result<SourceDoc, String> {
         .map_err(|e| format!("{}: {}", e.code.as_str(), e.detail))
 }
 
+/// Same parse as [`read_source_from_path`], plus the note's admitted custom
+/// frontmatter keys (see `markdown_inbox::capture_meta`).
+///
+/// The map is returned BESIDE the doc rather than on it: `SourceDoc` is a sum
+/// over named structs by invariant #3, and an open `BTreeMap` field would turn
+/// it into the bag of optionals that invariant exists to prevent. The index is
+/// the only consumer, so the pass-through stops at this boundary.
+///
+/// One read, one parse — index builds walk the whole corpus, so a second
+/// `read_to_string` per source to fetch the meta would be real I/O for nothing.
+pub fn read_source_with_meta(
+    path: &Path,
+) -> Result<(SourceDoc, std::collections::BTreeMap<String, String>), String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let doc = crate::sources::markdown_inbox::parse_clipping(&raw)
+        .map_err(|e| format!("{}: {}", path.display(), e))?;
+    let meta = crate::sources::markdown_inbox::capture_meta(&raw);
+    Ok((doc, meta))
+}
+
 /// Pure half: turn a model reply's text + the source into a validated
 /// extraction. A parse failure is recorded in `report.parse_error` (so the
 /// review pack still exists) rather than thrown away.

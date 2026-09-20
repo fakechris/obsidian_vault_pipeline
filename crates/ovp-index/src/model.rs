@@ -4,6 +4,8 @@
 //! directly and never the source of truth. Deleting `.ovp/index/` loses
 //! nothing.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 pub const INDEX_SCHEMA: &str = "ovp.index/v2";
@@ -78,6 +80,17 @@ pub struct SourceRow {
     /// Serde-additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotation: Option<String>,
+    /// Custom frontmatter keys the capture source wrote, admitted by the
+    /// prefix/allow-list rule in `ovp_domain::sources::markdown_inbox`
+    /// (`x_*`, `capture_*`, plus `clipped_from`). Scalars only, re-read on
+    /// every build like tags and `annotation`, so the note's CURRENT
+    /// frontmatter is the truth.
+    ///
+    /// These survived intake (`fs::rename`) and enrichment (frontmatter is
+    /// re-emitted verbatim) all along; they simply had nowhere to land. This
+    /// is what makes `find --meta k=v` possible. Serde-additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub meta: BTreeMap<String, String>,
     /// Current best-known vault-relative location.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rel_path: Option<String>,
@@ -145,6 +158,7 @@ impl SourceRow {
             url: None,
             origin: None,
             annotation: None,
+            meta: BTreeMap::new(),
             rel_path: None,
             date: None,
             content_date: None,
@@ -186,12 +200,7 @@ pub fn run_date_from_run_id(run_id: &str) -> Option<String> {
         if slice.len() >= 8 {
             let cand = &slice[..8];
             if cand.bytes().all(|b| b.is_ascii_digit()) {
-                return Some(format!(
-                    "{}-{}-{}",
-                    &cand[..4],
-                    &cand[4..6],
-                    &cand[6..8]
-                ));
+                return Some(format!("{}-{}-{}", &cand[..4], &cand[4..6], &cand[6..8]));
             }
         }
     }

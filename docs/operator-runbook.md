@@ -242,6 +242,7 @@ ovp2 find --vault-root "$VAULT" --kind claims --status durable
 ovp2 find --vault-root "$VAULT" --kind cards "agent memory"
 ovp2 find --vault-root "$VAULT" --kind units "verbatim quote"
 ovp2 find --vault-root "$VAULT" --kind runs --date 2026-06
+ovp2 find --vault-root "$VAULT" --meta clipped_from=pinboard   # custom frontmatter
 ovp2 claim --vault-root "$VAULT" <claim_key|claim_id|ovp://claim/KEY> [--json]  # one claim's evidence closure
 ovp2 ask --vault-root "$VAULT" --client live "What does the vault say about agent memory?"
 ovp2 ask --vault-root "$VAULT" --client live --strict-ask "What evidence supports that?"
@@ -249,6 +250,41 @@ ovp2 ask --vault-root "$VAULT" --client live --strict-ask "What evidence support
 
 Pinboard without live credentials: export from <https://pinboard.in/export/>
 (JSON) and use `--fixture`. The note format and dedup are identical to live.
+
+### Custom frontmatter keys (`--meta`)
+
+A capture source can write its own frontmatter keys — a clipper property, a
+bot's capture id, per-source provenance. They already survived intake and
+enrichment untouched; `ovp2 index` now also carries the admitted ones into
+`sources[].meta`, so they are filterable:
+
+```bash
+ovp2 find --vault-root "$VAULT" --meta x_capture_id=abc123
+ovp2 find --vault-root "$VAULT" --meta clipped_from=pinboard --meta x_producer=bot
+```
+
+Both halves match exactly, and several `--meta` flags are ANDed. Exact, not
+substring: for an identity key, `x_id=7` also returning `x_id=1173` would be a
+wrong answer rather than a loose one. Use `--term` when you want fuzzy.
+
+**Which keys are admitted.** Two rules, both deliberately narrow:
+
+| Rule | Example |
+|---|---|
+| prefix `x_` or `capture_` | `x_capture_id`, `capture_run` |
+| the fixed allow-list | `clipped_from` |
+
+The prefix convention is what lets any external producer claim a key without
+an OVP change per tool. Everything else is dropped, silently and by design: an
+open pass-through would make the index a mirror of arbitrary user YAML, and
+every key in it becomes a query surface and a compatibility obligation the
+moment someone filters on it. Values must be scalars — a list or map has no
+faithful flat-string form, and inventing one would fabricate a value nobody
+wrote.
+
+Keys are re-read from the note's CURRENT frontmatter on every build, the same
+truth rule as tags and `annotation`. The MCP `find` tool takes the same filter
+as `{"meta": {"x_capture_id": "abc123"}}`.
 
 `claim` prints one durable claim's evidence closure (text, gates, every
 citation resolved to its source through the index). `--json` emits exactly the

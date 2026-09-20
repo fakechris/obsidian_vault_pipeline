@@ -386,6 +386,12 @@ enum Cmd {
         /// `arxiv:2504.19413`). `--kind entities` lists the entity index.
         #[arg(long)]
         entity: Option<String>,
+        /// Custom frontmatter filter over sources, `key=value`, exact on both
+        /// halves. Repeatable; several are ANDed. Keys are what the capture
+        /// source wrote (`x_*`, `capture_*`, `clipped_from`), e.g.
+        /// `--meta clipped_from=pinboard --meta x_capture_id=abc`.
+        #[arg(long = "meta", value_name = "KEY=VALUE")]
+        meta: Vec<String>,
         /// Emit JSON instead of text.
         #[arg(long)]
         json: bool,
@@ -1836,6 +1842,7 @@ fn main() -> ExitCode {
             date,
             tag,
             entity,
+            meta,
             json,
         } => commands::index_cmd::run_find(commands::index_cmd::FindArgs {
             vault_root,
@@ -1845,6 +1852,7 @@ fn main() -> ExitCode {
             date,
             tag,
             entity,
+            meta,
             json,
         }),
         Cmd::Claim { vault_root, key, json } => {

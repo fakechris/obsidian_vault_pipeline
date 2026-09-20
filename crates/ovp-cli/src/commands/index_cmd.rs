@@ -108,7 +108,24 @@ pub struct FindArgs {
     pub date: Option<String>,
     pub tag: Option<String>,
     pub entity: Option<String>,
+    /// Raw `key=value` pairs as typed; parsed and validated in `run_find`.
+    pub meta: Vec<String>,
     pub json: bool,
+}
+
+/// Split `--meta key=value` on the FIRST `=`, so a value may itself contain
+/// one (`x_src=a=b`). An empty key, or no `=` at all, is a usage error rather
+/// than a filter that silently matches nothing — a typo that quietly returns
+/// zero rows reads exactly like "no such source".
+fn parse_meta_filters(raw: &[String]) -> Result<Vec<(String, String)>, CliError> {
+    raw.iter()
+        .map(|pair| match pair.split_once('=') {
+            Some((k, v)) if !k.trim().is_empty() => Ok((k.trim().to_string(), v.to_string())),
+            _ => Err(CliError::Io(format!(
+                "--meta {pair:?} must be KEY=VALUE with a non-empty key"
+            ))),
+        })
+        .collect()
 }
 
 pub fn run_find(args: FindArgs) -> Result<(), CliError> {
@@ -147,6 +164,7 @@ pub fn run_find(args: FindArgs) -> Result<(), CliError> {
         term: args.term,
         tag,
         entity: args.entity,
+        meta: parse_meta_filters(&args.meta)?,
     };
     let hits = match kind {
         Some(QueryKind::Cards | QueryKind::Units) => {
@@ -175,4 +193,41 @@ pub fn run_find(args: FindArgs) -> Result<(), CliError> {
     }
     println!("{} match(es) (index built {})", hits.len(), model.date);
     Ok(())
+}
+
+#[cfg(test)]
+mod meta_filter_tests {
+    use super::parse_meta_filters;
+
+    #[test]
+    fn splits_on_the_first_equals_so_values_may_contain_one() {
+        let got =
+            parse_meta_filters(&["clipped_from=pinboard".to_string(), "x_src=a=b".to_string()])
+                .unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("clipped_from".to_string(), "pinboard".to_string()),
+                ("x_src".to_string(), "a=b".to_string()),
+            ]
+        );
+    }
+
+    /// An empty value is a legitimate filter (`x_note=`); an empty KEY is not.
+    #[test]
+    fn empty_value_is_allowed_empty_key_is_not() {
+        assert_eq!(
+            parse_meta_filters(&["x_note=".to_string()]).unwrap(),
+            vec![("x_note".to_string(), String::new())]
+        );
+        assert!(parse_meta_filters(&["=v".to_string()]).is_err());
+    }
+
+    /// A missing `=` must be a usage error: silently matching nothing reads
+    /// exactly like "no such source", which sends the operator hunting.
+    #[test]
+    fn missing_equals_is_a_usage_error() {
+        let err = parse_meta_filters(&["clipped_from".to_string()]).unwrap_err();
+        assert!(format!("{err:?}").contains("KEY=VALUE"), "{err:?}");
+    }
 }
