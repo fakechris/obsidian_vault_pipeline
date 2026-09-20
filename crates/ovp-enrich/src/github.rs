@@ -266,6 +266,9 @@ pub struct GitHubEnrichResult {
     pub written: bool,
     /// Path of the written note (if any).
     pub note_path: Option<String>,
+    /// What the write replaced (`Some` iff `written`), for the caller's
+    /// `source_enriched` pipeline event.
+    pub rewrite: Option<crate::BodyRewrite>,
 }
 
 /// Parse a GitHub repo URL into (owner, repo). Returns None for non-repo URLs
@@ -308,45 +311,72 @@ pub fn enrich_github_repos(
     vault_root: &std::path::Path,
     sources: &[(String, String)],
 ) -> Vec<GitHubEnrichResult> {
-    sources
-        .iter()
-        .filter_map(|(rel_path, url)| {
-            let (owner, repo) = parse_github_repo_url(url)?;
-            let result = fetcher.fetch_repo(&owner, &repo);
+    enrich_github_repos_with_progress(fetcher, vault_root, sources, &mut |_| Ok(())).0
+}
 
-            let (written, note_path) = if result.error.is_none() {
-                match write_github_note(vault_root, rel_path, &result) {
-                    Ok(path) => (true, Some(path)),
-                    Err(_) => (false, None),
-                }
-            } else {
-                (false, None)
-            };
+/// As [`enrich_github_repos`], but `on_result` fires after EACH repo, before
+/// the next fetch, and its error STOPS the batch. Same reasons as the
+/// web-fetch variant: the note is already overwritten, so journaling only at
+/// batch end loses the old-body evidence of every rewrite that landed before
+/// an interruption, and continuing past a journal failure would overwrite yet
+/// more notes untraced.
+pub fn enrich_github_repos_with_progress(
+    fetcher: &mut dyn GitHubFetch,
+    vault_root: &std::path::Path,
+    sources: &[(String, String)],
+    on_result: &mut dyn FnMut(&GitHubEnrichResult) -> Result<(), String>,
+) -> (Vec<GitHubEnrichResult>, Option<String>) {
+    let mut out = Vec::new();
+    let mut halt = None;
+    for (rel_path, url) in sources {
+        let Some((owner, repo)) = parse_github_repo_url(url) else {
+            continue;
+        };
+        let result = fetcher.fetch_repo(&owner, &repo);
 
-            Some(GitHubEnrichResult {
-                url: url.clone(),
-                owner,
-                repo,
-                fetch: result,
-                written,
-                note_path,
-            })
-        })
-        .collect()
+        let (written, note_path, rewrite) = if result.error.is_none() {
+            match write_github_note(vault_root, rel_path, &result) {
+                Ok((path, rewrite)) => (true, Some(path), Some(rewrite)),
+                Err(_) => (false, None, None),
+            }
+        } else {
+            (false, None, None)
+        };
+
+        let enriched = GitHubEnrichResult {
+            url: url.clone(),
+            owner,
+            repo,
+            fetch: result,
+            written,
+            note_path,
+            rewrite,
+        };
+        let journaled = on_result(&enriched);
+        out.push(enriched);
+        if let Err(e) = journaled {
+            halt = Some(e);
+            break;
+        }
+    }
+    (out, halt)
 }
 
 /// Write/update the source file with GitHub repo content.
 /// Preserves frontmatter, replaces body with README + metadata header.
+/// Returns the written path and what the write replaced.
 fn write_github_note(
     vault_root: &std::path::Path,
     rel_path: &str,
     result: &GitHubFetchResult,
-) -> Result<String, String> {
+) -> Result<(String, crate::BodyRewrite), String> {
     let abs_path = vault_root.join(rel_path);
     let existing = std::fs::read_to_string(&abs_path)
         .map_err(|e| format!("read error: {e}"))?;
 
-    let (frontmatter, _old_body) = split_frontmatter(&existing);
+    let (frontmatter, old_body) = split_frontmatter(&existing);
+    let old_body_chars = old_body.trim().chars().count();
+    let old_sha256 = crate::hex_sha256(existing.as_bytes());
     let meta = result.metadata.as_ref().ok_or("no metadata")?;
 
     let mut body = String::new();
@@ -421,7 +451,14 @@ fn write_github_note(
     std::fs::write(&abs_path, &output)
         .map_err(|e| format!("write error: {e}"))?;
 
-    Ok(rel_path.to_string())
+    Ok((
+        rel_path.to_string(),
+        crate::BodyRewrite {
+            old_body_chars,
+            old_sha256,
+            new_sha256: crate::hex_sha256(output.as_bytes()),
+        },
+    ))
 }
 
 fn update_frontmatter_github(fm: &str, fetched_at: &str, meta: &RepoMetadata) -> String {
@@ -784,6 +821,12 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert!(results[0].written);
+        // The rewrite trace names what was replaced: the one-line URL body,
+        // and the before/after file hashes bracket the write.
+        let rw = results[0].rewrite.as_ref().expect("written ⇒ rewrite");
+        assert_eq!(rw.old_body_chars, "https://github.com/owner/repo".len());
+        assert_eq!(rw.new_sha256, crate::hex_sha256(&fs::read(&source_file).unwrap()));
+        assert_ne!(rw.old_sha256, rw.new_sha256);
 
         let content = fs::read_to_string(&source_file).unwrap();
         assert!(content.contains("# owner/repo"));

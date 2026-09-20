@@ -23,11 +23,14 @@ use ovp_index::{
     build_evidence, build_index, build_index_with_progress, write_evidence, write_index,
 };
 use ovp_enrich::github::{
-    enrich_github_repos, find_truncated_github_notes, parse_github_repo_url, FixtureGitHubFetch,
-    GitHubFetch,
+    enrich_github_repos_with_progress, find_truncated_github_notes, parse_github_repo_url,
+    FixtureGitHubFetch, GitHubFetch,
 };
-use ovp_enrich::web_fetch::{enrich_needs_content, FixtureWebFetch, WebFetch};
-use ovp_intake::{sweep_intake, sync_pinboard, FixturePinboardFetch, IntakeConfig, PinboardFetch};
+use ovp_enrich::web_fetch::{enrich_needs_content_with_progress, FixtureWebFetch, WebFetch};
+use ovp_intake::{
+    append_pipeline_event, sweep_intake, sync_pinboard, FixturePinboardFetch, IntakeConfig,
+    PinboardFetch, PipelineLogEvent,
+};
 
 use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
@@ -121,8 +124,12 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     // still fires on the guard here.
     match run_inner(args, Some(lock), Some(&mut counts), Some(&guard)) {
         Ok(()) => {
+            // stderr, not stdout: this fires AFTER run_inner has emitted the
+            // final `daily-result:` line, and a caller reading stdout's last
+            // line must get that JSON, never a heartbeat warning. stderr is
+            // also where the other run warnings go.
             if let Some(w) = guard.finalize_completed(counts) {
-                sayln!("  warn {w}");
+                sayln_err!("  warn {w}");
             }
             Ok(())
         }
@@ -281,6 +288,15 @@ fn run_inner(
         report.intake = Some((&sweep).into());
     }
 
+    // Enrich phases below rewrite note bodies in place. Every rewrite leaves a
+    // `source_enriched` event in the same pipeline log intake writes its
+    // `intake_move` to — before this, a body replacement was invisible except
+    // as a content-hash change between two sweeps. The two counters feed the
+    // machine-readable `daily-result:` line at the end of the run.
+    let pipeline_log = args.vault_root.join(layout.pipeline_log());
+    let mut enriched_total = 0usize;
+    let mut enrich_failed_total = 0usize;
+
     // Phase 2.5 — web fetch enrichment (optional).
     // Enriches needs-content sources (from the intake sweep, PLUS any
     // previously-flagged captures still pending) by fetching their URLs.
@@ -303,13 +319,29 @@ fn run_inner(
             .collect();
         if !needs_content_items.is_empty() {
             let mut fetcher = build_web_fetcher(&args)?;
-            let results = enrich_needs_content(
+            // Journal each rewrite BEFORE the next fetch begins: the rewrite
+            // has already destroyed the old body, so a batch interrupted
+            // mid-flight must not leave earlier overwrites untraced. A journal
+            // failure HALTS the batch (see the callee) rather than letting the
+            // remaining sources be overwritten with no record.
+            let (results, halt) = enrich_needs_content_with_progress(
                 fetcher.as_mut(),
                 &args.vault_root,
                 &needs_content_items,
+                &mut |r| match &r.rewrite {
+                    Some(rw) => append_pipeline_event(
+                        &pipeline_log,
+                        &source_enriched_event(
+                            &args, "web", &r.file_path, &r.url, rw, r.fetch.title.as_deref(),
+                        ),
+                    ),
+                    None => Ok(()),
+                },
             );
             let enriched = results.iter().filter(|r| r.updated).count();
             let failed = results.iter().filter(|r| !r.updated).count();
+            enriched_total += enriched;
+            enrich_failed_total += failed;
             sayln!(
                 "  enrich: {} needs-content URL(s), {} enriched, {} failed",
                 needs_content_items.len(), enriched, failed,
@@ -319,6 +351,11 @@ fn run_inner(
                     && let Some(err) = &r.fetch.error {
                         sayln!("    skip {}: {err}", r.url);
                     }
+            }
+            // Counts are reported above first, so the operator sees what the
+            // halted batch did manage before the run fails.
+            if let Some(e) = halt {
+                return Err(CliError::Io(format!("enrich journal: {e}")));
             }
         }
     }
@@ -351,13 +388,31 @@ fn run_inner(
             .collect();
         if !github_items.is_empty() {
             let mut fetcher = build_github_fetcher(&args)?;
-            let results = enrich_github_repos(
+            // Same per-result journaling (and same halt-on-failure) as the
+            // web phase above.
+            let (results, halt) = enrich_github_repos_with_progress(
                 fetcher.as_mut(),
                 &args.vault_root,
                 &github_items,
+                &mut |r| match (&r.rewrite, &r.note_path) {
+                    (Some(rw), Some(path)) => append_pipeline_event(
+                        &pipeline_log,
+                        &source_enriched_event(
+                            &args,
+                            "github",
+                            path,
+                            &r.url,
+                            rw,
+                            r.fetch.metadata.as_ref().map(|m| m.full_name.as_str()),
+                        ),
+                    ),
+                    _ => Ok(()),
+                },
             );
             let written = results.iter().filter(|r| r.written).count();
             let failed = results.iter().filter(|r| !r.written).count();
+            enriched_total += written;
+            enrich_failed_total += failed;
             sayln!(
                 "  github: {} repo URL(s) ({} truncated-note repairs), {} enriched, {} failed",
                 github_items.len(), repair_count, written, failed,
@@ -367,6 +422,9 @@ fn run_inner(
                     && let Some(err) = &r.fetch.error {
                         sayln!("    skip {}/{}: {err}", r.owner, r.repo);
                     }
+            }
+            if let Some(e) = halt {
+                return Err(CliError::Io(format!("github enrich journal: {e}")));
             }
         }
     }
@@ -408,6 +466,23 @@ fn run_inner(
             );
         }
         sayln!("  dry-run: nothing written.");
+        DailyResultLine {
+            run_id: &args.run_id,
+            date: &args.date,
+            dry_run: true,
+            report: None,
+            index: None,
+            evidence: None,
+            console: None,
+            processed: 0,
+            failed: 0,
+            skipped: work.skipped.len(),
+            blocked: work.blocked.len(),
+            needs_content: sweep_needs_content.len(),
+            enriched: 0,
+            enrich_failed: 0,
+        }
+        .print();
         return Ok(());
     }
 
@@ -789,6 +864,30 @@ fn run_inner(
         cards_zh_tail(&args.vault_root, args.client_kind, &cards);
     }
 
+    // The one line a caller parses instead of guessing the report path from
+    // the (date-keyed, same-day-shared) run id. Emitted LAST on stdout — after
+    // every best-effort tail above (theme hint, tags bootstrap, bilingual tail)
+    // has had its say, so "read the final line" is a contract that actually
+    // holds — and still before the failed-source Gate below, so it describes a
+    // run whose artifacts exist whatever the exit code.
+    DailyResultLine {
+        run_id: &args.run_id,
+        date: &args.date,
+        dry_run: false,
+        report: Some(&report_rel),
+        index: Some(&index_rel),
+        evidence: Some(&evidence_rel),
+        console: Some(&console_rel),
+        processed: daily.processed.len(),
+        failed,
+        skipped: daily.skipped,
+        blocked: daily.blocked,
+        needs_content: sweep_needs_content.len(),
+        enriched: enriched_total,
+        enrich_failed: enrich_failed_total,
+    }
+    .print();
+
     if failed > 0 {
         // Honest retry guidance: a 3rd failure means the source is now
         // BLOCKED, not silently retried.
@@ -818,6 +917,75 @@ fn run_inner(
         return Err(CliError::Gate(msg));
     }
     Ok(())
+}
+
+/// Prefix of the machine-readable end-of-run line. Everything after it on that
+/// stdout line is one JSON object ([`DailyResultLine`]); the human `done:` /
+/// `index:` lines above it stay as they are.
+pub const DAILY_RESULT_PREFIX: &str = "daily-result: ";
+
+/// The end-of-run summary a caller parses instead of scraping `done:` prose
+/// and guessing `.ovp/reports/<run_id>.json` from a run id that two same-day
+/// runs share. Paths are vault-relative and `null` on a dry run (nothing was
+/// written). Field order is the struct order — stable, so a line diff between
+/// two runs is readable.
+#[derive(Debug, serde::Serialize)]
+struct DailyResultLine<'a> {
+    run_id: &'a str,
+    date: &'a str,
+    dry_run: bool,
+    report: Option<&'a str>,
+    index: Option<&'a str>,
+    evidence: Option<&'a str>,
+    console: Option<&'a str>,
+    /// Reader outcomes this run: attempted, failed, planner-skipped, blocked.
+    processed: usize,
+    failed: usize,
+    skipped: usize,
+    blocked: usize,
+    /// Captures the intake sweep flagged `needs-content` THIS run (not the
+    /// still-pending backlog from earlier runs).
+    needs_content: usize,
+    /// Body rewrites across the web-fetch and GitHub enrich phases, and the
+    /// fetches that produced nothing (each also logged as `skip` above).
+    enriched: usize,
+    enrich_failed: usize,
+}
+
+impl DailyResultLine<'_> {
+    fn print(&self) {
+        // Serializing a struct of scalars cannot fail; the fallback keeps the
+        // line present (and parseable as an object) rather than silently
+        // absent if that ever changes.
+        let json = serde_json::to_string(self).unwrap_or_else(|_| "{}".into());
+        sayln!("{DAILY_RESULT_PREFIX}{json}");
+    }
+}
+
+/// The pipeline-log record for one enrich rewrite. `reason` is a flat
+/// `key=value` list so `grep source_enriched 60-Logs/pipeline.jsonl` reads
+/// without a parser; `title` is last because it may contain spaces.
+fn source_enriched_event(
+    args: &DailyArgs,
+    kind: &str,
+    target_rel: &str,
+    url: &str,
+    rw: &ovp_enrich::BodyRewrite,
+    title: Option<&str>,
+) -> PipelineLogEvent {
+    PipelineLogEvent {
+        event_type: "source_enriched".into(),
+        target: target_rel.to_string(),
+        reason: format!(
+            "kind={kind} url={url} old_body_chars={} old_sha256={} new_sha256={} title={}",
+            rw.old_body_chars,
+            rw.old_sha256,
+            rw.new_sha256,
+            title.unwrap_or(""),
+        ),
+        date: args.date.clone(),
+        run_id: args.run_id.clone(),
+    }
 }
 
 /// Debounce window for the periodic mid-run projection refresh. A rebuild that

@@ -573,6 +573,9 @@ pub struct EnrichResult {
     pub fetch: FetchResult,
     /// Whether the file was successfully updated with the fetched content.
     pub updated: bool,
+    /// What the update replaced (`Some` iff `updated`), for the caller's
+    /// `source_enriched` pipeline event.
+    pub rewrite: Option<crate::BodyRewrite>,
 }
 
 /// Enrich needs-content sources by fetching their URLs and writing the content
@@ -588,45 +591,79 @@ pub fn enrich_needs_content(
     vault_root: &std::path::Path,
     sources: &[(String, String)], // (vault-relative path, url)
 ) -> Vec<EnrichResult> {
-    sources
-        .iter()
-        .filter_map(|(rel_path, url)| {
-            if url.is_empty() {
-                return None;
+    enrich_needs_content_with_progress(fetcher, vault_root, sources, &mut |_| Ok(())).0
+}
+
+/// As [`enrich_needs_content`], but `on_result` fires after EACH source, before
+/// the next fetch starts.
+///
+/// That ordering is the point, not a convenience: a rewrite destroys the old
+/// body, so if the caller only journals the batch's results at the end, a run
+/// killed mid-batch (a long live fetch, a laptop sleeping, a scheduler timeout)
+/// leaves notes already overwritten whose old-body evidence was never recorded
+/// anywhere. Per-result means the audit trail is never behind the writes.
+///
+/// A leaf crate must not print (see `ovp-cli`'s `progress` module on layering),
+/// so the callback is how the CLI journals and reports — the same shape as
+/// `run_daily_with_progress` and `build_index_with_progress`.
+///
+/// `on_result` is FALLIBLE and its error STOPS the batch: if journaling a
+/// rewrite fails (unwritable pipeline log, full disk), continuing would
+/// overwrite more notes whose old bodies could then never be reconstructed. A
+/// halted batch returns the results produced so far plus the error, so the
+/// caller can report real counts before failing the run.
+pub fn enrich_needs_content_with_progress(
+    fetcher: &mut dyn WebFetch,
+    vault_root: &std::path::Path,
+    sources: &[(String, String)], // (vault-relative path, url)
+    on_result: &mut dyn FnMut(&EnrichResult) -> Result<(), String>,
+) -> (Vec<EnrichResult>, Option<String>) {
+    let mut out = Vec::new();
+    let mut halt = None;
+    for (rel_path, url) in sources {
+        if url.is_empty() {
+            continue;
+        }
+        let abs_path = vault_root.join(rel_path);
+        let fetch = fetcher.fetch_readable(url);
+        let rewrite = match &fetch.content {
+            Some(content) if !content.trim().is_empty() => {
+                update_source_body(&abs_path, content, fetch.title.as_deref()).ok()
             }
-            let abs_path = vault_root.join(rel_path);
-            let fetch = fetcher.fetch_readable(url);
-            let updated = if let Some(content) = &fetch.content {
-                if !content.trim().is_empty() {
-                    update_source_body(&abs_path, content, fetch.title.as_deref()).is_ok()
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            Some(EnrichResult {
-                file_path: rel_path.clone(),
-                url: url.clone(),
-                fetch,
-                updated,
-            })
-        })
-        .collect()
+            _ => None,
+        };
+        let result = EnrichResult {
+            file_path: rel_path.clone(),
+            url: url.clone(),
+            fetch,
+            updated: rewrite.is_some(),
+            rewrite,
+        };
+        let journaled = on_result(&result);
+        out.push(result);
+        if let Err(e) = journaled {
+            halt = Some(e);
+            break;
+        }
+    }
+    (out, halt)
 }
 
 /// Update a markdown source file's body with fetched web content.
 /// Preserves existing frontmatter (between `---` fences). Replaces everything
-/// after the frontmatter with the fetched content.
+/// after the frontmatter with the fetched content. Returns what was replaced
+/// so the caller can leave a trace — the old body is gone once this returns.
 fn update_source_body(
     path: &std::path::Path,
     content: &str,
     title: Option<&str>,
-) -> Result<(), String> {
+) -> Result<crate::BodyRewrite, String> {
     let existing =
         std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
 
-    let (frontmatter, _old_body) = split_frontmatter(&existing);
+    let (frontmatter, old_body) = split_frontmatter(&existing);
+    let old_body_chars = old_body.trim().chars().count();
+    let old_sha256 = crate::hex_sha256(existing.as_bytes());
 
     let mut new_content = String::new();
     if let Some(fm) = frontmatter {
@@ -647,7 +684,12 @@ fn update_source_body(
     }
 
     std::fs::write(path, &new_content)
-        .map_err(|e| format!("write {}: {e}", path.display()))
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(crate::BodyRewrite {
+        old_body_chars,
+        old_sha256,
+        new_sha256: crate::hex_sha256(new_content.as_bytes()),
+    })
 }
 
 fn split_frontmatter(text: &str) -> (Option<&str>, &str) {
@@ -884,5 +926,88 @@ mod tests {
         let updated = std::fs::read_to_string(&source_file).unwrap();
         assert!(updated.contains("title: Example"));
         assert!(updated.contains("enough content to pass"));
+    }
+
+    #[test]
+    fn update_source_body_reports_what_it_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("note.md");
+        let original = "---\ntitle: Example\n---\n\nShort.\n";
+        std::fs::write(&path, original).unwrap();
+
+        let rw = update_source_body(&path, "Fetched body.", Some("Fetched")).unwrap();
+
+        // The trimmed old body, in chars — the intake gate's measure.
+        assert_eq!(rw.old_body_chars, "Short.".chars().count());
+        // Old hash is over the whole ORIGINAL file (frontmatter included), so
+        // it matches the intake ledger's needs-content record for this file.
+        assert_eq!(rw.old_sha256, crate::hex_sha256(original.as_bytes()));
+        // New hash is over what is now on disk.
+        let now = std::fs::read(&path).unwrap();
+        assert_eq!(rw.new_sha256, crate::hex_sha256(&now));
+        assert_ne!(rw.old_sha256, rw.new_sha256);
+        assert!(String::from_utf8(now).unwrap().contains("# Fetched\n\nFetched body."));
+    }
+
+    #[test]
+    fn enrich_result_carries_rewrite_only_when_updated() {
+        let vault = tempfile::tempdir().unwrap();
+        let fixture_dir = tempfile::tempdir().unwrap();
+        let dir = vault.path().join("50-Inbox/02-Pinboard");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hit.md"), "---\ntitle: hit\n---\nx\n").unwrap();
+        std::fs::write(dir.join("miss.md"), "---\ntitle: miss\n---\nx\n").unwrap();
+        let mut fetcher =
+            FixtureWebFetch::with_response(fixture_dir.path(), "https://e.x/hit", "long enough body");
+
+        let results = enrich_needs_content(
+            &mut fetcher,
+            vault.path(),
+            &[
+                ("50-Inbox/02-Pinboard/hit.md".into(), "https://e.x/hit".into()),
+                ("50-Inbox/02-Pinboard/miss.md".into(), "https://e.x/miss".into()),
+            ],
+        );
+        assert!(results[0].updated && results[0].rewrite.is_some());
+        assert_eq!(results[0].rewrite.as_ref().unwrap().old_body_chars, 1);
+        assert!(!results[1].updated && results[1].rewrite.is_none());
+    }
+
+    #[test]
+    fn a_journal_failure_halts_the_batch_before_the_next_rewrite() {
+        let vault = tempfile::tempdir().unwrap();
+        let fixture_dir = tempfile::tempdir().unwrap();
+        let dir = vault.path().join("50-Inbox/02-Pinboard");
+        std::fs::create_dir_all(&dir).unwrap();
+        let second = "---\ntitle: second\n---\nuntouched\n";
+        std::fs::write(dir.join("first.md"), "---\ntitle: first\n---\nthin\n").unwrap();
+        std::fs::write(dir.join("second.md"), second).unwrap();
+        let mut fetcher = FixtureWebFetch::new(fixture_dir.path());
+        for url in ["https://e.x/1", "https://e.x/2"] {
+            FixtureWebFetch::with_response(fixture_dir.path(), url, "a fetched body");
+        }
+
+        let mut seen = 0usize;
+        let (results, halt) = enrich_needs_content_with_progress(
+            &mut fetcher,
+            vault.path(),
+            &[
+                ("50-Inbox/02-Pinboard/first.md".into(), "https://e.x/1".into()),
+                ("50-Inbox/02-Pinboard/second.md".into(), "https://e.x/2".into()),
+            ],
+            &mut |_| {
+                seen += 1;
+                Err("pipeline log is unwritable".to_string())
+            },
+        );
+
+        // Stopped at the first source: the callback ran once, one result came
+        // back, and the error is reported to the caller.
+        assert_eq!(seen, 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(halt.as_deref(), Some("pipeline log is unwritable"));
+        // The decisive part: the second note was never overwritten, so no
+        // rewrite exists that the journal failed to record.
+        assert_eq!(std::fs::read_to_string(dir.join("second.md")).unwrap(), second);
     }
 }
