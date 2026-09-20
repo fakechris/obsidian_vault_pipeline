@@ -170,7 +170,7 @@ fn md_files(dir: &Path) -> Vec<PathBuf> {
 fn daily_result_line(stdout: &str) -> serde_json::Value {
     let lines: Vec<&str> = stdout.lines().filter(|l| l.starts_with("daily-result: ")).collect();
     assert_eq!(lines.len(), 1, "exactly one daily-result line.\nstdout:\n{stdout}");
-    let last = stdout.lines().filter(|l| !l.trim().is_empty()).next_back().unwrap_or("");
+    let last = stdout.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("");
     assert!(
         last.starts_with("daily-result: "),
         "daily-result must be the LAST stdout line, got: {last}\nstdout:\n{stdout}"

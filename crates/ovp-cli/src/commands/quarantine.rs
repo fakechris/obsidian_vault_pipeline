@@ -164,7 +164,7 @@ fn victims(mut files: Vec<(std::time::SystemTime, PathBuf)>, keep: usize) -> Vec
     if files.len() <= keep {
         return Vec::new();
     }
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by_key(|a| a.0);
     let drop_n = files.len() - keep;
     files.into_iter().take(drop_n).map(|(_, p)| p).collect()
 }
