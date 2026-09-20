@@ -2,6 +2,7 @@ pub mod agent_eval;
 pub mod apply_plan;
 pub mod ask;
 pub mod auto_run;
+pub mod claim;
 pub mod client;
 pub mod compare_run;
 pub mod copy_probe;

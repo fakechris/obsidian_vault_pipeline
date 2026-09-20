@@ -34,7 +34,8 @@ fn guidance_body() -> String {
        every sentence carries a `[claim:<key>]` citation. Call with no\n\
        arguments to list topics.\n\
      - `claim` — audit any `[claim:<key>]` citation: full evidence closure\n\
-       (claim → verbatim quote → line → source).\n\
+       (claim → verbatim quote → line → source). Same payload as\n\
+       `ovp2 claim <key> --json` on the CLI.\n\
      - `status` / `doctor` — pipeline freshness and health.\n\
      \n\
      Stable references — safe to store in notes and answers:\n\
