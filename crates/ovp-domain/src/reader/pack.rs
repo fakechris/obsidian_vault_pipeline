@@ -31,6 +31,38 @@ pub struct GroundingStatus {
     pub json_repairs: Vec<RepairNote>,
 }
 
+/// Where the source of a pack came from, recorded INSIDE the pack.
+///
+/// A pack used to name its source by title alone, so two sources with the same
+/// title were indistinguishable from inside it, and the only way back to the
+/// note was the `pack_dir` basename ↔ `packs[].source_sha256` join in
+/// `index.json`. Packs outlive index rebuilds and are the artifact people
+/// actually open, so they carry their own answer now. Every field is optional:
+/// `read-source --render-only` renders from committed artifacts and genuinely
+/// does not know some of them, and inventing a value would be worse than
+/// omitting it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SourceProvenance {
+    /// The source's title — the pack's human label, and until now the ONLY
+    /// thing it recorded about its origin.
+    pub title: String,
+    /// The source's URL, as the note's frontmatter gives it.
+    pub url: Option<String>,
+    /// sha256 (hex) of the source file's bytes — the pipeline's identity for
+    /// this content, and what `doctor` cross-checks against the index.
+    pub sha256: Option<String>,
+    /// Vault-relative path of the source note when the pack was written.
+    pub rel_path: Option<String>,
+}
+
+impl SourceProvenance {
+    /// Everything the caller honestly knows is the title — `--render-only`
+    /// rebuilds from committed artifacts and never opened the note.
+    pub fn titled(title: impl Into<String>) -> Self {
+        Self { title: title.into(), ..Self::default() }
+    }
+}
+
 /// Small summary the CLI prints after writing.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReaderPack {
@@ -53,7 +85,7 @@ pub struct ReaderPack {
 /// `run-status.json`.
 pub fn write_reader_pack(
     out_dir: &Path,
-    source_title: &str,
+    provenance: &SourceProvenance,
     accepted: &[Unit],
     cards: &[Card],
     card_report: &CardReport,
@@ -61,6 +93,7 @@ pub fn write_reader_pack(
     grounding: &GroundingStatus,
 ) -> io::Result<ReaderPack> {
     fs::create_dir_all(out_dir)?;
+    let source_title = provenance.title.as_str();
     let (trims, adds) = repair_log.map(|l| (l.trims, l.adds_proposed)).unwrap_or((0, 0));
     let json_repairs = &grounding.json_repairs;
 
@@ -84,6 +117,12 @@ pub fn write_reader_pack(
     write_json(out_dir.join("cards.json"), &cards)?;
     write_json(out_dir.join("run-status.json"), &json!({
         "source": source_title,
+        // Self-description: a title alone cannot tell two sources apart, and
+        // the pack should not need index.json to say where it came from.
+        // Absent when genuinely unknown (render-only) rather than guessed.
+        "source_url": provenance.url,
+        "source_sha256": provenance.sha256,
+        "source_rel_path": provenance.rel_path,
         "accepted_units": accepted.len(),
         "cards": cards.len(),
         "cards_dropped_uncited": card_report.cards_dropped_uncited,
@@ -299,13 +338,58 @@ mod tests {
             unit_type: Some("definition".into()), cited_unit_ids: vec![acc[0].id.clone()] }]
     }
 
+    /// The pack must be able to name its own source without index.json: a
+    /// title alone cannot tell two sources apart.
+    #[test]
+    fn run_status_records_the_source_url_sha_and_path() {
+        let acc = accepted_units();
+        let cs = cards(&acc);
+        let rep = CardReport { cards_returned: 1, cards_kept: 1, cards_dropped_uncited: 0, parse_error: None };
+        let dir = tempfile::tempdir().unwrap();
+        let prov = SourceProvenance {
+            title: "RAG done right".into(),
+            url: Some("https://e.x/rag".into()),
+            sha256: Some("a".repeat(64)),
+            rel_path: Some("50-Inbox/01-Raw/2026-07/rag.md".into()),
+        };
+        write_reader_pack(dir.path(), &prov, &acc, &cs, &rep, None, &GroundingStatus::default()).unwrap();
+
+        let status: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("run-status.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status["source"], "RAG done right");
+        assert_eq!(status["source_url"], "https://e.x/rag");
+        assert_eq!(status["source_sha256"], "a".repeat(64));
+        assert_eq!(status["source_rel_path"], "50-Inbox/01-Raw/2026-07/rag.md");
+    }
+
+    /// Render-only rebuilds from committed artifacts and never opened the
+    /// note, so the three keys are null rather than invented.
+    #[test]
+    fn run_status_leaves_unknown_provenance_null() {
+        let acc = accepted_units();
+        let cs = cards(&acc);
+        let rep = CardReport { cards_returned: 1, cards_kept: 1, cards_dropped_uncited: 0, parse_error: None };
+        let dir = tempfile::tempdir().unwrap();
+        write_reader_pack(dir.path(), &SourceProvenance::titled("T"), &acc, &cs, &rep, None, &GroundingStatus::default()).unwrap();
+
+        let status: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("run-status.json")).unwrap(),
+        )
+        .unwrap();
+        for k in ["source_url", "source_sha256", "source_rel_path"] {
+            assert!(status[k].is_null(), "{k} must be null, got {:?}", status[k]);
+        }
+    }
+
     #[test]
     fn writes_pack_with_collapsible_evidence_and_provenance() {
         let acc = accepted_units();
         let cs = cards(&acc);
         let rep = CardReport { cards_returned: 1, cards_kept: 1, cards_dropped_uncited: 0, parse_error: None };
         let dir = tempfile::tempdir().unwrap();
-        let s = write_reader_pack(dir.path(), "RAG done right", &acc, &cs, &rep, None, &GroundingStatus::default()).unwrap();
+        let s = write_reader_pack(dir.path(), &SourceProvenance::titled("RAG done right"), &acc, &cs, &rep, None, &GroundingStatus::default()).unwrap();
         assert_eq!(s.n_cards, 1);
         assert_eq!(s.accepted_without_quote, 0);
         for f in ["reader.html", "reader.md", "source-support.md", "cards.json", "run-status.json"] {
@@ -326,8 +410,8 @@ mod tests {
         let rep = CardReport::default();
         let d1 = tempfile::tempdir().unwrap();
         let d2 = tempfile::tempdir().unwrap();
-        write_reader_pack(d1.path(), "T", &acc, &cs, &rep, None, &GroundingStatus::default()).unwrap();
-        write_reader_pack(d2.path(), "T", &acc, &cs, &rep, None, &GroundingStatus::default()).unwrap();
+        write_reader_pack(d1.path(), &SourceProvenance::titled("T"), &acc, &cs, &rep, None, &GroundingStatus::default()).unwrap();
+        write_reader_pack(d2.path(), &SourceProvenance::titled("T"), &acc, &cs, &rep, None, &GroundingStatus::default()).unwrap();
         for f in ["reader.html", "reader.md", "cards.json"] {
             assert_eq!(std::fs::read_to_string(d1.path().join(f)).unwrap(),
                        std::fs::read_to_string(d2.path().join(f)).unwrap(), "{f} not deterministic");

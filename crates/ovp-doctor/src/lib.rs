@@ -10,7 +10,7 @@
 //! run the SAME checks: a health signal that only exists in one of them is one
 //! the others confidently report as fine.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use ovp_daily::{RunStatus, read_daily_ledger};
@@ -126,7 +126,155 @@ pub fn run_checks(vault_root: &Path, opts: &DoctorOptions) -> Vec<Finding> {
     check_legacy_artifacts(vault_root, &mut findings);
     check_inbox_orphans(vault_root, &layout, &mut findings);
     check_content_unavailable(vault_root, &layout, &mut findings);
+    check_pack_provenance(vault_root, &layout, &mut findings);
     findings
+}
+
+/// How many mismatching packs the finding names before eliding.
+const PACK_PROVENANCE_LIST_CAP: usize = 5;
+
+/// What a pack says about its own source, read straight from `run-status.json`.
+#[derive(serde::Deserialize)]
+struct PackProvenance {
+    #[serde(default)]
+    source_sha256: Option<String>,
+}
+
+/// Cross-check each pack's SELF-DECLARED source sha256 against the sha the
+/// index joined it to.
+///
+/// Until packs recorded their own provenance there was exactly one link from a
+/// claim back to its source — the `pack_dir` basename ↔ `packs[].source_sha256`
+/// join the index performs — and nothing could check it, because there was no
+/// second opinion to check it against. A pack now states its own answer, so
+/// the two can disagree, and a disagreement means the evidence chain points at
+/// the wrong note.
+///
+/// Packs written before this (no `source_sha256` key) are reported as legacy
+/// at Info: nothing is wrong with them, they simply cannot participate.
+fn check_pack_provenance(vault_root: &Path, layout: &VaultLayout, findings: &mut Vec<Finding>) {
+    let check = "pack-provenance".to_string();
+    let reader_dir = vault_root.join(layout.reader_root());
+    if !reader_dir.is_dir() {
+        return; // no packs yet — check_orphan_packs already says so
+    }
+    // A missing index is not this check's problem to report: `check_stale_index`
+    // owns that, and duplicating it would make one missing file two findings.
+    let Ok(model) = ovp_index::read_index(vault_root) else {
+        return;
+    };
+    let indexed: HashMap<&str, &str> = model
+        .packs
+        .iter()
+        .filter_map(|p| p.source_sha256.as_deref().map(|s| (p.pack_dir.as_str(), s)))
+        .collect();
+
+    let (mut checked, mut legacy) = (0usize, 0usize);
+    let mut mismatches: Vec<String> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&reader_dir) else {
+        return;
+    };
+    let mut dirs: Vec<_> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+
+    for dir in dirs {
+        let status_path = dir.join("run-status.json");
+        if !status_path.exists() {
+            continue; // not a pack
+        }
+        let pack_rel = format!(
+            "{}/{}",
+            layout.reader_root(),
+            dir.file_name().unwrap_or_default().to_string_lossy()
+        );
+        // An unreadable / unparseable run-status is `check_orphan_packs` and
+        // the index build's business; staying quiet here keeps one fault to
+        // one finding.
+        let Some(prov) = std::fs::read_to_string(&status_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<PackProvenance>(&raw).ok())
+        else {
+            continue;
+        };
+        let Some(declared) = prov.source_sha256.as_deref() else {
+            legacy += 1;
+            continue;
+        };
+        // A pack the index does not list is `check_orphan_packs`'s finding,
+        // not a provenance mismatch.
+        let Some(joined) = indexed.get(pack_rel.as_str()) else {
+            continue;
+        };
+        checked += 1;
+        if *joined != declared {
+            mismatches.push(format!(
+                "{pack_rel} (pack says {}, index joined {})",
+                short_sha(declared),
+                short_sha(joined)
+            ));
+        }
+    }
+
+    if !mismatches.is_empty() {
+        let total = mismatches.len();
+        mismatches.truncate(PACK_PROVENANCE_LIST_CAP);
+        if total > PACK_PROVENANCE_LIST_CAP {
+            mismatches.push(format!("… and {} more", total - PACK_PROVENANCE_LIST_CAP));
+        }
+        findings.push(
+            Finding {
+                check,
+                severity: Severity::Fail,
+                message: format!(
+                    "{total} reader pack(s) disagree with the index about their source: {}",
+                    mismatches.join("; ")
+                ),
+                hint: None,
+                fixed: false,
+            }
+            .attach_hint(
+                "the pack states the sha it was built from, so the index join is the suspect — \
+                 rebuild with `ovp2 index`; if it still disagrees the pack directory was renamed \
+                 or copied, and the claims citing it point at the wrong note",
+            ),
+        );
+        return;
+    }
+
+    if checked == 0 && legacy > 0 {
+        findings.push(Finding {
+            check,
+            severity: Severity::Info,
+            message: format!(
+                "{legacy} reader pack(s) predate self-describing provenance; nothing to cross-check"
+            ),
+            hint: None,
+            fixed: false,
+        });
+        return;
+    }
+
+    let suffix = if legacy > 0 {
+        format!(" ({legacy} legacy pack(s) skipped)")
+    } else {
+        String::new()
+    };
+    findings.push(Finding {
+        check,
+        severity: Severity::Pass,
+        message: format!("{checked} reader pack(s) agree with the index about their source{suffix}"),
+        hint: None,
+        fixed: false,
+    });
+}
+
+/// First 8 hex chars — enough to tell two sources apart in a message.
+fn short_sha(sha: &str) -> &str {
+    sha.get(..8).unwrap_or(sha)
 }
 
 /// How many closed captures the finding lists by path before eliding.
@@ -1727,6 +1875,131 @@ mod tests {
             .expect("backlog info");
         assert_eq!(info.severity, Severity::Info);
         assert!(info.message.contains("growing"));
+    }
+
+    /// Stage one pack directory: `run-status.json` with the keys the index
+    /// build requires to treat it as product, plus whatever the pack declares
+    /// about its own source (`None` = a pack written before INV-623).
+    fn stage_pack(vault: &Path, name: &str, declared_sha: Option<&str>) -> String {
+        let layout = VaultLayout::new();
+        let rel = format!("{}/{name}", layout.reader_root());
+        let dir = vault.join(&rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut status = serde_json::json!({ "source": name, "cards": 1 });
+        if let Some(sha) = declared_sha {
+            status["source_sha256"] = serde_json::Value::String(sha.to_string());
+        }
+        std::fs::write(
+            dir.join("run-status.json"),
+            serde_json::to_string_pretty(&status).unwrap(),
+        )
+        .unwrap();
+        rel
+    }
+
+    /// Write an index whose `packs` join each `pack_dir` to a source sha.
+    fn stage_index(vault: &Path, packs: &[(String, &str)]) {
+        let model = ovp_index::IndexModel {
+            schema: ovp_index::INDEX_SCHEMA.into(),
+            date: "2026-07-12".into(),
+            built_at: None,
+            run_id: None,
+            totals: ovp_index::Totals::default(),
+            sources: vec![],
+            packs: packs
+                .iter()
+                .map(|(dir, sha)| ovp_index::PackRow {
+                    pack_dir: dir.clone(),
+                    title: "t".into(),
+                    date: None,
+                    units: 1,
+                    cards: 1,
+                    json_repaired: false,
+                    card_titles: vec![],
+                    source_sha256: Some((*sha).to_string()),
+                })
+                .collect(),
+            claims: vec![],
+            runs: vec![],
+            ops: ovp_index::OpsState::default(),
+        };
+        ovp_index::write_index(vault, &model).unwrap();
+    }
+
+    fn provenance_findings(vault: &Path) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        check_pack_provenance(vault, &VaultLayout::new(), &mut findings);
+        findings
+    }
+
+    #[test]
+    fn pack_provenance_passes_when_pack_and_index_agree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sha = "a".repeat(64);
+        let rel = stage_pack(tmp.path(), "2026-07-12_A-aaaaaaaa", Some(&sha));
+        stage_index(tmp.path(), &[(rel, &sha)]);
+
+        let f = provenance_findings(tmp.path());
+        let got = f
+            .iter()
+            .find(|x| x.check == "pack-provenance")
+            .expect("finding");
+        assert_eq!(got.severity, Severity::Pass, "{}", got.message);
+        assert!(got.message.contains('1'), "{}", got.message);
+    }
+
+    /// The point of the second opinion: the pack says one source, the index
+    /// joined another, so every claim citing that pack points at the wrong
+    /// note. Nothing could detect this before the pack described itself.
+    #[test]
+    fn pack_provenance_fails_when_the_index_joined_a_different_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let declared = "a".repeat(64);
+        let joined = "b".repeat(64);
+        let rel = stage_pack(tmp.path(), "2026-07-12_A-aaaaaaaa", Some(&declared));
+        stage_index(tmp.path(), &[(rel.clone(), &joined)]);
+
+        let f = provenance_findings(tmp.path());
+        let got = f
+            .iter()
+            .find(|x| x.check == "pack-provenance")
+            .expect("finding");
+        assert_eq!(got.severity, Severity::Fail);
+        assert!(got.message.contains(&rel), "names the pack: {}", got.message);
+        assert!(
+            got.message.contains("aaaaaaaa"),
+            "shows both shas: {}",
+            got.message
+        );
+        assert!(
+            got.message.contains("bbbbbbbb"),
+            "shows both shas: {}",
+            got.message
+        );
+        assert!(got.hint.is_some(), "a mismatch needs a next action");
+    }
+
+    /// Packs written before this feature carry no `source_sha256`. They are
+    /// not broken — they simply cannot participate — so they must never read
+    /// as a failure.
+    #[test]
+    fn pack_provenance_reports_legacy_packs_as_info_not_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rel = stage_pack(tmp.path(), "2026-07-12_A-aaaaaaaa", None);
+        stage_index(tmp.path(), &[(rel, &"a".repeat(64))]);
+
+        let f = provenance_findings(tmp.path());
+        let got = f
+            .iter()
+            .find(|x| x.check == "pack-provenance")
+            .expect("finding");
+        assert_eq!(got.severity, Severity::Info, "{}", got.message);
+        assert!(got.message.contains("predate"), "{}", got.message);
+        assert!(
+            got.to_diagnostic()
+                .is_some_and(|d| d.severity == diagnostics::Severity::Info),
+            "legacy must not raise the exit code",
+        );
     }
 
     /// Write one `content_unavailable` intake record for `rel` and return the

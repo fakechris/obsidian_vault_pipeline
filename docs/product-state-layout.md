@@ -38,6 +38,21 @@ derived. Everything lives **in the vault** (never in the repo, never `.run/`).
   migrations needed; `ovp.index/v1` is regenerated, never edited).
 - **Identity**: a source = sha256 of its bytes; URL is a secondary dedup key
   at the capture boundary. Renames/moves never reprocess; edits re-queue.
+- **Self-description**: every artifact names its own source, so nothing has to
+  be reconstructed from a join that cannot be checked.
+  - `SourceRow.capture_path` — the intake `from`, i.e. where the content was
+    FIRST seen, before the sweep normalized it into `01-Raw`. Distinct from
+    `rel_path`, which is the current location; neither derives from the other.
+    First intake record wins (a re-ingest is not a new origin).
+  - `run-status.json` — `source_url`, `source_sha256`, `source_rel_path`
+    alongside the existing `source` title. Packs outlive index rebuilds and
+    are the artifact people open, so they carry the answer themselves. Absent
+    (null) when genuinely unknown, e.g. `read-source --render-only`, never
+    guessed.
+  - `ovp2 doctor`'s `pack-provenance` compares the pack's own `source_sha256`
+    with the sha `index.json` joined to that `pack_dir`. Before this there was
+    one link from a claim back to its source and no second opinion to check it
+    against.
 - **Audit ordering**: write → `pipeline.jsonl` event → ledger record. A
   recorded success therefore always has its write-log entry; a crash can at
   worst duplicate an event, never lose one.
@@ -45,4 +60,7 @@ derived. Everything lives **in the vault** (never in the repo, never `.run/`).
   collision suffixes (` -2`, ` -3`, …); duplicates are parked, not removed.
 - **Schemas**: `ovp.daily/v1`, `ovp.intake/v1`, `ovp.pinboard/v1`,
   `ovp.daily.run-report/v1`, `ovp.index/v1` — additive evolution only
-  (serde-default new fields), version bump on breaking change.
+  (serde-default new fields), version bump on breaking change. The SQLite
+  shadow (`read-model.sqlite`) is NOT covered by that rule: it is derived and
+  disposable, so any DDL change bumps its `schema_version` and the next
+  `ovp2 index` rebuilds it (currently v7).

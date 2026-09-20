@@ -94,6 +94,17 @@ pub struct SourceRow {
     /// Current best-known vault-relative location.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rel_path: Option<String>,
+    /// Where this content was FIRST seen: the intake record's `from`, i.e. the
+    /// capture path before the sweep normalized and moved it.
+    ///
+    /// [`Self::rel_path`] is the post-move location, so it answers "where is
+    /// it now" and loses "which capture mechanism and filename brought it in"
+    /// the moment the file is ingested. Both facts are wanted, and neither
+    /// derives from the other. First intake record wins, matching
+    /// [`Self::captured_on`]: a later re-ingest of the same bytes must not
+    /// rewrite the origin. Serde-additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_path: Option<String>,
     /// **Legacy B (pipeline):** last recorded pipeline activity day. Prefer
     /// [`Self::processed_on`] / [`Self::captured_on`]. Still written on every
     /// build so pre-explicit clients keep a sensible calendar signal.
@@ -160,6 +171,7 @@ impl SourceRow {
             annotation: None,
             meta: BTreeMap::new(),
             rel_path: None,
+            capture_path: None,
             date: None,
             content_date: None,
             captured_on: None,

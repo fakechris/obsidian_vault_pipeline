@@ -14,9 +14,10 @@ use std::path::PathBuf;
 
 use ovp_domain::reader::{
     run_reader_pipeline, write_reader_pack, Card, CardReport, GroundingStatus,
-    ReaderPipelineError,
+    ReaderPipelineError, SourceProvenance,
 };
 use ovp_domain::units::{read_source_from_path, Unit};
+use ovp_intake::vaultops::hex_sha256;
 
 use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
@@ -45,8 +46,26 @@ pub fn run(args: ReadSourceArgs) -> Result<(), CliError> {
     let mut critic = build_client(args.client_kind, &args.critic_cache_dir, None)?;
     let mut cards = build_client(args.client_kind, &args.cache_dir, None)?;
 
+    // Single-shot read: the input path IS the source, so its bytes give the
+    // same sha256 the daily loop would record. A read failure here is not
+    // worth failing the run over — the pack is still correct, it just omits
+    // the hash rather than carrying a wrong one.
+    //
+    // `rel_path` stays None on purpose. `read-source` takes an arbitrary path
+    // and has no `--vault-root`, so it cannot anchor one: writing the argument
+    // verbatim would put an absolute or cwd-relative path in a field whose
+    // contract is vault-relative, and a pack that moved would then resolve it
+    // against the wrong root. Absent beats wrong.
+    let provenance = SourceProvenance {
+        title: source.title.clone(),
+        url: Some(source.source_url.clone()).filter(|u| !u.is_empty()),
+        sha256: std::fs::read(&args.input_path).ok().map(|b| hex_sha256(&b)),
+        rel_path: None,
+    };
+
     let run = run_reader_pipeline(
         &source,
+        &provenance,
         base.as_mut(),
         critic.as_mut(),
         cards.as_mut(),
@@ -79,7 +98,9 @@ fn run_render_only(args: &ReadSourceArgs, title: &str) -> Result<(), CliError> {
         .map_err(|e| CliError::Io(format!("reading {}: {e}", cp.display())))?)
         .map_err(|e| CliError::Io(format!("parsing cards {}: {e}", cp.display())))?;
     let report = CardReport { cards_returned: cards.len(), cards_kept: cards.len(), cards_dropped_uncited: 0, parse_error: None };
-    let pack = write_reader_pack(&args.out_dir, title, &units, &cards, &report, None, &GroundingStatus::default())
+    // Render-only rebuilds a pack from committed artifacts; it never opened
+    // the source note, so it has no honest url/sha/rel_path to record.
+    let pack = write_reader_pack(&args.out_dir, &SourceProvenance::titled(title), &units, &cards, &report, None, &GroundingStatus::default())
         .map_err(|e| CliError::Io(format!("writing reader pack: {e}")))?;
     print_summary(title, &pack);
     Ok(())

@@ -280,10 +280,17 @@ fn build_sources(
         let prior_captured = rows
             .get(&rec.sha256)
             .and_then(|r| r.captured_on.clone());
+        // Same first-wins rule as `captured_on`, for the same reason: the
+        // capture path is where this content ENTERED, and a later record for
+        // the same hash is a re-ingest, not a new origin.
+        let prior_capture_path = rows
+            .get(&rec.sha256)
+            .and_then(|r| r.capture_path.clone());
         let mut row = SourceRow::blank(rec.sha256.clone(), status);
         row.title = rec.title.clone();
         row.url = rec.url.clone();
         row.rel_path = rec.to.clone().or_else(|| Some(rec.from.clone()));
+        row.capture_path = prior_capture_path.or_else(|| Some(rec.from.clone()));
         row.captured_on = prior_captured.or_else(|| Some(rec.date.clone()));
         row.last_run_id = Some(rec.run_id.clone());
         // Heuristic A from capture path (pinboard/clip names often start with the day).
@@ -1509,6 +1516,92 @@ mod tests {
         assert_eq!(ops.stuck_sources.len(), 1);
         assert_eq!(ops.stuck_sources[0].sha256, "cccc");
         assert_eq!(ops.stuck_sources[0].days_stuck, Some(7));
+    }
+
+    /// Write `rel` with `body` and return the sha the ledger must record, so
+    /// the row survives the ghost-cleanup pass (a non-processed row is kept
+    /// only while its recorded file still holds the recorded bytes).
+    fn stage_note(vault: &Path, rel: &str, body: &str) -> String {
+        let p = vault.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, body).unwrap();
+        hex_sha256(body.as_bytes())
+    }
+
+    /// `capture_path` must survive the lifecycle move that `rel_path` follows:
+    /// the whole point is that the origin is otherwise unrecoverable once the
+    /// sweep normalizes a capture into `01-Raw`.
+    #[test]
+    fn capture_path_keeps_the_pre_move_origin_and_rel_path_the_current_location() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join(".ovp")).unwrap();
+        // Moved: `from` is the capture dir, `to` is where it lives now.
+        let sha_a = stage_note(vault, "50-Inbox/01-Raw/2026-07/a.md", "# A\n");
+        // Left in place: `from` IS the current location, so both agree.
+        let sha_b = stage_note(vault, "50-Inbox/02-Pinboard/b.md", "# B\n");
+        std::fs::write(
+            vault.join(VaultLayout::new().intake_ledger()),
+            format!(
+                concat!(
+                    r#"{{"schema":"ovp.intake/v1","run_id":"r1","date":"2026-07-09","action":"ingested","from":"50-Inbox/00-Capture/lumenbox/msg-7.md","to":"50-Inbox/01-Raw/2026-07/a.md","sha256":"{a}","title":"A"}}"#,
+                    "\n",
+                    r#"{{"schema":"ovp.intake/v1","run_id":"r1","date":"2026-07-09","action":"needs_content","from":"50-Inbox/02-Pinboard/b.md","sha256":"{b}","title":"B"}}"#,
+                    "\n",
+                ),
+                a = sha_a,
+                b = sha_b,
+            ),
+        )
+        .unwrap();
+
+        let model = build_index(vault, "2026-07-12", None).unwrap();
+        let a = model.sources.iter().find(|s| s.sha256 == sha_a).unwrap();
+        assert_eq!(
+            a.capture_path.as_deref(),
+            Some("50-Inbox/00-Capture/lumenbox/msg-7.md")
+        );
+        assert_eq!(a.rel_path.as_deref(), Some("50-Inbox/01-Raw/2026-07/a.md"));
+
+        let b = model.sources.iter().find(|s| s.sha256 == sha_b).unwrap();
+        assert_eq!(b.capture_path.as_deref(), Some("50-Inbox/02-Pinboard/b.md"));
+        assert_eq!(b.rel_path.as_deref(), Some("50-Inbox/02-Pinboard/b.md"));
+    }
+
+    /// A re-ingest of the same bytes is not a new origin, matching how
+    /// `captured_on` refuses to move.
+    #[test]
+    fn capture_path_is_first_record_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join(".ovp")).unwrap();
+        let sha = stage_note(vault, "50-Inbox/01-Raw/2026-07/a.md", "# A\n");
+        std::fs::write(
+            vault.join(VaultLayout::new().intake_ledger()),
+            format!(
+                concat!(
+                    r#"{{"schema":"ovp.intake/v1","run_id":"r1","date":"2026-07-09","action":"ingested","from":"Clippings/first.md","to":"50-Inbox/01-Raw/2026-07/a.md","sha256":"{s}","title":"A"}}"#,
+                    "\n",
+                    r#"{{"schema":"ovp.intake/v1","run_id":"r2","date":"2026-07-10","action":"ingested","from":"50-Inbox/00-Capture/second.md","to":"50-Inbox/01-Raw/2026-07/a.md","sha256":"{s}","title":"A"}}"#,
+                    "\n",
+                ),
+                s = sha,
+            ),
+        )
+        .unwrap();
+
+        let a = build_index(vault, "2026-07-12", None)
+            .unwrap()
+            .sources
+            .into_iter()
+            .find(|s| s.sha256 == sha)
+            .unwrap();
+        assert_eq!(a.capture_path.as_deref(), Some("Clippings/first.md"));
+        assert_eq!(
+            a.captured_on.as_deref(),
+            Some("2026-07-09"),
+            "same first-wins rule"
+        );
     }
 
     #[test]

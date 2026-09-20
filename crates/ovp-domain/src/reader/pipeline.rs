@@ -16,7 +16,7 @@ use crate::source_doc::SourceDoc;
 use crate::units::{critic_model_request, run_unit_extraction_repaired, unit_model_request, Unit};
 
 use super::cards::{card_model_request, run_card_synthesis};
-use super::pack::{write_reader_pack, GroundingStatus, ReaderPack};
+use super::pack::{write_reader_pack, GroundingStatus, ReaderPack, SourceProvenance};
 
 /// Why a reader-pipeline run could not produce a pack.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +59,7 @@ pub struct ReaderPipelineRun {
 /// the same cassette root — requests are key-disambiguated).
 pub fn run_reader_pipeline(
     source: &SourceDoc,
+    provenance: &SourceProvenance,
     base_client: &mut dyn ModelClient,
     critic_client: &mut dyn ModelClient,
     card_client: &mut dyn ModelClient,
@@ -107,9 +108,15 @@ pub fn run_reader_pipeline(
         json_repairs: json_repairs.clone(),
     };
 
+    // The SourceDoc is the authority on the title, so the pipeline fills it
+    // rather than trusting each caller to copy it in correctly — a pack whose
+    // title disagreed with its own source would be exactly the confusion the
+    // rest of this struct exists to remove.
+    let provenance = SourceProvenance { title: source.title.clone(), ..provenance.clone() };
+
     let pack = write_reader_pack(
         out_dir,
-        &source.title,
+        &provenance,
         &accepted,
         &synth.cards,
         &synth.report,
@@ -228,6 +235,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let run = run_reader_pipeline(
             &src,
+            &SourceProvenance::default(),
             &mut Canned(units_reply()),
             &mut Canned("{}".into()),
             &mut Canned(cards),
@@ -247,6 +255,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = run_reader_pipeline(
             &source(),
+            &SourceProvenance::default(),
             &mut Canned("not json".into()),
             &mut Canned("{}".into()),
             &mut Canned("UNUSED".into()),
@@ -310,13 +319,13 @@ mod tests {
 
         // Day 1: bad reply recorded → truth-layer failure (+ invalidation).
         let dir1 = tempfile::tempdir().unwrap();
-        let err = run_reader_pipeline(&src, &mut base, &mut critic, &mut cards_client, dir1.path())
+        let err = run_reader_pipeline(&src, &SourceProvenance::default(), &mut base, &mut critic, &mut cards_client, dir1.path())
             .expect_err("day 1 fails on unusable units JSON");
         assert!(matches!(err, ReaderPipelineError::TruthLayer(_)), "got {err:?}");
 
         // Day 2 (same cassette dir): the retry re-asks and succeeds.
         let dir2 = tempfile::tempdir().unwrap();
-        let run = run_reader_pipeline(&src, &mut base, &mut critic, &mut cards_client, dir2.path())
+        let run = run_reader_pipeline(&src, &SourceProvenance::default(), &mut base, &mut critic, &mut cards_client, dir2.path())
             .expect("day 2 retry re-asks the model instead of replaying the pin");
         assert_eq!(run.pack.n_cards, 1);
         assert!(run.card_failure.is_none());
@@ -366,12 +375,12 @@ mod tests {
         let mut critic = Canned("{}".into());
 
         let dir1 = tempfile::tempdir().unwrap();
-        let run1 = run_reader_pipeline(&src, &mut base, &mut critic, &mut cards_client, dir1.path())
+        let run1 = run_reader_pipeline(&src, &SourceProvenance::default(), &mut base, &mut critic, &mut cards_client, dir1.path())
             .expect("pipeline runs");
         assert!(run1.card_failure.is_some(), "day 1: bad card reply is a card failure");
 
         let dir2 = tempfile::tempdir().unwrap();
-        let run2 = run_reader_pipeline(&src, &mut base, &mut critic, &mut cards_client, dir2.path())
+        let run2 = run_reader_pipeline(&src, &SourceProvenance::default(), &mut base, &mut critic, &mut cards_client, dir2.path())
             .expect("pipeline runs");
         assert!(run2.card_failure.is_none(), "day 2: retry re-asked and got usable cards");
         assert_eq!(run2.pack.n_cards, 1);
@@ -383,6 +392,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let run = run_reader_pipeline(
             &src,
+            &SourceProvenance::default(),
             &mut Canned(units_reply()),
             &mut Canned("{}".into()),
             // Cites an unknown unit → the card is dropped → 0 cards survive.

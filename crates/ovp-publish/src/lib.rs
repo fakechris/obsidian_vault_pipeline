@@ -559,6 +559,7 @@ mod tests {
             origin: None,
             annotation: None,
             meta: Default::default(),
+            capture_path: None,
             rel_path: Some("50-Inbox/01-Raw/x.md".into()),
             date: Some("2026-07-01".into()),
             content_date: None,
