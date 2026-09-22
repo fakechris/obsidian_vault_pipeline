@@ -205,6 +205,37 @@ fn duplicate_keys_nonfinite_numbers_and_private_echoes_are_rejected() {
 
 #[test]
 fn request_validation_and_capability_negotiation_precede_calls() {
+    for blank in ["", "  ", "\n\t"] {
+        for blank_yes in [true, false] {
+            let mut q = request();
+            q.questions
+                .get_mut(&QuestionId::from("supported"))
+                .unwrap()
+                .kind = QuestionKind::Boolean {
+                yes: if blank_yes {
+                    blank.into()
+                } else {
+                    "supported".into()
+                },
+                no: if blank_yes {
+                    "unsupported".into()
+                } else {
+                    blank.into()
+                },
+            };
+            assert!(typesafe::encode_request(&profile(), &q).is_err());
+        }
+        let mut q = request();
+        if let QuestionKind::Choice { options } = &mut q
+            .questions
+            .get_mut(&QuestionId::from("relation"))
+            .unwrap()
+            .kind
+        {
+            options.insert("supports".into(), blank.into());
+        }
+        assert!(typesafe::encode_request(&profile(), &q).is_err());
+    }
     let mut p = profile();
     p.model = "jev-latest".into();
     assert!(typesafe::encode_request(&p, &request()).is_err());

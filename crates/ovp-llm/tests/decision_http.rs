@@ -63,6 +63,10 @@ fn server(
                     Err(e) => panic!("accept failed: {e}"),
                 }
             };
+            // Accepted sockets can inherit the listener's nonblocking mode on
+            // macOS. Only accept is polled; request reads must block with the
+            // bounded timeout below.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
