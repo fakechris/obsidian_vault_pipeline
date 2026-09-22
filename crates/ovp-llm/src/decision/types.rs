@@ -162,8 +162,18 @@ impl DecisionRequest {
                 QuestionKind::Score { .. } if !caps.score => {
                     return Err(DecisionError::Unsupported("score"));
                 }
+                QuestionKind::Boolean { yes, no } => {
+                    if yes.trim().is_empty() || no.trim().is_empty() {
+                        return Err(DecisionError::InvalidRequest(
+                            "boolean needs described outcomes",
+                        ));
+                    }
+                }
                 QuestionKind::Choice { options } => {
-                    if options.len() < 2 || options.keys().any(|k| k.0.trim().is_empty()) {
+                    if options.len() < 2
+                        || options.keys().any(|k| k.0.trim().is_empty())
+                        || options.values().any(|v| v.trim().is_empty())
+                    {
                         return Err(DecisionError::InvalidRequest(
                             "choice needs distinct nonempty options",
                         ));
@@ -182,7 +192,6 @@ impl DecisionRequest {
                         ));
                     }
                 }
-                _ => {}
             }
         }
         Ok(())
