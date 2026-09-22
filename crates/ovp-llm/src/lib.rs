@@ -9,6 +9,7 @@
 pub mod anthropic;
 pub mod cache;
 pub mod client;
+pub mod decision;
 pub mod fixture;
 pub mod key;
 pub mod reply;

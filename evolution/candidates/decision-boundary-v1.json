@@ -1,0 +1,18 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "decision-boundary-v1",
+  "base_version": "absent/v0",
+  "target_version": "decision-boundary/v1",
+  "surface": "runtime",
+  "component": "runtime.decision_client",
+  "hypothesis": "An additive, unused-by-default DecisionClient boundary can validate all three typed judgments and replay them without network access, while preserving existing production outputs. It introduces no model selection or prompt policy change. Product-quality evaluation remains a separate INV-644/645/646 experiment.",
+  "predicted_delta": {
+    "supported_typed_question_kinds": {"baseline": 0, "target": 3},
+    "production_decision_calls": {"baseline": 0, "target": 0},
+    "invalid_reply_false_accepts": {"target": 0}
+  },
+  "guardrails": {"accepted_without_quote": 0},
+  "eval_plan": {"replay_set": "crates/ovp-llm/tests/decision_contract.rs", "soak": false},
+  "rollback": "Revert the INV-643 implementation commit. No production caller, prompt namespace, vault state or admission policy is changed. The current retrieval-only evolve ab runner cannot evaluate this library contract; do not claim its smoke results as decision-model quality evidence.",
+  "ablation_required": false
+}
