@@ -1,0 +1,27 @@
+{
+  "profiles": {
+    "typesafe-primary": {
+      "id": "typesafe-primary",
+      "provider": "typesafe",
+      "endpoint": "https://api.typesafe.ai/v1/systemone",
+      "model": "jev-1.13.0",
+      "credential_ref": "TYPESAFE_API_KEY"
+    }
+  },
+  "capabilities": {
+    "evidence_relevance": {
+      "mode": "off",
+      "execution": "replay",
+      "profile": "typesafe-primary",
+      "question_namespace": "evidence_relevance/v1",
+      "experiment": {"id": "relevance-trial-v1", "seed": "ovp-v1", "candidate_basis_points": 1000}
+    },
+    "strength_check": {
+      "mode": "off",
+      "execution": "replay",
+      "profile": "typesafe-primary",
+      "question_namespace": "strength_check/v1",
+      "experiment": null
+    }
+  }
+}

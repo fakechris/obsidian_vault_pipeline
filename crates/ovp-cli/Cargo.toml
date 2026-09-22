@@ -14,6 +14,7 @@ name = "ovp2"
 path = "src/main.rs"
 
 [features]
+decision-live = ["ovp-evolve/decision-live"]
 default = []
 # Forwards to ovp-llm/anthropic so `ovp2 interpret-article/run-cycle --client
 # live` can make real *LLM* API calls. The LLM transport stays feature-gated and

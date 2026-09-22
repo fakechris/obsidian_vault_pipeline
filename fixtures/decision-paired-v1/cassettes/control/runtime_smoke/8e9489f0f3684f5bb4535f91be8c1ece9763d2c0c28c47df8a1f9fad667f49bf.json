@@ -1,0 +1,49 @@
+{
+  "schema": "ovp.decision.cassette/v1",
+  "key": "8e9489f0f3684f5bb4535f91be8c1ece9763d2c0c28c47df8a1f9fad667f49bf",
+  "reply": {
+    "answers": {
+      "supported": {
+        "type": "boolean",
+        "value": true,
+        "probability_true": null
+      },
+      "relation": {
+        "type": "choice",
+        "selected": "supports",
+        "probabilities": null,
+        "confidence": null
+      },
+      "quality": {
+        "type": "score",
+        "position": 1,
+        "probabilities": null,
+        "confidence": null
+      }
+    },
+    "receipt": {
+      "provider": {
+        "profile_id": "control",
+        "provider": "fixture",
+        "endpoint": "fixture://synthetic-decisions",
+        "model": "control-v1"
+      },
+      "request_key": "8e9489f0f3684f5bb4535f91be8c1ece9763d2c0c28c47df8a1f9fad667f49bf",
+      "question_namespace": "runtime-smoke/v1",
+      "evidence": [
+        {
+          "source_id": "source-0",
+          "revision": "7c87ae1bc04f231082177db737ababf10bfdf889acc04fd81194af6f539dda6f",
+          "start_line": 1,
+          "end_line": 2
+        }
+      ],
+      "calibration": "unknown",
+      "confidence_semantics": null,
+      "evaluation_usage": null,
+      "evaluation_ms": 0,
+      "origin": "fixture",
+      "network_attempts": 0
+    }
+  }
+}

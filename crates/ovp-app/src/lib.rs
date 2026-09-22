@@ -27,3 +27,4 @@ pub use node_kind::{kinds, NodeCategory, NodeKind};
 pub use registry::NodeRegistry;
 pub use spec::{DomainPipelineSpec, NodeConfig};
 pub use wiring::AppWiring;
+pub mod decisions;

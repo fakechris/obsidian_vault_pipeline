@@ -2893,6 +2893,8 @@ name = "ovp-evolve"
 version = "2.0.1"
 dependencies = [
  "chrono",
+ "ovp-app",
+ "ovp-llm",
  "serde",
  "serde_json",
  "sha2",

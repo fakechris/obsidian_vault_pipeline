@@ -115,3 +115,8 @@ Protocol sources checked 2026-09-22:
 [official API](https://docs.typesafe.ai/api),
 [models](https://docs.typesafe.ai/models),
 [confidence](https://docs.typesafe.ai/confidence).
+
+The follow-up INV-644 implementation is documented in
+[decision-experiments.md](decision-experiments.md): reusable capability routing,
+strict operational settings, stable assignment and an executable typed-decision
+paired runner. Production retrieval/strength consumers remain INV-645/646.
