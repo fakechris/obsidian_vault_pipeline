@@ -1,6 +1,13 @@
 {
   "components": [
     {
+      "id": "runtime.decision_client",
+      "surface": "runtime",
+      "current_version": "v0",
+      "file": "crates/ovp-llm/src/decision/mod.rs",
+      "quality_buckets": ["operational_reliability", "cost_efficiency"]
+    },
+    {
       "id": "runtime.evolve_ab",
       "surface": "runtime",
       "current_version": "v1",

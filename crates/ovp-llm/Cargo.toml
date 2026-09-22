@@ -15,6 +15,7 @@ default = []
 # request/response *mapping* is pure and always compiled (and tested in the
 # default offline gauntlet); only the HTTP call needs this feature.
 anthropic = ["dep:reqwest"]
+decision-live = ["dep:reqwest"]
 
 [dependencies]
 serde = { workspace = true }
