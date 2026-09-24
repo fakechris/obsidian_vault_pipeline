@@ -9,7 +9,8 @@ the same PR and re-run the check.
 
 ```bash
 brew install openjdk      # keg-only; the script finds it without touching PATH
-scripts/check-tla.sh      # downloads tla2tools v1.7.4 (SHA-256 pinned) on first run
+scripts/check-tla.sh      # downloads tla2tools v1.7.4 (SHA-256 pinned) on first run;
+                          # TLC logs and state dirs go to .run/tla/<timestamp>/
 ```
 
 `models.txt` lists every `(module, config, expectation)`. `ok` means TLC must finish

@@ -6,7 +6,12 @@ set -euo pipefail
 
 TLA_VERSION=v1.7.4
 TLA_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
-JAR=${TLA2TOOLS_JAR:-${TMPDIR:-/tmp}/tla2tools-$TLA_VERSION.jar}
+# Run artifacts (jar cache, TLC state dirs, per-config logs) live under the
+# gitignored .run/ so they survive reboots and stay auditable (AGENTS.md).
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+RUN_DIR=$ROOT/.run/tla/$(date +%Y%m%d-%H%M%S)
+mkdir -p "$RUN_DIR"
+JAR=${TLA2TOOLS_JAR:-$ROOT/.run/tla/tla2tools-$TLA_VERSION.jar}
 # macOS ships a /usr/bin/java stub that fails without a JDK; prefer Homebrew's.
 if [[ -z ${JAVA:-} ]]; then
   JAVA=/opt/homebrew/opt/openjdk/bin/java
@@ -21,12 +26,13 @@ if [[ ! -f $JAR ]]; then
 fi
 [[ $(sha256 "$JAR") == "$TLA_SHA256" ]] || { echo "tla2tools.jar hash mismatch: $JAR" >&2; exit 1; }
 
-cd "$(dirname "$0")/../docs/tla"
+cd "$ROOT/docs/tla"
 fail=0
 while read -r module cfg expect; do
   [[ -z ${module:-} || $module == \#* ]] && continue
   out=$("$JAVA" -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers auto \
-          -metadir "$(mktemp -d)" -config "$cfg" "$module.tla" 2>&1 </dev/null || true)
+          -metadir "$RUN_DIR/${cfg%.cfg}.states" -config "$cfg" "$module.tla" 2>&1 </dev/null || true)
+  printf '%s\n' "$out" > "$RUN_DIR/${cfg%.cfg}.log"
   if [[ $expect == ok ]]; then
     grep -q "Model checking completed. No error has been found." <<<"$out" && r=pass || r=FAIL
   else
@@ -35,4 +41,5 @@ while read -r module cfg expect; do
   printf '%-4s %-12s %-28s expect=%s\n' "$r" "$module" "$cfg" "$expect"
   if [[ $r == FAIL ]]; then fail=1; grep -E "^Error|violated|No error" <<<"$out" | head -5 >&2; fi
 done < models.txt
+echo "logs: $RUN_DIR"
 exit $fail
