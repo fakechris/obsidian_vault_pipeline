@@ -346,6 +346,14 @@ impl SessionStore {
     /// Serialize this session: take the OS lock on `<session_id>.lock`.
     /// A leftover file from a crashed or older run is simply locked again.
     pub fn lock(&self) -> Result<SessionLock, StoreError> {
+        // The PID stamp truncates the file, so never follow a symlink planted
+        // at the lock path: that would truncate the link's target.
+        if fs::symlink_metadata(&self.lock_path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(StoreError::Io(format!(
+                "lock {}: is a symlink, refusing to use it",
+                self.lock_path.display()
+            )));
+        }
         let mut file = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -353,6 +361,12 @@ impl SessionStore {
             .truncate(false)
             .open(&self.lock_path)
             .map_err(|e| StoreError::Io(format!("lock: {e}")))?;
+        if !file.metadata().is_ok_and(|m| m.is_file()) {
+            return Err(StoreError::Io(format!(
+                "lock {}: not a regular file",
+                self.lock_path.display()
+            )));
+        }
         let key = fs::canonicalize(&self.lock_path).unwrap_or_else(|_| self.lock_path.clone());
         let mut held = held_in_process();
         if held.contains(&key) {
@@ -671,6 +685,18 @@ mod lock_tests {
         child.wait().unwrap();
         assert!(dir.path().join("s1.lock").exists());
         drop(st.lock().expect("lock is free once the holder is dead"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_lock_path_is_refused_and_target_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("precious.md");
+        fs::write(&target, "keep me").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("s1.lock")).unwrap();
+        let st = SessionStore::open(dir.path(), "s1").unwrap();
+        assert!(matches!(st.lock(), Err(StoreError::Io(_))));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep me");
     }
 
     #[test]
