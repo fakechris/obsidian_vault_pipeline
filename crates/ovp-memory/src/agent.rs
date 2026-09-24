@@ -2078,20 +2078,17 @@ mod tests {
         assert!(tool_result_hits(r#"{"ok":true}"#).is_empty());
     }
 
-    // An empty/unstamped lock file is conservatively BUSY — a racing creator
-    // may sit between create_new and the pid write; stealing would let two
-    // turns run concurrently.
+    // A lock FILE left behind (by a crash, or by the older PID-file scheme:
+    // empty, a dead pid, anything) is not a held lock. Only the OS lock
+    // counts, and nobody holds it.
     #[test]
-    fn unstamped_lock_is_busy_not_stale() {
+    fn leftover_lock_file_is_not_busy() {
         let dir = tempfile::tempdir().unwrap();
         let st = store(dir.path());
-        std::fs::write(dir.path().join("s1.lock"), "").unwrap();
-        match st.lock() {
-            Err(crate::agent_transcript::StoreError::SessionBusy { holder_pid }) => {
-                assert_eq!(holder_pid, 0)
-            }
-            Err(other) => panic!("expected SessionBusy, got {other:?}"),
-            Ok(_) => panic!("an unstamped lock must not be stolen"),
+        for leftover in ["", "999999999", "not-a-pid"] {
+            std::fs::write(dir.path().join("s1.lock"), leftover).unwrap();
+            drop(st.lock().expect("leftover lock file must not block"));
+            assert!(dir.path().join("s1.lock").exists(), "lock file is never deleted");
         }
     }
 

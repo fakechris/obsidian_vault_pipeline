@@ -12,16 +12,21 @@
 //! - **Idempotency** (`idempotency`): `turn_started` records the caller's
 //!   `idempotency_key`; a completed turn with the same key replays its
 //!   outcome instead of running again.
-//! - **Session serialization** (`session_serialization`): a pid lock file
-//!   serializes same-session turns; stale (dead-pid) locks are reclaimed.
+//! - **Session serialization** (`session_serialization`): an OS advisory lock
+//!   (`File::try_lock`) on `<session_id>.lock` serializes same-session turns.
+//!   The kernel releases it when the holder dies, so there is no stale-lock
+//!   reclaim step. The PID-file reclaim it replaced could let two turns hold
+//!   one session (`docs/tla/SessionLock.tla`).
 //! - **Projection** (`transcript_authority`): the model context is REBUILT
 //!   from stored `message` events under a hard char cap that trims whole
 //!   turns oldest-first — a tool_use/tool_result pair can never be split
 //!   because a turn is the trim unit.
 
+use std::collections::BTreeSet;
 use std::fs;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use ovp_llm::ModelMessage;
 use serde::{Deserialize, Serialize};
@@ -154,23 +159,42 @@ pub struct CompletedTurn {
     pub output_tokens_total: u32,
 }
 
-/// Session lock guard — pid file, removed on drop. Same primitive the daily
-/// heartbeat / RunLock use to reclaim stale locks (probe with `kill -0`;
-/// duplicated here because ovp-memory must not depend on ovp-daily).
+/// Session lock guard: an OS advisory lock held through an open handle on
+/// `<session_id>.lock`. Dropping it closes the handle, which releases the lock.
+/// The file is NEVER deleted. Deleting by path is what let a stale-lock
+/// reclaim remove a live holder's fresh lock (`docs/tla/SessionLock.tla`,
+/// `SessionLock.cfg`), and every contender must lock the same inode.
 pub struct SessionLock {
-    path: PathBuf,
+    key: PathBuf,
+    file: Option<fs::File>,
 }
 
 impl Drop for SessionLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        // Release the OS lock BEFORE leaving the in-process set, so a thread
+        // that wins the set never finds the OS lock still held by us.
+        drop(self.file.take());
+        held_in_process().remove(&self.key);
     }
 }
 
-/// Conservative: if the OS can't confirm the PID is gone, assume alive so a
-/// real concurrent turn is never falsely stolen.
-fn pid_alive(pid: u32) -> bool {
-    ovp_intake::probe_pid(pid) != Some(false)
+/// Session locks this process holds. flock-style locks already conflict
+/// between two handles in one process, but where the OS emulates them with
+/// per-process fcntl locks (e.g. some network filesystems) they would not.
+/// The desktop's in-process server threads must still serialize.
+fn held_in_process() -> std::sync::MutexGuard<'static, BTreeSet<PathBuf>> {
+    static HELD: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+    HELD.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Best-effort holder PID for the busy message. The holder writes it after
+/// acquiring the lock. Returns 0 when unknown: not written yet, or unreadable
+/// (on Windows the holder's byte-range lock blocks other readers).
+fn read_holder_pid(path: &Path) -> u32 {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0)
 }
 
 /// Errors the store distinguishes because callers behave differently on them.
@@ -319,74 +343,39 @@ impl SessionStore {
             .map_err(|e| StoreError::Io(format!("publish {}: {e}", self.path.display())))
     }
 
-    /// Serialize this session: create the pid lock, reclaiming a stale one.
+    /// Serialize this session: take the OS lock on `<session_id>.lock`.
+    /// A leftover file from a crashed or older run is simply locked again.
     pub fn lock(&self) -> Result<SessionLock, StoreError> {
-        for attempt in 0..2 {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&self.lock_path)
-            {
-                Ok(mut f) => {
-                    // The pid stamp must land: an unstamped lock reads as
-                    // invalid to other contenders (conservatively busy), and
-                    // holding one would wedge the session; on failure, release
-                    // and surface the IO error.
-                    if let Err(e) = write!(f, "{}", std::process::id()).and_then(|_| f.sync_data())
-                    {
-                        drop(f);
-                        let _ = fs::remove_file(&self.lock_path);
-                        return Err(StoreError::Io(format!("stamp lock: {e}")));
-                    }
-                    return Ok(SessionLock { path: self.lock_path.clone() });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    // Missing/empty/invalid owner data is CONSERVATIVELY BUSY:
-                    // a racing creator may sit between create_new and the pid
-                    // write, and stealing its lock would let two turns run
-                    // concurrently. (The crashed-unstamped case is a
-                    // microsecond window; doctor can clean a wedged lock.)
-                    let Some(holder) = fs::read_to_string(&self.lock_path)
-                        .ok()
-                        .and_then(|s| s.trim().parse::<u32>().ok())
-                        .filter(|pid| *pid != 0)
-                    else {
-                        return Err(StoreError::SessionBusy { holder_pid: 0 });
-                    };
-                    // A live holder is BUSY — including our own pid: two
-                    // stores in one process (desktop in-process server
-                    // threads) must serialize too, and a same-pid leak is
-                    // practically impossible (panic unwinds run Drop; an
-                    // abort gets a fresh pid).
-                    if pid_alive(holder) {
-                        return Err(StoreError::SessionBusy { holder_pid: holder });
-                    }
-                    // Stale (dead pid / unreadable). Reclaim must be ATOMIC:
-                    // a naive remove-then-create lets contender B delete the
-                    // lock contender A just created after the same removal.
-                    // rename() arbitrates — exactly one mover wins; the loser
-                    // gets NotFound and treats the session as busy (someone
-                    // else is mid-reclaim).
-                    if attempt == 0 {
-                        let grave = self
-                            .lock_path
-                            .with_extension(format!("stale-{}", std::process::id()));
-                        match fs::rename(&self.lock_path, &grave) {
-                            Ok(()) => {
-                                let _ = fs::remove_file(&grave);
-                                continue; // we won the reclaim — retry create_new
-                            }
-                            Err(_) => {
-                                return Err(StoreError::SessionBusy { holder_pid: holder });
-                            }
-                        }
-                    }
-                    return Err(StoreError::SessionBusy { holder_pid: holder });
-                }
-                Err(e) => return Err(StoreError::Io(format!("lock: {e}"))),
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.lock_path)
+            .map_err(|e| StoreError::Io(format!("lock: {e}")))?;
+        let key = fs::canonicalize(&self.lock_path).unwrap_or_else(|_| self.lock_path.clone());
+        let mut held = held_in_process();
+        if held.contains(&key) {
+            return Err(StoreError::SessionBusy { holder_pid: std::process::id() });
+        }
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(StoreError::SessionBusy {
+                    holder_pid: read_holder_pid(&self.lock_path),
+                });
+            }
+            Err(fs::TryLockError::Error(e)) => {
+                return Err(StoreError::Io(format!("lock {}: {e}", self.lock_path.display())));
             }
         }
-        unreachable!("loop returns on every path");
+        // Display only: correctness rests on the OS lock, not on this PID.
+        let _ = file
+            .set_len(0)
+            .and_then(|_| file.seek(SeekFrom::Start(0)))
+            .and_then(|_| write!(file, "{}", std::process::id()));
+        held.insert(key.clone());
+        Ok(SessionLock { key, file: Some(file) })
     }
 
     /// Next turn id: `t<N>` over COMPLETE turns (a torn turn was compacted
@@ -621,5 +610,77 @@ impl SessionStore {
     /// All complete-turn events (read-only view; tests + future exporters).
     pub fn events(&self) -> &[TranscriptEvent] {
         &self.events
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    const CHILD_DIR: &str = "OVP_TEST_SESSION_LOCK_DIR";
+
+    /// Not a test on its own: the body of the child process that
+    /// `session_lock_excludes_another_process_until_it_dies` spawns. It takes
+    /// the lock, signals `ready`, and holds the lock until it is killed.
+    #[test]
+    fn child_holds_session_lock() {
+        let Ok(dir) = std::env::var(CHILD_DIR) else { return };
+        let dir = PathBuf::from(dir);
+        let st = SessionStore::open(&dir, "s1").unwrap();
+        let _held = st.lock().expect("child takes the free lock");
+        fs::write(dir.join("ready"), "").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+
+    fn wait_for(path: &Path) {
+        for _ in 0..600 {
+            if path.exists() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("timed out waiting for {}", path.display());
+    }
+
+    #[test]
+    fn session_lock_excludes_another_process_until_it_dies() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "agent_transcript::lock_tests::child_holds_session_lock"])
+            .env(CHILD_DIR, dir.path())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        wait_for(&dir.path().join("ready"));
+
+        let st = SessionStore::open(dir.path(), "s1").unwrap();
+        match st.lock() {
+            Err(StoreError::SessionBusy { holder_pid }) => {
+                // Windows: the holder's byte-range lock blocks reading the pid.
+                #[cfg(unix)]
+                assert_eq!(holder_pid, child.id());
+                let _ = holder_pid;
+            }
+            Err(other) => panic!("expected SessionBusy, got {other}"),
+            Ok(_) => panic!("a live holder in another process must exclude us"),
+        }
+
+        // SIGKILL / TerminateProcess: no Drop runs, the lock FILE stays. The
+        // kernel releases the lock, so the next turn gets in with no reclaim.
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(dir.path().join("s1.lock").exists());
+        drop(st.lock().expect("lock is free once the holder is dead"));
+    }
+
+    #[test]
+    fn same_process_second_store_is_busy_and_released_on_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = SessionStore::open(dir.path(), "s1").unwrap();
+        let b = SessionStore::open(dir.path(), "s1").unwrap();
+        let held = a.lock().unwrap();
+        assert!(matches!(b.lock(), Err(StoreError::SessionBusy { .. })));
+        drop(held);
+        drop(b.lock().expect("free after drop"));
     }
 }

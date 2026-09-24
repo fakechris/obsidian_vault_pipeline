@@ -15,3 +15,9 @@ LedgerAppend  LedgerAppendRepair.cfg                ok
 LedgerAppend  LedgerAppendSanityNeverPowerLoss.cfg  NeverPowerLoss
 LedgerAppend  LedgerAppendSanityNeverCrashMid.cfg   NeverCrashMid
 LedgerAppend  LedgerAppendSanityNeverTwoAcked.cfg   NeverTwoAcked
+SessionLock   SessionLockFlock.cfg                  ok
+SessionLock   SessionLock.cfg                       Mutex
+SessionLock   SessionLockVerify.cfg                 Mutex
+SessionLock   SessionLockSanityRenamers.cfg         NeverTwoRenamers
+SessionLock   SessionLockSanityReclaims.cfg         NeverReclaims
+SessionLock   SessionLockSanityFlockRetaken.cfg     NeverRetakenAfterCrash
