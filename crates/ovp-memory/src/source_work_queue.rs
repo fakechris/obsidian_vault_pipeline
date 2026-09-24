@@ -937,7 +937,13 @@ fn recover_interrupted(
 ) -> usize {
     let mut n = 0usize;
     for item in file.items.iter_mut() {
-        if !abandoned(item) {
+        // Cheap state check first: `abandoned` may probe a PID (spawning
+        // `kill -0`), and terminal items keep their `claimed_by`, so probing
+        // every item would spawn a process per retained item on each idle poll.
+        let has_running = item.status == ItemStatus::Running
+            || item.translate.status == TaskStatus::Running
+            || item.summarize.status == TaskStatus::Running;
+        if !has_running || !abandoned(item) {
             continue;
         }
         let mut touched = false;
