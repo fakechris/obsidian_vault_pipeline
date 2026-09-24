@@ -214,10 +214,10 @@ impl SourceWorkQueue {
         if !newer {
             return;
         }
-        if g.items.iter().any(|i| i.status == ItemStatus::Running) {
-            // We own a run — do not replace in-memory state mid-flight.
-            return;
-        }
+        // No "we own a run, keep memory" exception: every queue WRITE reloads
+        // from disk under the write lock first, so memory is never more
+        // authoritative than disk. The exception froze a second portal's view
+        // forever when it opened the queue during another worker's run.
         // Read only: no recovery and no persist from a reader (see `open`).
         if let Some(file) = load_file(&self.path) {
             *g = file;
@@ -1652,6 +1652,24 @@ mod tests {
         let done = worker.snapshot().items[0].clone();
         assert_eq!(done.status, ItemStatus::Done);
         assert!(worker.claim_next().is_none(), "the finished item is not claimed again");
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn a_reader_opened_mid_run_keeps_seeing_updates() {
+        let vault = tmp();
+        let worker = SourceWorkQueue::open(&vault);
+        let a = worker.enqueue(enq("sha-run", false)).unwrap();
+        worker.claim_next().unwrap();
+        let reader = SourceWorkQueue::open(&vault); // sees `a` Running
+        assert_eq!(reader.snapshot().items[0].status, ItemStatus::Running);
+        // Make the next write's mtime strictly newer on coarse-mtime filesystems.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        worker.finish_task(&a.id, TaskKind::Translate, Ok(())).unwrap();
+        worker.enqueue(enq("sha-later", false)).unwrap();
+        let snap = reader.snapshot();
+        assert_eq!(snap.items.len(), 2, "later enqueue visible");
+        assert_eq!(snap.items[0].status, ItemStatus::Done, "finish visible");
         let _ = std::fs::remove_dir_all(&vault);
     }
 
