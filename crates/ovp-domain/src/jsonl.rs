@@ -45,7 +45,28 @@ pub fn append_line(file: &mut File, path: &Path, line: &str) -> std::io::Result<
     }
     buf.extend_from_slice(line.as_bytes());
     buf.push(b'\n');
-    file.write_all(&buf)
+    write_once(file, &buf)
+}
+
+/// ONE `write(2)` of the whole buffer. Unlike `write_all`, a short write is
+/// NOT retried: the retry would be a second write that a concurrent appender
+/// can land in front of. The partial record is left as a torn tail (the next
+/// append closes it with a marker) and the caller gets an error. Only
+/// `Interrupted`, which writes nothing, is retried.
+pub fn write_once(file: &mut File, buf: &[u8]) -> std::io::Result<()> {
+    loop {
+        match file.write(buf) {
+            Ok(n) if n == buf.len() => return Ok(()),
+            Ok(n) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    format!("short write: {n} of {} bytes (disk full?)", buf.len()),
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 fn ends_with_newline_or_empty(path: &Path) -> std::io::Result<bool> {

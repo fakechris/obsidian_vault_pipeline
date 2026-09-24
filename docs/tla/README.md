@@ -90,3 +90,12 @@ The model does not represent the `Fail` readers: those ledgers deliberately stop
 under a power-loss tear, as before, and the operator deletes the torn line (plus its
 marker line). Also out of scope: a power loss that persists garbage or NUL bytes
 rather than a prefix. That still fails the read loudly.
+
+Known limitations (codex review, accepted):
+- A second power loss that tears the repair write itself can persist the `"\n"` but
+  not the marker. The old fragment is then terminated and unmarked, and the ledger
+  fails loud, which is the pre-INV-684 behavior. This needs two power losses, the
+  second one inside that one write.
+- A short write (disk full, file-size limit) is not retried. `write_once` returns an
+  error and leaves a torn tail for the next append to mark. A concurrent appender
+  landing right after a short write can still glue onto the fragment.

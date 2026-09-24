@@ -83,8 +83,21 @@ pub fn append_entry(path: &Path, entry: &LedgerEntry) -> Result<(), LedgerError>
     }
     buf.extend_from_slice(line.as_bytes());
     buf.push(b'\n');
-    file.write_all(&buf)?;
-    Ok(())
+    // ONE write(2), not write_all: a retried short write is a second write
+    // another appender can land in front of. A short write is an error.
+    loop {
+        match file.write(&buf) {
+            Ok(n) if n == buf.len() => return Ok(()),
+            Ok(n) => {
+                return Err(LedgerError::Io(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    format!("short write: {n} of {} bytes (disk full?)", buf.len()),
+                )));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(LedgerError::Io(e)),
+        }
+    }
 }
 
 fn ends_with_newline_or_empty(path: &Path) -> std::io::Result<bool> {
