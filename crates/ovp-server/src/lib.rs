@@ -3654,7 +3654,6 @@ fn handle_source_work_queue_delete(
 
 /// Background loop: claim one article, run its wanted tasks (parallel), finish.
 fn source_work_queue_worker(state: Arc<AppState>) {
-    use ovp_memory::source_work_queue::{TaskKind, TaskStatus};
     loop {
         state
             .source_work_queue
@@ -3662,151 +3661,10 @@ fn source_work_queue_worker(state: Arc<AppState>) {
         let Some(item) = state.source_work_queue.claim_next() else {
             continue;
         };
-        let Some(factory) = state.ask_client.clone() else {
-            let _ = state.source_work_queue.finish_task(
-                &item.id,
-                TaskKind::Translate,
-                Err("llm not configured".into()),
-            );
-            if item.summarize.wanted {
-                let _ = state.source_work_queue.finish_task(
-                    &item.id,
-                    TaskKind::Summarize,
-                    Err("llm not configured".into()),
-                );
-            }
-            continue;
-        };
-        let Some(model) = state.current_model() else {
-            let err = "index not available".to_string();
-            if item.translate.wanted {
-                let _ = state
-                    .source_work_queue
-                    .finish_task(&item.id, TaskKind::Translate, Err(err.clone()));
-            }
-            if item.summarize.wanted {
-                let _ = state
-                    .source_work_queue
-                    .finish_task(&item.id, TaskKind::Summarize, Err(err));
-            }
-            continue;
-        };
-        let (md, title, url) = match source_markdown_for(&state, &model, &item.sha256) {
-            Ok(v) => v,
-            Err(_) => {
-                let err = "source markdown unavailable".to_string();
-                if item.translate.wanted {
-                    let _ = state.source_work_queue.finish_task(
-                        &item.id,
-                        TaskKind::Translate,
-                        Err(err.clone()),
-                    );
-                }
-                if item.summarize.wanted {
-                    let _ = state
-                        .source_work_queue
-                        .finish_task(&item.id, TaskKind::Summarize, Err(err));
-                }
-                continue;
-            }
-        };
-        // Prefer live title from the note when the queue item has none.
-        let title = title.or(item.title.clone());
-        let model_name = ovp_memory::ask::AskArgs::default().model_name;
-        let vault = state.vault_root.clone();
-        let q = Arc::clone(&state.source_work_queue);
         let id = item.id.clone();
-        let sha = item.sha256.clone();
-        let md_t = md.clone();
-        let md_s = md;
-        let title_t = title.clone();
-        let title_s = title;
-        let url_t = url.clone();
-        let url_s = url;
-        let force_t = item.translate.force;
-        let force_s = item.summarize.force;
-        // Run ONLY the tasks claim_next armed (Running): after a partial
-        // retry the terminal sibling (Done / permanently Failed) must not
-        // execute again — with force=true that would repeat a paid LLM call,
-        // and a permanent sibling would be retried despite first-failure
-        // terminal semantics (codex P2 on PR #411).
-        let do_t = item.translate.wanted && item.translate.status == TaskStatus::Running;
-        let do_s = item.summarize.wanted && item.summarize.status == TaskStatus::Running;
-        let factory_t = factory.clone();
-        let factory_s = factory;
-
-        let mut handles = Vec::new();
-        if do_t {
-            let q = Arc::clone(&q);
-            let id = id.clone();
-            let vault = vault.clone();
-            let sha = sha.clone();
-            let model_name = model_name.clone();
-            handles.push(std::thread::spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (|| {
-                        let mut client = factory_t()?;
-                        ovp_memory::source_work::translate_source(
-                            &vault,
-                            &sha,
-                            title_t.as_deref(),
-                            url_t.as_deref(),
-                            &md_t,
-                            client.as_mut(),
-                            &model_name,
-                            force_t,
-                        )
-                        .map(|_| ())
-                    })()
-                }));
-                let result = match result {
-                    Ok(r) => r,
-                    Err(_) => Err("translate task panicked".into()),
-                };
-                let _ = q.finish_task(&id, TaskKind::Translate, result);
-            }));
-        } else {
-            state
-                .source_work_queue
-                .mark_task_skipped_if_not_wanted(&id);
-        }
-        if do_s {
-            let q = Arc::clone(&q);
-            let id = id.clone();
-            let vault = vault.clone();
-            let sha = sha.clone();
-            let model_name = model_name.clone();
-            handles.push(std::thread::spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (|| {
-                        let mut client = factory_s()?;
-                        ovp_memory::source_work::summarize_source(
-                            &vault,
-                            &sha,
-                            title_s.as_deref(),
-                            url_s.as_deref(),
-                            &md_s,
-                            client.as_mut(),
-                            &model_name,
-                            force_s,
-                        )
-                        .map(|_| ())
-                    })()
-                }));
-                let result = match result {
-                    Ok(r) => r,
-                    Err(_) => Err("summarize task panicked".into()),
-                };
-                let _ = q.finish_task(&id, TaskKind::Summarize, result);
-            }));
-        } else {
-            state
-                .source_work_queue
-                .mark_task_skipped_if_not_wanted(&id);
-        }
-        for h in handles {
-            let _ = h.join();
-        }
+        // Every exit path of the item (including the early error returns)
+        // falls through to the terminal cleanup below.
+        run_source_work_item(&state, item);
         // Ensure item status recomputed if both skipped oddly.
         state
             .source_work_queue
@@ -3823,6 +3681,160 @@ fn source_work_queue_worker(state: Arc<AppState>) {
             eprintln!("source-work-queue: cannot record the end of {id} yet ({e}); retrying");
             std::thread::sleep(std::time::Duration::from_secs(2));
         }
+    }
+}
+
+/// Run one claimed article's tasks to completion. Returns early on setup
+/// errors after recording them; the caller does the terminal cleanup.
+fn run_source_work_item(
+    state: &Arc<AppState>,
+    item: ovp_memory::source_work_queue::QueueItem,
+) {
+    use ovp_memory::source_work_queue::{TaskKind, TaskStatus};
+    let Some(factory) = state.ask_client.clone() else {
+        let _ = state.source_work_queue.finish_task(
+            &item.id,
+            TaskKind::Translate,
+            Err("llm not configured".into()),
+        );
+        if item.summarize.wanted {
+            let _ = state.source_work_queue.finish_task(
+                &item.id,
+                TaskKind::Summarize,
+                Err("llm not configured".into()),
+            );
+        }
+        return;
+    };
+    let Some(model) = state.current_model() else {
+        let err = "index not available".to_string();
+        if item.translate.wanted {
+            let _ = state
+                .source_work_queue
+                .finish_task(&item.id, TaskKind::Translate, Err(err.clone()));
+        }
+        if item.summarize.wanted {
+            let _ = state
+                .source_work_queue
+                .finish_task(&item.id, TaskKind::Summarize, Err(err));
+        }
+        return;
+    };
+    let (md, title, url) = match source_markdown_for(state, &model, &item.sha256) {
+        Ok(v) => v,
+        Err(_) => {
+            let err = "source markdown unavailable".to_string();
+            if item.translate.wanted {
+                let _ = state.source_work_queue.finish_task(
+                    &item.id,
+                    TaskKind::Translate,
+                    Err(err.clone()),
+                );
+            }
+            if item.summarize.wanted {
+                let _ = state
+                    .source_work_queue
+                    .finish_task(&item.id, TaskKind::Summarize, Err(err));
+            }
+            return;
+        }
+    };
+    // Prefer live title from the note when the queue item has none.
+    let title = title.or(item.title.clone());
+    let model_name = ovp_memory::ask::AskArgs::default().model_name;
+    let vault = state.vault_root.clone();
+    let q = Arc::clone(&state.source_work_queue);
+    let id = item.id.clone();
+    let sha = item.sha256.clone();
+    let md_t = md.clone();
+    let md_s = md;
+    let title_t = title.clone();
+    let title_s = title;
+    let url_t = url.clone();
+    let url_s = url;
+    let force_t = item.translate.force;
+    let force_s = item.summarize.force;
+    // Run ONLY the tasks claim_next armed (Running): after a partial
+    // retry the terminal sibling (Done / permanently Failed) must not
+    // execute again — with force=true that would repeat a paid LLM call,
+    // and a permanent sibling would be retried despite first-failure
+    // terminal semantics (codex P2 on PR #411).
+    let do_t = item.translate.wanted && item.translate.status == TaskStatus::Running;
+    let do_s = item.summarize.wanted && item.summarize.status == TaskStatus::Running;
+    let factory_t = factory.clone();
+    let factory_s = factory;
+
+    let mut handles = Vec::new();
+    if do_t {
+        let q = Arc::clone(&q);
+        let id = id.clone();
+        let vault = vault.clone();
+        let sha = sha.clone();
+        let model_name = model_name.clone();
+        handles.push(std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (|| {
+                    let mut client = factory_t()?;
+                    ovp_memory::source_work::translate_source(
+                        &vault,
+                        &sha,
+                        title_t.as_deref(),
+                        url_t.as_deref(),
+                        &md_t,
+                        client.as_mut(),
+                        &model_name,
+                        force_t,
+                    )
+                    .map(|_| ())
+                })()
+            }));
+            let result = match result {
+                Ok(r) => r,
+                Err(_) => Err("translate task panicked".into()),
+            };
+            let _ = q.finish_task(&id, TaskKind::Translate, result);
+        }));
+    } else {
+        state
+            .source_work_queue
+            .mark_task_skipped_if_not_wanted(&id);
+    }
+    if do_s {
+        let q = Arc::clone(&q);
+        let id = id.clone();
+        let vault = vault.clone();
+        let sha = sha.clone();
+        let model_name = model_name.clone();
+        handles.push(std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (|| {
+                    let mut client = factory_s()?;
+                    ovp_memory::source_work::summarize_source(
+                        &vault,
+                        &sha,
+                        title_s.as_deref(),
+                        url_s.as_deref(),
+                        &md_s,
+                        client.as_mut(),
+                        &model_name,
+                        force_s,
+                    )
+                    .map(|_| ())
+                })()
+            }));
+            let result = match result {
+                Ok(r) => r,
+                Err(_) => Err("summarize task panicked".into()),
+            };
+            let _ = q.finish_task(&id, TaskKind::Summarize, result);
+        }));
+    } else {
+        state
+            .source_work_queue
+            .mark_task_skipped_if_not_wanted(&id);
+    }
+    for h in handles {
+        let _ = h.join();
     }
 }
 
