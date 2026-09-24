@@ -3779,7 +3779,10 @@ fn run_source_work_item(
         let vault = vault.clone();
         let sha = sha.clone();
         let model_name = model_name.clone();
-        handles.push(std::thread::spawn(move || {
+        // Builder::spawn returns Err instead of panicking, so a refused
+        // thread cannot unwind past an already-running sibling task (which
+        // `handles` joins below) and free the one-article gate early.
+        let spawned = std::thread::Builder::new().spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 (|| {
                     let mut client = factory_t()?;
@@ -3801,7 +3804,17 @@ fn run_source_work_item(
                 Err(_) => Err("translate task panicked".into()),
             };
             let _ = q.finish_task(&id, TaskKind::Translate, result);
-        }));
+        });
+        match spawned {
+            Ok(h) => handles.push(h),
+            Err(e) => {
+                let _ = state.source_work_queue.finish_task(
+                    &item.id,
+                    TaskKind::Translate,
+                    Err(format!("cannot start task thread: {e}")),
+                );
+            }
+        }
     } else {
         state
             .source_work_queue
@@ -3813,7 +3826,10 @@ fn run_source_work_item(
         let vault = vault.clone();
         let sha = sha.clone();
         let model_name = model_name.clone();
-        handles.push(std::thread::spawn(move || {
+        // Builder::spawn returns Err instead of panicking, so a refused
+        // thread cannot unwind past an already-running sibling task (which
+        // `handles` joins below) and free the one-article gate early.
+        let spawned = std::thread::Builder::new().spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 (|| {
                     let mut client = factory_s()?;
@@ -3835,7 +3851,17 @@ fn run_source_work_item(
                 Err(_) => Err("summarize task panicked".into()),
             };
             let _ = q.finish_task(&id, TaskKind::Summarize, result);
-        }));
+        });
+        match spawned {
+            Ok(h) => handles.push(h),
+            Err(e) => {
+                let _ = state.source_work_queue.finish_task(
+                    &item.id,
+                    TaskKind::Summarize,
+                    Err(format!("cannot start task thread: {e}")),
+                );
+            }
+        }
     } else {
         state
             .source_work_queue
