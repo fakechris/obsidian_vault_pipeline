@@ -7,7 +7,12 @@ license.workspace = true
 authors.workspace = true
 description = "Evolution Kernel — attributable prompt/pipeline change governance"
 
+[features]
+decision-live = ["ovp-app/decision-live"]
+
 [dependencies]
+ovp-app = { path = "../ovp-app" }
+ovp-llm = { path = "../ovp-llm" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

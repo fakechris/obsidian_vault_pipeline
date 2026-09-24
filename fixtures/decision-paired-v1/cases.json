@@ -1,0 +1,305 @@
+{
+  "schema": "ovp.decision.fixture/v1",
+  "split": "gold",
+  "provenance": "Hand-authored synthetic runtime smoke contracts. No live provider or vault capture; gains are intentionally constructed and are not JEV quality evidence.",
+  "sources": {
+    "source-0": {
+      "revision": "7c87ae1bc04f231082177db737ababf10bfdf889acc04fd81194af6f539dda6f",
+      "text": "Synthetic source 0 supports its literal claim.\nNo stronger claim is licensed.\n"
+    },
+    "source-1": {
+      "revision": "2a9ec932c92d8ce4e2b117a39e4a16de7c85019a15b64353f0ffb218de5901ba",
+      "text": "Synthetic source 1 supports its literal claim.\nNo stronger claim is licensed.\n"
+    },
+    "source-2": {
+      "revision": "96b2feeb91a888761f9e2d4a623ea234d49564c779067646057f24cab6b96010",
+      "text": "Synthetic source 2 supports its literal claim.\nNo stronger claim is licensed.\n"
+    },
+    "source-3": {
+      "revision": "ed6ab8bc279341c2117449dbb038ddbb0e34db35898ff234e35e9a1f15e390fe",
+      "text": "Synthetic source 3 supports its literal claim.\nNo stronger claim is licensed.\n"
+    }
+  },
+  "cases": [
+    {
+      "id": "case-0",
+      "bucket": "literal",
+      "request": {
+        "namespace": "runtime-smoke/v1",
+        "state": {
+          "claim": "Synthetic source 0 supports its literal claim.",
+          "quote": "Synthetic source 0 supports its literal claim.\nNo stronger claim is licensed.\n"
+        },
+        "evidence": [
+          {
+            "source_id": "source-0",
+            "revision": "7c87ae1bc04f231082177db737ababf10bfdf889acc04fd81194af6f539dda6f",
+            "start_line": 1,
+            "end_line": 2
+          }
+        ],
+        "questions": {
+          "supported": {
+            "instructions": "Does quote support claim?",
+            "kind": {
+              "type": "boolean",
+              "yes": "supported",
+              "no": "unsupported"
+            }
+          },
+          "relation": {
+            "instructions": "Choose the evidence relation.",
+            "kind": {
+              "type": "choice",
+              "options": {
+                "supports": "literal support",
+                "overreach": "stronger than evidence"
+              }
+            }
+          },
+          "quality": {
+            "instructions": "Rate direct evidential support.",
+            "kind": {
+              "type": "score",
+              "levels": [
+                {
+                  "id": "none",
+                  "description": "No support"
+                },
+                {
+                  "id": "direct",
+                  "description": "Direct support"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "gold": {
+        "supported": {
+          "type": "boolean",
+          "value": true
+        },
+        "relation": {
+          "type": "choice",
+          "selected": "supports"
+        },
+        "quality": {
+          "type": "score",
+          "position": 1,
+          "tolerance": 0.01
+        }
+      }
+    },
+    {
+      "id": "case-1",
+      "bucket": "literal",
+      "request": {
+        "namespace": "runtime-smoke/v1",
+        "state": {
+          "claim": "Synthetic source 1 supports its literal claim.",
+          "quote": "Synthetic source 1 supports its literal claim.\nNo stronger claim is licensed.\n"
+        },
+        "evidence": [
+          {
+            "source_id": "source-1",
+            "revision": "2a9ec932c92d8ce4e2b117a39e4a16de7c85019a15b64353f0ffb218de5901ba",
+            "start_line": 1,
+            "end_line": 2
+          }
+        ],
+        "questions": {
+          "supported": {
+            "instructions": "Does quote support claim?",
+            "kind": {
+              "type": "boolean",
+              "yes": "supported",
+              "no": "unsupported"
+            }
+          },
+          "relation": {
+            "instructions": "Choose the evidence relation.",
+            "kind": {
+              "type": "choice",
+              "options": {
+                "supports": "literal support",
+                "overreach": "stronger than evidence"
+              }
+            }
+          },
+          "quality": {
+            "instructions": "Rate direct evidential support.",
+            "kind": {
+              "type": "score",
+              "levels": [
+                {
+                  "id": "none",
+                  "description": "No support"
+                },
+                {
+                  "id": "direct",
+                  "description": "Direct support"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "gold": {
+        "supported": {
+          "type": "boolean",
+          "value": true
+        },
+        "relation": {
+          "type": "choice",
+          "selected": "supports"
+        },
+        "quality": {
+          "type": "score",
+          "position": 1,
+          "tolerance": 0.01
+        }
+      }
+    },
+    {
+      "id": "case-2",
+      "bucket": "qualified",
+      "request": {
+        "namespace": "runtime-smoke/v1",
+        "state": {
+          "claim": "Synthetic source 2 supports its literal claim.",
+          "quote": "Synthetic source 2 supports its literal claim.\nNo stronger claim is licensed.\n"
+        },
+        "evidence": [
+          {
+            "source_id": "source-2",
+            "revision": "96b2feeb91a888761f9e2d4a623ea234d49564c779067646057f24cab6b96010",
+            "start_line": 1,
+            "end_line": 2
+          }
+        ],
+        "questions": {
+          "supported": {
+            "instructions": "Does quote support claim?",
+            "kind": {
+              "type": "boolean",
+              "yes": "supported",
+              "no": "unsupported"
+            }
+          },
+          "relation": {
+            "instructions": "Choose the evidence relation.",
+            "kind": {
+              "type": "choice",
+              "options": {
+                "supports": "literal support",
+                "overreach": "stronger than evidence"
+              }
+            }
+          },
+          "quality": {
+            "instructions": "Rate direct evidential support.",
+            "kind": {
+              "type": "score",
+              "levels": [
+                {
+                  "id": "none",
+                  "description": "No support"
+                },
+                {
+                  "id": "direct",
+                  "description": "Direct support"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "gold": {
+        "supported": {
+          "type": "boolean",
+          "value": true
+        },
+        "relation": {
+          "type": "choice",
+          "selected": "supports"
+        },
+        "quality": {
+          "type": "score",
+          "position": 1,
+          "tolerance": 0.01
+        }
+      }
+    },
+    {
+      "id": "case-3",
+      "bucket": "qualified",
+      "request": {
+        "namespace": "runtime-smoke/v1",
+        "state": {
+          "claim": "Synthetic source 3 supports its literal claim.",
+          "quote": "Synthetic source 3 supports its literal claim.\nNo stronger claim is licensed.\n"
+        },
+        "evidence": [
+          {
+            "source_id": "source-3",
+            "revision": "ed6ab8bc279341c2117449dbb038ddbb0e34db35898ff234e35e9a1f15e390fe",
+            "start_line": 1,
+            "end_line": 2
+          }
+        ],
+        "questions": {
+          "supported": {
+            "instructions": "Does quote support claim?",
+            "kind": {
+              "type": "boolean",
+              "yes": "supported",
+              "no": "unsupported"
+            }
+          },
+          "relation": {
+            "instructions": "Choose the evidence relation.",
+            "kind": {
+              "type": "choice",
+              "options": {
+                "supports": "literal support",
+                "overreach": "stronger than evidence"
+              }
+            }
+          },
+          "quality": {
+            "instructions": "Rate direct evidential support.",
+            "kind": {
+              "type": "score",
+              "levels": [
+                {
+                  "id": "none",
+                  "description": "No support"
+                },
+                {
+                  "id": "direct",
+                  "description": "Direct support"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "gold": {
+        "supported": {
+          "type": "boolean",
+          "value": true
+        },
+        "relation": {
+          "type": "choice",
+          "selected": "supports"
+        },
+        "quality": {
+          "type": "score",
+          "position": 1,
+          "tolerance": 0.01
+        }
+      }
+    }
+  ]
+}

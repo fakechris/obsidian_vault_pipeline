@@ -1,0 +1,82 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "decision-experiment-runtime-v1",
+  "base_version": "decision-boundary/v1",
+  "target_version": "decision-experiment/v1",
+  "surface": "runtime",
+  "component": "runtime.decision_client",
+  "hypothesis": "Capability-scoped routing and an executed paired decision runner preserve baseline selection in off, control and shadow modes, while identifying every missing/invalid decision as an invalid experiment instead of candidate success. Synthetic frozen replay can exercise both arms without network calls. This is runtime wiring, not model-quality acceptance.",
+  "predicted_delta": {
+    "executable_decision_arms": {
+      "baseline": 0,
+      "target": 2
+    },
+    "off_candidate_constructions": {
+      "target": 0
+    },
+    "shadow_applied_decisions": {
+      "target": 0
+    },
+    "incomplete_pair_false_accepts": {
+      "target": 0
+    }
+  },
+  "guardrails": {
+    "accepted_without_quote": 0
+  },
+  "eval_plan": {
+    "replay_set": "fixtures/decision-paired-v1",
+    "soak": false,
+    "decision_run": {
+      "runner": "decision",
+      "fixture_dir": "fixtures/decision-paired-v1",
+      "capability": "runtime_smoke",
+      "profiles": {
+        "control": {
+          "id": "control",
+          "provider": "fixture",
+          "endpoint": "fixture://synthetic-decisions",
+          "model": "control-v1",
+          "credential_ref": "UNUSED_FIXTURE_KEY"
+        },
+        "candidate": {
+          "id": "candidate",
+          "provider": "fixture",
+          "endpoint": "fixture://synthetic-decisions",
+          "model": "candidate-v1",
+          "credential_ref": "UNUSED_FIXTURE_KEY"
+        }
+      },
+      "control": {
+        "profile": "control",
+        "execution": "replay",
+        "question_namespace": "runtime-smoke/v1",
+        "boolean_thresholds": {}
+      },
+      "candidate": {
+        "profile": "candidate",
+        "execution": "replay",
+        "question_namespace": "runtime-smoke/v1",
+        "boolean_thresholds": {
+          "supported": 0.8
+        }
+      },
+      "expected_cases": 4,
+      "expected_questions": 12,
+      "split": "gold",
+      "purpose": "development",
+      "min_accuracy_delta": 0.5,
+      "max_bucket_accuracy_regression": 0,
+      "min_bucket_size": 10,
+      "budget": {
+        "max_requests_per_arm": 4,
+        "max_wall_ms_per_arm": 10000,
+        "max_observed_input_tokens_per_arm": 1000,
+        "max_observed_output_tokens_per_arm": 1000
+      },
+      "experiment_id": "decision-runtime-smoke-v1"
+    }
+  },
+  "rollback": "Revert the INV-644 runtime wiring commit. Capability modes default to off. No consumer, prompt or model-quality promotion is part of this change. Admission gate is not exercised by read-only typed-decision experiments.",
+  "ablation_required": false
+}

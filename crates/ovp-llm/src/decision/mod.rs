@@ -9,6 +9,7 @@ mod cache;
 mod live;
 mod types;
 pub mod typesafe;
+pub mod runtime;
 
 pub use cache::{CachedDecisionClient, DecisionCacheMode, FixtureDecisionClient, decision_key};
 #[cfg(feature = "decision-live")]

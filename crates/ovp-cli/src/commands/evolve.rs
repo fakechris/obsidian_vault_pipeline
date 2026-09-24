@@ -22,11 +22,18 @@ pub fn run(args: EvolveArgs) -> Result<(), CliError> {
     match args.sub {
         EvolveSubcmd::Registry => run_registry(&registry),
         EvolveSubcmd::Ab { candidate, output } => {
-            let decision = ovp_evolve::paired::run(ovp_evolve::paired::RunConfig {
+            let spec = ovp_evolve::candidate::CandidateSpec::load(&candidate)
+                .map_err(|e| CliError::Io(e.to_string()))?;
+            let config = ovp_evolve::paired::RunConfig {
                 candidate, registry: args.registry_path, output,
                 executable: std::env::current_exe().map_err(|e| CliError::Io(e.to_string()))?,
-            }).map_err(CliError::Io)?;
-            println!("Paired retrieval decision: {decision}");
+            };
+            let decision = if spec.eval_plan.decision_run.is_some() {
+                ovp_evolve::decision_paired::run(config)
+            } else {
+                ovp_evolve::paired::run(config)
+            }.map_err(CliError::Io)?;
+            println!("Paired evaluation decision: {decision}");
             if decision == ovp_evolve::types::Decision::Reject {
                 Err(CliError::Gate("paired candidate rejected".into()))
             } else { Ok(()) }
