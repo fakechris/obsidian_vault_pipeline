@@ -85,7 +85,7 @@ jobs:
       # COMPILE on MSVC (rustls/ring, reqwest, the enrich clients).
       - name: Check the live feature set
         working-directory: crates/ovp-cli
-        run: cargo check --features "anthropic,pinboard-live,web-fetch-live,github-live"
+        run: cargo check --features "anthropic,decision-live,pinboard-live,web-fetch-live,github-live"
 
       - name: Portal (console-ui)
         working-directory: console-ui

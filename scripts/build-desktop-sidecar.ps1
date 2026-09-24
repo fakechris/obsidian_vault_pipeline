@@ -31,7 +31,7 @@ try {
         $Triple = (rustc -vV | Select-String '^host:\s*(.+)$').Matches[0].Groups[1].Value.Trim()
     }
     $features = $env:OVP2_SIDECAR_FEATURES
-    if (-not $features) { $features = 'anthropic,pinboard-live,web-fetch-live,github-live' }
+    if (-not $features) { $features = 'anthropic,decision-live,pinboard-live,web-fetch-live,github-live' }
 
     $outDir = Join-Path $root 'apps\desktop\src-tauri\binaries'
     $out = Join-Path $outDir "ovp2-$Triple.exe"

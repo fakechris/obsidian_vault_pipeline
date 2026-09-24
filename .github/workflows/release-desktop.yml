@@ -74,7 +74,7 @@ jobs:
       # rebuilds can't silently ship a no-feature binary (2026-07-31).
       - name: Build ovp2 sidecar
         env:
-          OVP2_SIDECAR_FEATURES: anthropic,pinboard-live,web-fetch-live,github-live
+          OVP2_SIDECAR_FEATURES: anthropic,decision-live,pinboard-live,web-fetch-live,github-live
         run: bash scripts/build-desktop-sidecar.sh ${{ matrix.target }}
 
       - name: Build the portal (embedded by ovp-server)

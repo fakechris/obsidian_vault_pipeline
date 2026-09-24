@@ -172,6 +172,18 @@ pub fn ask_with_optional_evidence_with_progress(
     vault_root: &Path,
     on_stage: Option<AskStageCallback<'_>>,
 ) -> Result<AskResult, String> {
+    ask_with_decision_reranker(model, evidence, client, args, vault_root, on_stage, None)
+}
+
+pub fn ask_with_decision_reranker(
+    model: &IndexModel,
+    evidence: Option<&EvidenceModel>,
+    client: &mut dyn ModelClient,
+    args: &AskArgs,
+    vault_root: &Path,
+    on_stage: Option<AskStageCallback<'_>>,
+    reranker: Option<&crate::decision_rerank::DecisionReranker>,
+) -> Result<AskResult, String> {
     let intent = classify_intent(&args.question, &args.history);
 
     // Meta: answer about Ask itself — no retrieval, no LLM (deterministic).
@@ -209,7 +221,7 @@ pub fn ask_with_optional_evidence_with_progress(
         cb("retrieving", "Searching relevant evidence across vault index...");
     }
 
-    let (evidence_items, system, user_prefix, temperature, verify) = match intent {
+    let (mut evidence_items, system, user_prefix, temperature, verify) = match intent {
         AskIntent::FindSource => {
             let q = content_query_for_find(&args.question);
             let search_q = if q.is_empty() {
@@ -283,6 +295,9 @@ pub fn ask_with_optional_evidence_with_progress(
         cb("ranking", "Ranking and fusing evidence candidates...");
     }
 
+    if let Some(reranker) = reranker {
+        reranker.rerank_ask(model, evidence, &args.question, &mut evidence_items);
+    }
     let context_hits = evidence_items.len();
     let context = render_evidence_context(&evidence_items);
 

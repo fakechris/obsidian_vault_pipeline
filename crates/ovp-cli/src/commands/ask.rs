@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use ovp_index::{read_evidence, read_index};
-use ovp_memory::ask::{ask_with_optional_evidence, AskArgs};
+use ovp_memory::ask::{ask_with_decision_reranker, AskArgs};
 
 use crate::commands::client::{build_client, ClientKind};
 use crate::CliError;
@@ -42,12 +42,20 @@ pub fn run(args: AskCliArgs) -> Result<(), CliError> {
         ..Default::default()
     };
 
-    let result = ask_with_optional_evidence(
+    let decisions = ovp_app::decisions::load_optional_settings(&args.vault_root)
+        .map_err(|e| CliError::Io(e.to_string()))?
+        .map(|settings| ovp_memory::decision_rerank::DecisionReranker::new(
+            &args.vault_root, settings, std::sync::Arc::new(ovp_app::decisions::SearchDecisionFactory),
+            ask_args.question.clone(),
+        )).transpose().map_err(|e| CliError::Io(e.to_string()))?;
+    let result = ask_with_decision_reranker(
         &model,
         evidence.as_ref(),
         client.as_mut(),
         &ask_args,
         &args.vault_root,
+        None,
+        decisions.as_ref(),
     )
     .map_err(CliError::Io)?;
 
