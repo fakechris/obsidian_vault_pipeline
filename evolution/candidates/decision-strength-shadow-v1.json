@@ -1,0 +1,19 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "decision-strength-shadow-v1",
+  "surface": "runtime",
+  "component": "runtime.crystal_strength_shadow",
+  "base_version": "absent/v0",
+  "target_version": "strength-shadow/v1",
+  "hypothesis": "An off/shadow DecisionClient observer can compare each grounded claim with the existing strength judge while preserving byte-identical durable/caveated/reject routing and the ledger. On source-grouped human gold, wrong-supported pass rate should not exceed the current judge and observed average cost should fall at least 50%; these quality and cost claims remain unmeasured until a frozen paired corpus exists.",
+  "predicted_delta": {
+    "off_shadow_ledger_changes": {"target": 0},
+    "shadow_applied_verdicts": {"target": 0},
+    "wrong_supported_rate_delta": {"baseline": "unmeasured", "target": 0},
+    "mean_cost_ratio": {"baseline": "unmeasured", "target": 0.5}
+  },
+  "guardrails": {"accepted_without_quote": 0},
+  "eval_plan": {"replay_set": "crates/ovp-cli/src/commands/crystal_strength_shadow.rs", "soak": false},
+  "rollback": "Set strength_check.mode=off or revert the observer. No Crystal admission or ledger format changes.",
+  "ablation_required": false
+}

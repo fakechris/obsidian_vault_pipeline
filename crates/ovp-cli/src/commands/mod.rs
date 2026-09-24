@@ -16,6 +16,7 @@ pub mod crystal_review_session;
 pub mod crystal_synth;
 pub mod crystal_synth_ab;
 pub mod crystal_synth_llm;
+pub mod crystal_strength_shadow;
 pub mod crystal_terrain;
 pub mod crystal_theme_pages;
 pub mod crystal_themes;
