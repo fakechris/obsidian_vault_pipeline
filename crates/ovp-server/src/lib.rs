@@ -2167,6 +2167,26 @@ fn handle_schedule_features(state: &AppState, body: &str) -> Response<std::io::C
         );
     };
 
+    // Same dispatch lock every CLI registry writer holds (init / install /
+    // enable / disable / tick). Without it, this read-modify-write loses a
+    // concurrent edit, and before per-process tmp names it could publish a
+    // half-written registry that fails every tick (docs/tla/RegistryWrite.tla).
+    // Non-blocking: a tick holds the lock for its whole dispatch (a daily run
+    // takes minutes), so report busy instead of hanging the request.
+    let _dispatch_lock =
+        match ovp_intake::RunLock::acquire_named(&state.vault_root, "scheduler.lock") {
+            Ok(lock) => lock,
+            Err(_) => {
+                return json_response(
+                    409,
+                    &serde_json::json!({
+                        "error": "the scheduler is busy (a scheduled run or schedule edit is in progress); try again when it finishes",
+                        "code": "scheduler_busy",
+                    })
+                    .to_string(),
+                );
+            }
+        };
     let mut reg = match ovp_scheduler::load_registry(&state.vault_root) {
         // as_written: this path saves, and must not drop quarantined jobs.
         Ok(Some(r)) => r.as_written,
@@ -6642,6 +6662,32 @@ mod tests {
         assert!(daily["next_run"].as_str().unwrap().contains("T09:00:00"));
         let crystal = jobs.iter().find(|j| j["id"] == "crystallize").unwrap();
         assert_eq!(crystal["cadence"], "weekly Sun 10:00");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn schedule_features_takes_the_scheduler_lock() {
+        let vault = portal_vault("sched-feat-lock", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+        let reg = ovp_scheduler::default_registry("live", (9, 0), false, None);
+        ovp_scheduler::save_registry(&vault, &reg).unwrap();
+        let before = std::fs::read_to_string(vault.join(".ovp/schedule.json")).unwrap();
+        let body = r#"{"job":"daily","pinboard_live":true}"#;
+
+        // A tick / CLI edit holds scheduler.lock → busy, registry untouched.
+        let held = ovp_intake::RunLock::acquire_named(&vault, "scheduler.lock").unwrap();
+        let resp = dispatch(&st, Method::Post, "/api/schedule/features", body);
+        assert_eq!(resp.status_code(), 409);
+        assert_eq!(body_json(resp)["code"], "scheduler_busy");
+        assert_eq!(std::fs::read_to_string(vault.join(".ovp/schedule.json")).unwrap(), before);
+
+        // Released → the edit lands.
+        drop(held);
+        let resp = dispatch(&st, Method::Post, "/api/schedule/features", body);
+        assert_eq!(resp.status_code(), 200);
+        let saved = ovp_scheduler::load_registry(&vault).unwrap().unwrap().as_written;
+        assert!(saved.get("daily").unwrap().argv.iter().any(|a| a == "--pinboard-live"));
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

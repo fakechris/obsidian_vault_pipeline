@@ -104,6 +104,11 @@ pub struct QueueItem {
     pub started_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<u64>,
+    /// PID of the worker that claimed this item (set by `claim_next`). A
+    /// `running` item is recovered only when this process is gone; `None`
+    /// (written by a pre-INV-686 binary) counts as gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_by: Option<u32>,
     /// Client should surface a desktop/browser notification when terminal.
     #[serde(default = "default_true")]
     pub notify: bool,
@@ -154,12 +159,6 @@ pub struct EnqueueRequest {
     pub priority: i32,
 }
 
-/// How long a `running` item may sit with no finish before restart recovery
-/// treats it as abandoned (seconds). LLM translate of a long article can take
-/// several minutes; 12m is a generous upper bound that still unblocks a stuck
-/// gate within a refresh cycle users notice.
-const STALE_RUNNING_SECS: u64 = 12 * 60;
-
 /// Total tries (initial attempt + automatic retries) before a transient
 /// task failure goes terminal `Failed`. Retry schedule: 1m, 2m after the
 /// first two transient failures; the third is terminal.
@@ -179,20 +178,15 @@ pub struct SourceWorkQueue {
 }
 
 impl SourceWorkQueue {
+    /// Read-only open. Restart recovery does NOT run here: `open` also runs in
+    /// processes that are not the worker (a second portal, `ovp2 source-work
+    /// backfill`), and "running" on disk may be the live worker's in-flight
+    /// item. An unlocked recover-and-persist from such a process could requeue
+    /// it, or overwrite the worker's later `finish_task`, so the article ran
+    /// twice (docs/tla/SourceWorkQueue.tla). Recovery lives in [`Self::claim_next`].
     pub fn open(vault_root: &Path) -> Self {
         let path = vault_root.join(QUEUE_REL);
-        let mut file = load_file(&path).unwrap_or_default();
-        // Restart recovery: anything left `running` was mid-flight when the
-        // process died. Promote to Done when artifacts already exist (no need
-        // to re-burn LLM); otherwise re-queue so `claim_next` is not blocked
-        // forever (one-running-at-a-time gate).
-        let recovered = recover_interrupted(vault_root, &mut file);
-        if recovered > 0 {
-            let _ = persist(&path, &file);
-            eprintln!(
-                "source-work-queue: recovered {recovered} interrupted item(s) after restart"
-            );
-        }
+        let file = load_file(&path).unwrap_or_default();
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         Self {
             path,
@@ -224,11 +218,8 @@ impl SourceWorkQueue {
             // We own a run — do not replace in-memory state mid-flight.
             return;
         }
-        if let Some(mut file) = load_file(&self.path) {
-            let n = recover_interrupted(&self.vault_root, &mut file);
-            if n > 0 {
-                let _ = self.persist_tracked(&file);
-            }
+        // Read only: no recovery and no persist from a reader (see `open`).
+        if let Some(file) = load_file(&self.path) {
             *g = file;
             if let Some(m) = disk_m {
                 *self
@@ -236,67 +227,19 @@ impl SourceWorkQueue {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner()) = Some(m);
             }
-            if n > 0 {
-                eprintln!(
-                    "source-work-queue: reloaded disk + recovered {n} interrupted item(s)"
-                );
-            }
         }
-    }
-
-    /// Unstick items that have been `running` longer than [`STALE_RUNNING_SECS`]
-    /// (abandoned after crash/kill while this process still thought they ran).
-    fn recover_stale_running(&self, g: &mut QueueFile) -> usize {
-        let now = now_secs();
-        let mut stale_ids = Vec::new();
-        for item in g.items.iter() {
-            if item.status != ItemStatus::Running {
-                continue;
-            }
-            let started = item.started_at.unwrap_or(item.created_at);
-            if now.saturating_sub(started) >= STALE_RUNNING_SECS {
-                stale_ids.push(item.id.clone());
-            }
-        }
-        if stale_ids.is_empty() {
-            return 0;
-        }
-        // Re-run full interrupted recovery on the whole file so artifacts can
-        // promote to Done.
-        let n = recover_interrupted(&self.vault_root, g);
-        // Force any remaining long-running items (no artifacts) back to queued
-        // even if started_at was just cleared. Preserve `attempts`/`not_before`
-        // on the requeued tasks: resetting them here would hand every stuck
-        // task a free retry budget (and pull its backoff earlier) every 12
-        // minutes — an infinite stale-recovery retry loop.
-        for item in g.items.iter_mut() {
-            if stale_ids.contains(&item.id) && item.status == ItemStatus::Running {
-                item.status = ItemStatus::Queued;
-                item.started_at = None;
-                if item.translate.status == TaskStatus::Running {
-                    item.translate.status = TaskStatus::Queued;
-                }
-                if item.summarize.status == TaskStatus::Running {
-                    item.summarize.status = TaskStatus::Queued;
-                }
-            }
-        }
-        if n > 0 || !stale_ids.is_empty() {
-            let _ = self.persist_tracked(g);
-            eprintln!(
-                "source-work-queue: unstuck {} stale running item(s)",
-                stale_ids.len()
-            );
-        }
-        stale_ids.len()
     }
 
     /// After a worker finishes an item (or panics), force any still-Running
     /// tasks on `id` into Failed so the serial gate cannot stick.
     pub fn fail_still_running(&self, id: &str, reason: &str) {
+        // Locked + reload: persisting a stale in-memory copy would erase a
+        // concurrent enqueue/cancel from another process.
+        let _ = self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.reload_from_disk(&mut g);
         let Some(item) = g.items.iter_mut().find(|i| i.id == id) else {
-            return;
+            return Ok(());
         };
         let mut touched = false;
         if item.translate.wanted && item.translate.status == TaskStatus::Running {
@@ -319,14 +262,16 @@ impl SourceWorkQueue {
             touched = true;
         }
         if touched {
-            let _ = self.persist_tracked(&g);
+            self.persist_tracked(&g)?;
         }
+        Ok(())
+        });
     }
 
+    /// Read-only view for the portal. Never recovers or persists (see `open`).
     pub fn snapshot(&self) -> QueueFile {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.maybe_reload_from_disk(&mut g);
-        self.recover_stale_running(&mut g);
         g.clone()
     }
 
@@ -372,8 +317,7 @@ impl SourceWorkQueue {
     ///
     /// Does **not** run [`recover_interrupted`]: that would re-queue a
     /// just-claimed `Running` item mid-flight (breaking the one-at-a-time
-    /// gate). Restart recovery belongs in [`Self::open`] and
-    /// [`Self::recover_stale_running`] only.
+    /// gate). Recovery belongs in [`Self::claim_next`] only.
     fn reload_from_disk(&self, g: &mut QueueFile) {
         if let Some(file) = load_file(&self.path) {
             *g = file;
@@ -465,6 +409,7 @@ impl SourceWorkQueue {
             created_at: now,
             started_at: None,
             finished_at: None,
+            claimed_by: None,
             notify: req.notify,
             notify_sent: false,
             priority: req.priority,
@@ -581,11 +526,26 @@ impl SourceWorkQueue {
     /// priority, older `created_at` (FIFO). UI interactive jobs (priority 100)
     /// therefore jump ahead of bulk backfill (priority 0) without reordering
     /// the whole list by hand.
+    ///
+    /// Recovery runs here, under the write lock, and only for items whose
+    /// claiming worker is verifiably dead ([`QueueItem::claimed_by`]): promote
+    /// to Done if the artifacts exist, otherwise requeue (retry budget and
+    /// backoff preserved). This replaces the old 12-minute timeout, which could
+    /// requeue a live long-running item. A live claimer, including this
+    /// process, keeps the one-article-at-a-time gate closed. This worker's own
+    /// abandoned tasks are closed by [`Self::fail_still_running`].
     pub fn claim_next(&self) -> Option<QueueItem> {
         self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.reload_from_disk(&mut g);
-        self.recover_stale_running(&mut g);
+        let recovered = recover_interrupted(&self.vault_root, &mut g, |item| {
+            item.claimed_by
+                .is_none_or(|pid| ovp_intake::probe_pid(pid) == Some(false))
+        });
+        if recovered > 0 {
+            self.persist_tracked(&g)?;
+            eprintln!("source-work-queue: recovered {recovered} abandoned item(s)");
+        }
         if g.items.iter().any(|i| i.status == ItemStatus::Running) {
             return Ok(None); // one article at a time
         }
@@ -595,6 +555,7 @@ impl SourceWorkQueue {
         let item = &mut g.items[idx];
         item.status = ItemStatus::Running;
         item.started_at = Some(now_secs());
+        item.claimed_by = Some(std::process::id());
         if item.translate.wanted && item.translate.status == TaskStatus::Queued {
             item.translate.status = TaskStatus::Running;
         }
@@ -675,8 +636,8 @@ impl SourceWorkQueue {
             // NEVER route the retry through `recompute_item_status`: with the
             // sibling task still Running it would leave the item `Running`,
             // and claim_next's one-item-running gate would jam the WHOLE
-            // queue behind this item's backoff until `recover_stale_running`
-            // (12 min). Re-queue the item explicitly instead.
+            // queue behind this item's backoff. Re-queue the item explicitly
+            // instead.
             if item.status != ItemStatus::Cancelled {
                 item.status = ItemStatus::Queued;
                 item.started_at = None;
@@ -728,7 +689,12 @@ impl SourceWorkQueue {
     }
 
     pub fn mark_task_skipped_if_not_wanted(&self, id: &str) {
+        // Locked + reload, like every other queue write (docs/tla/SourceWorkQueue.tla,
+        // SourceWorkQueueLegacyLost: an unlocked persist of this process's stale
+        // copy erased another process's enqueue).
+        let _ = self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.reload_from_disk(&mut g);
         if let Some(item) = g.items.iter_mut().find(|i| i.id == id) {
             if !item.translate.wanted {
                 item.translate.status = TaskStatus::Skipped;
@@ -745,8 +711,10 @@ impl SourceWorkQueue {
             } else {
                 recompute_item_status(item);
             }
-            let _ = self.persist_tracked(&g);
+            self.persist_tracked(&g)?;
         }
+        Ok(())
+        });
     }
 }
 
@@ -955,9 +923,17 @@ fn read_lock_pid(path: &Path) -> Option<u32> {
 
 /// Recover items left mid-flight across process death. Returns how many
 /// queue items were touched.
-fn recover_interrupted(vault_root: &Path, file: &mut QueueFile) -> usize {
+/// Recover interrupted items for which `abandoned` holds (its claimer is gone).
+fn recover_interrupted(
+    vault_root: &Path,
+    file: &mut QueueFile,
+    abandoned: impl Fn(&QueueItem) -> bool,
+) -> usize {
     let mut n = 0usize;
     for item in file.items.iter_mut() {
+        if !abandoned(item) {
+            continue;
+        }
         let mut touched = false;
 
         // Soft-cancelled mid-run: tasks may still be Running — park them.
@@ -1203,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    fn open_requeues_interrupted_running_items() {
+    fn claim_requeues_interrupted_running_items() {
         let vault = tmp();
         let path = vault.join(QUEUE_REL);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1233,6 +1209,7 @@ mod tests {
                 created_at: 1,
                 started_at: Some(2),
                 finished_at: None,
+                claimed_by: None,
                 notify: true,
                 notify_sent: false,
                 priority: 0,
@@ -1240,20 +1217,20 @@ mod tests {
         };
         persist(&path, &file).unwrap();
         let q = SourceWorkQueue::open(&vault);
-        let snap = q.snapshot();
-        assert_eq!(snap.items.len(), 1);
-        // No artifacts on disk → re-queued for retry.
-        assert_eq!(snap.items[0].status, ItemStatus::Queued);
-        assert_eq!(snap.items[0].translate.status, TaskStatus::Queued);
-        assert_eq!(snap.items[0].summarize.status, TaskStatus::Queued);
-        // Worker can claim again after recovery.
+        // open/snapshot never recover: a reader cannot tell a dead claimer's
+        // item from a live one's (INV-686).
+        assert_eq!(q.snapshot().items[0].status, ItemStatus::Running);
+        // The worker's claim recovers it (no claimer recorded = pre-INV-686
+        // writer = gone): no artifacts → re-queued, then claimed again.
         let claimed = q.claim_next().unwrap();
         assert_eq!(claimed.id, "swq-stuck");
+        assert_eq!(claimed.translate.status, TaskStatus::Running);
+        assert_eq!(claimed.claimed_by, Some(std::process::id()));
         let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]
-    fn open_promotes_interrupted_when_artifacts_exist() {
+    fn claim_promotes_interrupted_when_artifacts_exist() {
         let vault = tmp();
         let path = vault.join(QUEUE_REL);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1290,6 +1267,7 @@ mod tests {
                 created_at: 1,
                 started_at: Some(2),
                 finished_at: None,
+                claimed_by: None,
                 notify: true,
                 notify_sent: false,
                 priority: 0,
@@ -1297,12 +1275,14 @@ mod tests {
         };
         persist(&path, &file).unwrap();
         let q = SourceWorkQueue::open(&vault);
+        assert_eq!(q.snapshot().items[0].status, ItemStatus::Running);
+        // The claim recovers it; artifacts on disk promote it to Done, so
+        // nothing is left to claim.
+        assert!(q.claim_next().is_none());
         let snap = q.snapshot();
         assert_eq!(snap.items[0].status, ItemStatus::Done);
         assert_eq!(snap.items[0].translate.status, TaskStatus::Done);
         assert_eq!(snap.items[0].summarize.status, TaskStatus::Done);
-        // Gate free — next claim can proceed.
-        assert!(q.claim_next().is_none());
         let _ = std::fs::remove_dir_all(&vault);
     }
 
@@ -1340,6 +1320,33 @@ mod tests {
     }
 
     // ---- fail-back lifecycle (queue_failback-v1) ----
+
+    /// A PID that verifiably no longer runs: a reaped child of this process.
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    #[test]
+    fn a_live_claimer_keeps_its_item_even_for_a_new_worker() {
+        // The item's claimer (this process) is alive, so another worker's
+        // claim must not recover it: the gate stays closed.
+        let vault = tmp();
+        let first = SourceWorkQueue::open(&vault);
+        first.enqueue(enq("sha-mine", false)).unwrap();
+        first.enqueue(enq("sha-next", false)).unwrap();
+        first.claim_next().unwrap();
+        let second = SourceWorkQueue::open(&vault);
+        assert!(second.claim_next().is_none());
+        assert_eq!(second.snapshot().items.iter().filter(|i| i.status == ItemStatus::Running).count(), 1);
+        let _ = std::fs::remove_dir_all(&vault);
+    }
 
     fn enq(sha: &str, summarize: bool) -> EnqueueRequest {
         EnqueueRequest {
@@ -1596,31 +1603,71 @@ mod tests {
     }
 
     #[test]
-    fn stale_recovery_preserves_attempts_and_not_before() {
+    fn abandoned_running_recovery_preserves_attempts_and_not_before() {
         let vault = tmp();
         let q = SourceWorkQueue::open(&vault);
         let a = q.enqueue(enq("sha-stale", false)).unwrap();
         q.claim_next().unwrap();
         // Simulate: retried twice already (attempts=2 + future backoff), then
-        // the process lost track — item went stale while Running.
+        // the worker died with the item Running.
         let future = now_secs() + 3600;
         {
             let mut g = q.state.lock().unwrap_or_else(|p| p.into_inner());
             let it = g.items.iter_mut().find(|i| i.id == a.id).unwrap();
-            it.started_at = Some(now_secs() - STALE_RUNNING_SECS - 60);
             it.translate.attempts = 2;
             it.translate.not_before = Some(future);
+            it.claimed_by = Some(dead_pid());
             q.persist_tracked(&g).unwrap();
         }
-        let snap = q.snapshot(); // triggers recover_stale_running
-        let it = &snap.items[0];
+        // A reader never recovers: the item still shows Running.
+        assert_eq!(q.snapshot().items[0].status, ItemStatus::Running);
+        // The next worker's claim recovers it; the backoff keeps it unclaimed.
+        let worker = SourceWorkQueue::open(&vault);
+        assert!(worker.claim_next().is_none());
+        let it = &worker.snapshot().items[0];
         assert_eq!(it.status, ItemStatus::Queued);
         assert_eq!(it.translate.status, TaskStatus::Queued);
-        // Retry budget and backoff survive stale recovery — no infinite
-        // 12-minute retry loop, no pulled-forward not_before.
+        // Retry budget and backoff survive recovery — no free retries, no
+        // pulled-forward not_before.
         assert_eq!(it.translate.attempts, 2);
         assert_eq!(it.translate.not_before, Some(future));
-        assert!(q.claim_next().is_none());
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// docs/tla/SourceWorkQueue.tla, SourceWorkQueueLegacyDouble: a second
+    /// process opening the queue while the worker runs an item must not
+    /// requeue it, or the worker would run the same article twice.
+    #[test]
+    fn opening_the_queue_elsewhere_never_requeues_a_live_item() {
+        let vault = tmp();
+        let worker = SourceWorkQueue::open(&vault);
+        let a = worker.enqueue(enq("sha-live", false)).unwrap();
+        worker.claim_next().unwrap();
+
+        let other = SourceWorkQueue::open(&vault); // e.g. `ovp2 source-work backfill`
+        assert_eq!(other.snapshot().items[0].status, ItemStatus::Running);
+        worker.finish_task(&a.id, TaskKind::Translate, Ok(())).unwrap();
+        let _ = other.snapshot();
+
+        let done = worker.snapshot().items[0].clone();
+        assert_eq!(done.status, ItemStatus::Done);
+        assert!(worker.claim_next().is_none(), "the finished item is not claimed again");
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// SourceWorkQueueLegacyLost: the worker's skip-mark after a claim must not
+    /// persist a stale copy over another process's enqueue.
+    #[test]
+    fn skip_mark_keeps_a_concurrent_enqueue() {
+        let vault = tmp();
+        let worker = SourceWorkQueue::open(&vault);
+        let a = worker.enqueue(enq("sha-a", false)).unwrap();
+        worker.claim_next().unwrap();
+        let other = SourceWorkQueue::open(&vault);
+        other.enqueue(enq("sha-b", false)).unwrap();
+        worker.mark_task_skipped_if_not_wanted(&a.id);
+        let shas: Vec<_> = other.snapshot().items.iter().map(|i| i.sha256.clone()).collect();
+        assert!(shas.contains(&"sha-b".to_string()), "enqueue survived: {shas:?}");
         let _ = std::fs::remove_dir_all(&vault);
     }
 

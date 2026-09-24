@@ -715,10 +715,23 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
     }
     let body = serde_json::to_string_pretty(value)
         .map_err(|e| format!("serialize {}: {e}", path.display()))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))
+    // A tmp name unique to this process and call. With one fixed name, a
+    // second writer's `fs::write` (O_TRUNC by path) truncates the inode the
+    // first is still filling, and the first writer's rename then publishes a
+    // half-written file (docs/tla/RegistryWrite.tla, RegistryWriteLegacyTorn).
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.tmp-{}-{seq}", std::process::id()));
+    let result = std::fs::write(&tmp, body)
+        .map_err(|e| format!("write {}: {e}", tmp.display()))
+        .and_then(|()| {
+            std::fs::rename(&tmp, path)
+                .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))
+        });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -1672,6 +1685,38 @@ mod tests {
         };
         let (after, _) = tick_with(&reg, &state, dt("2026-07-12T09:30:00"), &runner);
         assert_eq!(after.runs["daily"].consecutive_failures, 2);
+    }
+
+    #[test]
+    fn concurrent_saves_never_publish_a_torn_registry() {
+        // Before per-call tmp names, two writers shared `schedule.json.tmp`:
+        // one's O_TRUNC emptied the file the other was about to rename.
+        let dir = tempfile::tempdir().unwrap();
+        let v = dir.path().to_path_buf();
+        let reg = default_registry("live", (9, 0), true, Some(40));
+        save_registry(&v, &reg).unwrap();
+        let writers: Vec<_> = (0..4)
+            .map(|_| {
+                let (v, reg) = (v.clone(), reg.clone());
+                std::thread::spawn(move || {
+                    for _ in 0..200 {
+                        save_registry(&v, &reg).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for _ in 0..400 {
+            assert!(load_registry(&v).unwrap().is_some(), "registry always parses");
+        }
+        for w in writers {
+            w.join().unwrap();
+        }
+        let leftovers: Vec<_> = std::fs::read_dir(v.join(".ovp"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "no tmp files left behind: {leftovers:?}");
     }
 
     #[test]
