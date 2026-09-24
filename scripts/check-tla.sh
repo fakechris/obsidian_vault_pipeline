@@ -12,6 +12,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 RUN_DIR=$ROOT/.run/tla/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$RUN_DIR"
 JAR=${TLA2TOOLS_JAR:-$ROOT/.run/tla/tla2tools-$TLA_VERSION.jar}
+# Absolute, so the path still resolves after the `cd` into docs/tla below.
+[[ $JAR == /* ]] || JAR=$PWD/$JAR
 # macOS ships a /usr/bin/java stub that fails without a JDK; prefer Homebrew's.
 if [[ -z ${JAVA:-} ]]; then
   JAVA=/opt/homebrew/opt/openjdk/bin/java
