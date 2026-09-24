@@ -167,6 +167,10 @@ process's enqueue.
 The fix: readers never write. Recovery runs in `claim_next`, under the lock, and
 only for items whose recorded claimer (`QueueItem::claimed_by`) is verifiably dead.
 This replaces the 12-minute timeout, which could requeue a live long-running item.
+Because recovery covers only dead claimers, the worker itself must never leave a
+claim `running`. codex review found three paths that could (a failed terminal
+write, an early `continue`, a panic outside the per-task `catch_unwind`); all three
+now reach a retried terminal write.
 A live claimer keeps the one-article-at-a-time gate closed.
 
 | Obligation | Code (`crates/ovp-memory/src/source_work_queue.rs`) | Test |
@@ -174,6 +178,8 @@ A live claimer keeps the one-article-at-a-time gate closed.
 | Opening the queue elsewhere never touches a live item | `SourceWorkQueue::open`, `snapshot` | `opening_the_queue_elsewhere_never_requeues_a_live_item` |
 | Recover only dead-claimer items, keeping the retry budget | `claim_next` + `recover_interrupted` | `abandoned_running_recovery_preserves_attempts_and_not_before`, `a_live_claimer_keeps_its_item_even_for_a_new_worker`, `claim_requeues_*`, `claim_promotes_*` |
 | Worker-side writes are locked and reload first | `mark_task_skipped_if_not_wanted`, `fail_still_running` | `skip_mark_keeps_a_concurrent_enqueue` |
+| A live worker never leaves its own claim `running` (recovery covers only dead claimers). Every exit path, early returns and panics included, retries the terminal write before the next claim | `ovp_server::source_work_queue_worker` / `run_source_work_item`, `fail_still_running` → `Result` | `fail_still_running_reports_a_failed_write_and_succeeds_on_retry` |
+| A reader opened mid-run keeps reloading | `maybe_reload_from_disk` | `a_reader_opened_mid_run_keeps_seeing_updates` |
 
 INV-686 item 3 (the daily heartbeat) was not modeled. The run lock is now held by
 `ovp-cli daily::run` until after the heartbeat's terminal write.
