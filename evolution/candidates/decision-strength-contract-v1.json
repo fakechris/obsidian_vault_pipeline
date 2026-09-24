@@ -1,0 +1,18 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "decision-strength-contract-v1",
+  "surface": "prompt",
+  "component": "prompt.decision_strength",
+  "base_version": "absent/v0",
+  "target_version": "strength-shadow/v1",
+  "hypothesis": "Independent typed class and sufficiency questions over verified claim citations produce only code-mapped claim IDs, preserve quote/revision provenance, and abstain when evidence context is incomplete; no generated rationale enters Crystal admission.",
+  "predicted_delta": {
+    "generated_claim_ids": {"target": 0},
+    "unverified_quote_as_supported": {"target": 0},
+    "generated_rationale_in_admission": {"target": 0}
+  },
+  "guardrails": {"accepted_without_quote": 0},
+  "eval_plan": {"replay_set": "crates/ovp-domain/src/decision_strength.rs", "soak": false},
+  "rollback": "Revert the domain contract; no admission gate or ledger has been changed.",
+  "ablation_required": false
+}
