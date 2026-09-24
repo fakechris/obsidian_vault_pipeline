@@ -3662,9 +3662,17 @@ fn source_work_queue_worker(state: Arc<AppState>) {
             continue;
         };
         let id = item.id.clone();
-        // Every exit path of the item (including the early error returns)
-        // falls through to the terminal cleanup below.
-        run_source_work_item(&state, item);
+        // Every exit path of the item (early error returns AND a panic
+        // anywhere in its lifecycle) falls through to the terminal cleanup
+        // below. A panic must not kill this thread either: the process would
+        // stay alive, keeping WORKER_LOCK and its claim, with no worker left
+        // to claim anything (INV-686).
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_source_work_item(&state, item)
+        }));
+        if run.is_err() {
+            eprintln!("source-work-queue: worker panicked on {id}; recording failure");
+        }
         // Ensure item status recomputed if both skipped oddly.
         state
             .source_work_queue
