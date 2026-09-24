@@ -153,15 +153,14 @@ fn persist(work_dir: &Path, trace: &Value) {
     ));
     let result = (|| -> std::io::Result<()> {
         std::fs::create_dir_all(work_dir)?;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
+        let mut file = options.open(&path)?;
         file.write_all(&serde_json::to_vec_pretty(trace)?)?;
         file.sync_all()
     })();
