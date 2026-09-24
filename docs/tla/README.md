@@ -63,7 +63,7 @@ protocol. It needs an MSRV bump and Windows CI validation.
 
 | Config | Models | Expect |
 |---|---|---|
-| `LedgerAppendPrefix.cfg` / `…PrefixConcurrent.cfg` | current code: one write per record, a `"\n"` prefix over a torn tail, reader skips torn fragments; serialized / concurrent appenders; SIGKILL + power loss | `LedgerParses`, `AckedDurable` hold (3 processes, exhaustive) |
+| `LedgerAppendPrefix.cfg` / `…PrefixConcurrent.cfg` | current code: one write per record; a torn tail is closed with `"\n"` + a marker line; the reader skips a torn line only if a marker follows it or it is the unterminated final segment; serialized / concurrent appenders; SIGKILL + power loss | `LedgerParses`, `AckedDurable` hold (3 processes, exhaustive) |
 | `LedgerAppend.cfg` / `…Concurrent.cfg` | code before INV-684: `writeln!` = two writes | `LedgerParses` violated |
 | `LedgerAppendOneWritePower.cfg` | single write alone, under power loss | `LedgerParses` violated, so the torn-tail handling is needed too |
 | `LedgerAppendOneWrite.cfg`, `LedgerAppendRepair.cfg` | alternatives considered (repair = truncate the torn tail; rejected because not every appender holds `run.lock`) | ok |
@@ -76,8 +76,17 @@ the whole ledger, and intake, daily and index stop.
 
 | Obligation | Code | Test |
 |---|---|---|
-| One write per record, never glued to a torn tail | `ovp_domain::jsonl::append_line` (used by `ovp_intake::vaultops::append_jsonl`, `crystal::patch::append_patch_record`); inline copy in `ovp_evolve::ledger::append_entry` | `concurrent_appenders_never_produce_malformed_lines`, `torn_tail_is_skipped_and_never_glued_to` |
-| Skip only truncated-prefix lines (serde `Category::Eof`); anything else fails loud | `ovp_domain::jsonl::parse_ledger` (used by `read_jsonl`, `read_patch_ledger`); inline in `ovp_evolve::ledger::read_entries` | `corrupt_line_that_is_not_a_prefix_still_fails` |
+| One write per record; a torn tail is closed with `TORN_MARKER`, never glued to | `ovp_domain::jsonl::append_line` (used by `ovp_intake::vaultops::append_jsonl`, `crystal::patch::append_patch_record`); plain-newline copy in `ovp_evolve::ledger::append_entry` | `concurrent_appenders_never_produce_malformed_lines`, `torn_tail_is_skipped_and_never_glued_to` |
+| Skip a torn line only with evidence (marker follows, or unterminated tail) | `ovp_domain::jsonl::parse_ledger` with `TornLines::Skip` (`read_jsonl`) | `terminated_truncated_line_without_marker_still_fails`, `corrupt_line_that_is_not_a_prefix_still_fails` |
+| Human corrections and the evolution decision record fail loud on any bad line | `TornLines::Fail` (`read_patch_ledger`); strict `ovp_evolve::ledger::read_entries` | `fail_policy_rejects_a_torn_line`, `human_patch_drift_skips_overlay_and_corrupt_ledger_fails_loudly` |
 
-Out of scope for this model: a power loss that persists garbage or NUL bytes rather
-than a prefix. That still fails the read loudly, as before.
+Why not skip every truncated line: codex review pointed out that serde's `Eof`
+classification alone does not prove a torn append (`{"candidate_id":` followed by a
+newline is also `Eof`). A sync tool truncating an acknowledged record looks the same
+too. Hence the marker as evidence, and the loud `Fail` policy for ledgers of human
+input.
+
+The model does not represent the `Fail` readers: those ledgers deliberately stop
+under a power-loss tear, as before, and the operator deletes the torn line (plus its
+marker line). Also out of scope: a power loss that persists garbage or NUL bytes
+rather than a prefix. That still fails the read loudly.

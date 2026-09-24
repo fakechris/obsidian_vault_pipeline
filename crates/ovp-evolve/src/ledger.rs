@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -62,10 +62,12 @@ pub enum LedgerError {
 
 /// Append a ledger entry to the JSONL file.
 ///
-/// Same rules as `ovp_domain::jsonl` (this crate does not depend on
-/// ovp-domain): the record and its `"\n"` go out in ONE write, since
-/// `writeln!` would issue two and let a crash or a concurrent appender leave a
-/// malformed line; and a torn tail (not ending in `"\n"`) is never glued to.
+/// The record and its `"\n"` go out in ONE write: `writeln!` would issue two
+/// and let a crash or a concurrent appender leave a malformed line. A torn
+/// tail (not ending in `"\n"`) gets its own line so the new record is never
+/// glued to it. Mirrors `ovp_domain::jsonl::append_line`, which this crate
+/// cannot use without depending on ovp-domain. The reader stays strict: this
+/// is the append-only decision record, so a torn line fails loud (AGENTS.md).
 pub fn append_entry(path: &Path, entry: &LedgerEntry) -> Result<(), LedgerError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -96,24 +98,26 @@ fn ends_with_newline_or_empty(path: &Path) -> std::io::Result<bool> {
     Ok(last[0] == b'\n')
 }
 
-/// Read all ledger entries from a JSONL file. A line that is a truncated JSON
-/// prefix (an append torn by power loss, never acknowledged) is skipped; any
-/// other malformed line is an error.
+/// Read all ledger entries from a JSONL file.
 pub fn read_entries(path: &Path) -> Result<Vec<LedgerEntry>, LedgerError> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let raw = std::fs::read(path)?;
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
     let mut entries = Vec::new();
-    for (idx, line) in raw.split(|b| *b == b'\n').enumerate() {
-        if line.iter().all(u8::is_ascii_whitespace) {
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_slice::<LedgerEntry>(line) {
-            Ok(entry) => entries.push(entry),
-            Err(e) if e.classify() == serde_json::error::Category::Eof => {}
-            Err(source) => return Err(LedgerError::JsonLine { line: idx + 1, source }),
-        }
+        let entry: LedgerEntry =
+            serde_json::from_str(trimmed).map_err(|e| LedgerError::JsonLine {
+                line: idx + 1,
+                source: e,
+            })?;
+        entries.push(entry);
     }
     Ok(entries)
 }

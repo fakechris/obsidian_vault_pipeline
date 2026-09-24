@@ -138,12 +138,15 @@ pub fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(format!("reading {}: {e}", path.display())),
     };
-    ovp_domain::jsonl::parse_ledger(&raw, |line| {
-        eprintln!(
-            "ovp: skipping torn record at {} line {line} (an append interrupted by power loss)",
-            path.display()
-        )
-    })
+    ovp_domain::jsonl::parse_ledger(
+        &raw,
+        ovp_domain::jsonl::TornLines::Skip(|line| {
+            eprintln!(
+                "ovp: skipping torn record at {} line {line} (an append interrupted by power loss)",
+                path.display()
+            )
+        }),
+    )
     .map_err(|b| {
         format!("ledger {} line {}: malformed record: {}", path.display(), b.line, b.error)
     })

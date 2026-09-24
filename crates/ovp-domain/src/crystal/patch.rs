@@ -743,12 +743,9 @@ pub fn read_patch_ledger(path: &Path) -> Result<Vec<HumanPatchRecord>, String> {
     }
     let raw = std::fs::read(path)
         .map_err(|e| format!("reading patch ledger {}: {e}", path.display()))?;
-    crate::jsonl::parse_ledger(&raw, |line| {
-        eprintln!(
-            "ovp: skipping torn patch record at {}:{line} (an append interrupted by power loss)",
-            path.display()
-        )
-    })
+    // Human corrections fail loud on ANY bad line, a torn one included: a
+    // truncated record may be an acknowledged correction cut by a sync tool.
+    crate::jsonl::parse_ledger(&raw, crate::jsonl::TornLines::<fn(usize)>::Fail)
     .map_err(|b| format!("{}:{}: malformed patch record: {}", path.display(), b.line, b.error))
 }
 

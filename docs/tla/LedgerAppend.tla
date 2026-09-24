@@ -26,10 +26,10 @@
 (*        the reader ignores an unterminated final line (never acked).     *)
 (* Mode = "one_write_prefix" -- fix A + B' (the implemented fix): the    *)
 (*        appender reads the last byte and, if it is not "\n", prefixes   *)
-(*        its record with "\n" (no truncation, so no lock needed); the    *)
-(*        reader skips a line that is a truncated JSON prefix (serde       *)
-(*        Category::Eof) wherever it sits -- only a torn, never-acked      *)
-(*        write produces one.                                              *)
+(*        its record with "\n" + a marker line (no truncation, so no lock *)
+(*        needed). The reader skips a torn line ONLY when it is the final  *)
+(*        unterminated segment or is directly followed by a marker line;   *)
+(*        any other truncated line still fails (it may be real corruption).*)
 (* Serial = TRUE  -- appenders are serialized (run.lock works as intended; *)
 (*                   a crashed holder's lock is reclaimed).                *)
 (* Serial = FALSE -- concurrent appenders (RunLock double-hold race, or    *)
@@ -43,6 +43,7 @@ CONSTANTS Procs, Mode, Serial, PowerLoss
 
 NL   == "NL"
 Torn == "torn"
+Mark == "mark"   \* {"ovp_jsonl":"torn-line-above"}
 
 VARIABLES file, durable, pc, lockHolder, acked, powerLost, needNL
 vars == <<file, durable, pc, lockHolder, acked, powerLost, needNL>>
@@ -78,7 +79,12 @@ StrictParses(f) == \A i \in Bounds(f) : OkLine(LineAfter(f, i))
 TolerantParses(f) == \A i \in Bounds(f) : Terminated(f, i) => OkLine(LineAfter(f, i))
 \* fix B' reader: a line that is a torn record fragment is skipped anywhere.
 PrefixTolerantParses(f) == \A i \in Bounds(f) :
-    LET l == LineAfter(f, i) IN OkLine(l) \/ l = <<Torn>>
+    LET l == LineAfter(f, i) IN
+        \/ OkLine(l)
+        \/ l = <<Mark>>
+        \/ /\ l = <<Torn>>
+           /\ \/ ~Terminated(f, i)
+              \/ LineAfter(f, NextNL(f, i)) = <<Mark>>
 Parses(f) == CASE Mode = "one_write_repair" -> TolerantParses(f)
                [] Mode = "one_write_prefix" -> PrefixTolerantParses(f)
                [] OTHER                     -> StrictParses(f)
@@ -119,7 +125,7 @@ Write(p) ==
     /\ IF Mode = "two_writes"
          THEN /\ file' = Append(file, p)            \* write_all(line)
               /\ Goto(p, "newline")
-         ELSE /\ file' = file \o (IF needNL[p] THEN <<NL, p, NL>> ELSE <<p, NL>>)
+         ELSE /\ file' = file \o (IF needNL[p] THEN <<NL, Mark, NL, p, NL>> ELSE <<p, NL>>)
               /\ Goto(p, "sync")
     /\ UNCHANGED <<durable, lockHolder, acked, powerLost, needNL>>
 
