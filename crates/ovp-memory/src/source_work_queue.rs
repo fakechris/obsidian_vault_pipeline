@@ -1669,7 +1669,8 @@ mod tests {
         worker.enqueue(enq("sha-later", false)).unwrap();
         let snap = reader.snapshot();
         assert_eq!(snap.items.len(), 2, "later enqueue visible");
-        assert_eq!(snap.items[0].status, ItemStatus::Done, "finish visible");
+        let first = snap.items.iter().find(|i| i.id == a.id).unwrap();
+        assert_eq!(first.status, ItemStatus::Done, "finish visible");
         let _ = std::fs::remove_dir_all(&vault);
     }
 
