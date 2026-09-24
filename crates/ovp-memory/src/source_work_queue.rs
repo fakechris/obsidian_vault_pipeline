@@ -232,10 +232,16 @@ impl SourceWorkQueue {
 
     /// After a worker finishes an item (or panics), force any still-Running
     /// tasks on `id` into Failed so the serial gate cannot stick.
-    pub fn fail_still_running(&self, id: &str, reason: &str) {
+    ///
+    /// Returns `Err` when the terminal state could not be written (the write
+    /// lock timed out, or the persist failed). The worker must retry until
+    /// `Ok` before claiming again. Recovery only covers DEAD claimers, so an
+    /// item left `running` by this live process would close the
+    /// one-article gate for good.
+    pub fn fail_still_running(&self, id: &str, reason: &str) -> Result<(), String> {
         // Locked + reload: persisting a stale in-memory copy would erase a
         // concurrent enqueue/cancel from another process.
-        let _ = self.with_write_lock(|| {
+        self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.reload_from_disk(&mut g);
         let Some(item) = g.items.iter_mut().find(|i| i.id == id) else {
@@ -265,7 +271,7 @@ impl SourceWorkQueue {
             self.persist_tracked(&g)?;
         }
         Ok(())
-        });
+        })
     }
 
     /// Read-only view for the portal. Never recovers or persists (see `open`).
@@ -1039,11 +1045,16 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn tmp() -> PathBuf {
+        // The counter matters: macOS SystemTime has microsecond resolution, so
+        // two parallel tests could get the same "nanos" and delete each
+        // other's vault (a flaky failure seen while adding INV-686 tests).
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let n = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let p = std::env::temp_dir().join(format!("ovp-swq-{n}"));
+        let p = std::env::temp_dir().join(format!("ovp-swq-{n}-{seq}"));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
@@ -1671,6 +1682,24 @@ mod tests {
         assert_eq!(snap.items.len(), 2, "later enqueue visible");
         let first = snap.items.iter().find(|i| i.id == a.id).unwrap();
         assert_eq!(first.status, ItemStatus::Done, "finish visible");
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// codex P1 on INV-686: when the terminal write fails (write lock busy),
+    /// `fail_still_running` must report it so the worker retries instead of
+    /// moving on and leaving its own live claim `running` forever.
+    #[test]
+    fn fail_still_running_reports_a_failed_write_and_succeeds_on_retry() {
+        let vault = tmp();
+        let q = SourceWorkQueue::open(&vault);
+        let a = q.enqueue(enq("sha-stuck-live", false)).unwrap();
+        q.claim_next().unwrap();
+        let held = ovp_intake::RunLock::acquire_named(&vault, QUEUE_WRITE_LOCK).unwrap();
+        assert!(q.fail_still_running(&a.id, "worker done").is_err());
+        assert_eq!(q.snapshot().items[0].status, ItemStatus::Running);
+        drop(held);
+        q.fail_still_running(&a.id, "worker done").unwrap();
+        assert_ne!(q.snapshot().items[0].status, ItemStatus::Running);
         let _ = std::fs::remove_dir_all(&vault);
     }
 

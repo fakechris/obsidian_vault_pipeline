@@ -3813,9 +3813,16 @@ fn source_work_queue_worker(state: Arc<AppState>) {
             .mark_task_skipped_if_not_wanted(&id);
         // Belt-and-suspenders: never leave a claimed article as `running`
         // after the worker moves on (panic / missing finish_task / etc.).
-        state
+        // Do NOT move on until that terminal state is on disk. Recovery only
+        // covers dead claimers, so an item this live process leaves `running`
+        // would close claim_next's one-article gate for good (INV-686).
+        while let Err(e) = state
             .source_work_queue
-            .fail_still_running(&id, "worker finished without task result");
+            .fail_still_running(&id, "worker finished without task result")
+        {
+            eprintln!("source-work-queue: cannot record the end of {id} yet ({e}); retrying");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
     }
 }
 
