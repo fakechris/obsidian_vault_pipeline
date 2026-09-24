@@ -372,15 +372,31 @@ impl SessionStore {
         if held.contains(&key) {
             return Err(StoreError::SessionBusy { holder_pid: std::process::id() });
         }
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(fs::TryLockError::WouldBlock) => {
-                return Err(StoreError::SessionBusy {
-                    holder_pid: read_holder_pid(&self.lock_path),
-                });
-            }
-            Err(fs::TryLockError::Error(e)) => {
-                return Err(StoreError::Io(format!("lock {}: {e}", self.lock_path.display())));
+        // Retry WouldBlock briefly. A flock lives on the open file
+        // DESCRIPTION: when any thread of this process spawns a child, the
+        // child holds a copy of every fd from fork until exec closes the
+        // CLOEXEC ones. A lock we just released stays held through that copy
+        // for those microseconds, which gives a spurious "busy". The desktop
+        // spawns sidecars while server threads take session locks. A real
+        // holder (another turn) keeps the lock for seconds, so ~50ms of
+        // retries only absorbs the spawn window. It never admits a second
+        // holder.
+        let mut attempt = 0;
+        loop {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(fs::TryLockError::WouldBlock) if attempt < 10 => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(fs::TryLockError::WouldBlock) => {
+                    return Err(StoreError::SessionBusy {
+                        holder_pid: read_holder_pid(&self.lock_path),
+                    });
+                }
+                Err(fs::TryLockError::Error(e)) => {
+                    return Err(StoreError::Io(format!("lock {}: {e}", self.lock_path.display())));
+                }
             }
         }
         // Display only: correctness rests on the OS lock, not on this PID.
