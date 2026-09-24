@@ -1,0 +1,7 @@
+# module  config                     expect
+# expect: ok = no error; any other word = that invariant MUST be violated
+# (negative controls: prove the model still detects the bug / reaches the path).
+RunLock   RunLock.cfg                ok
+RunLock   RunLockLegacy.cfg          Mutex
+RunLock   RunLockSanityReclaim.cfg   NeverReclaims
+RunLock   RunLockSanityClear.cfg     NeverClearsGuard
