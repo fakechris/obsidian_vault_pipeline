@@ -5,3 +5,13 @@ RunLock   RunLock.cfg                ok
 RunLock   RunLockLegacy.cfg          Mutex
 RunLock   RunLockSanityReclaim.cfg   NeverReclaims
 RunLock   RunLockSanityClear.cfg     NeverClearsGuard
+LedgerAppend  LedgerAppendPrefix.cfg                ok
+LedgerAppend  LedgerAppendPrefixConcurrent.cfg      ok
+LedgerAppend  LedgerAppend.cfg                      LedgerParses
+LedgerAppend  LedgerAppendConcurrent.cfg            LedgerParses
+LedgerAppend  LedgerAppendOneWritePower.cfg         LedgerParses
+LedgerAppend  LedgerAppendOneWrite.cfg              ok
+LedgerAppend  LedgerAppendRepair.cfg                ok
+LedgerAppend  LedgerAppendSanityNeverPowerLoss.cfg  NeverPowerLoss
+LedgerAppend  LedgerAppendSanityNeverCrashMid.cfg   NeverCrashMid
+LedgerAppend  LedgerAppendSanityNeverTwoAcked.cfg   NeverTwoAcked

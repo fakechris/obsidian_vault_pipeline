@@ -89,7 +89,8 @@ pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> 
         }
         Err(e) => return Err(format!("opening {}: {e}", path.display())),
     };
-    writeln!(f, "{line}").map_err(|e| format!("appending to {}: {e}", path.display()))?;
+    ovp_domain::jsonl::append_line(&mut f, path, &line)
+        .map_err(|e| format!("appending to {}: {e}", path.display()))?;
     f.sync_data().map_err(|e| format!("syncing {}: {e}", path.display()))?;
     if created {
         sync_dir(parent)?;
@@ -128,25 +129,24 @@ fn ledger_parent(path: &Path) -> &Path {
     }
 }
 
-/// Read a whole JSONL ledger. Missing file → empty (first run); a malformed
+/// Read a whole JSONL ledger. Missing file → empty (first run). A torn final
+/// record left by a power loss is skipped with a warning; any other malformed
 /// line is a hard error naming the line.
 pub fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, String> {
-    let raw = match std::fs::read_to_string(path) {
+    let raw = match std::fs::read(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(format!("reading {}: {e}", path.display())),
     };
-    let mut records = Vec::new();
-    for (i, line) in raw.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let rec: T = serde_json::from_str(line).map_err(|e| {
-            format!("ledger {} line {}: malformed record: {e}", path.display(), i + 1)
-        })?;
-        records.push(rec);
-    }
-    Ok(records)
+    ovp_domain::jsonl::parse_ledger(&raw, |line| {
+        eprintln!(
+            "ovp: skipping torn record at {} line {line} (an append interrupted by power loss)",
+            path.display()
+        )
+    })
+    .map_err(|b| {
+        format!("ledger {} line {}: malformed record: {}", path.display(), b.line, b.error)
+    })
 }
 
 /// One `OVP_RULES.md` write-log event for `60-Logs/pipeline.jsonl`. The key is

@@ -58,3 +58,26 @@ Out of scope for this model:
 Replacing the PID files with an OS lock (`File::try_lock`, stable since Rust 1.89, on a
 lock file that is never deleted) would remove both limitations and the whole reclaim
 protocol. It needs an MSRV bump and Windows CI validation.
+
+### `LedgerAppend.tla` — JSONL ledgers always parse, and acknowledged appends survive
+
+| Config | Models | Expect |
+|---|---|---|
+| `LedgerAppendPrefix.cfg` / `…PrefixConcurrent.cfg` | current code: one write per record, a `"\n"` prefix over a torn tail, reader skips torn fragments; serialized / concurrent appenders; SIGKILL + power loss | `LedgerParses`, `AckedDurable` hold (3 processes, exhaustive) |
+| `LedgerAppend.cfg` / `…Concurrent.cfg` | code before INV-684: `writeln!` = two writes | `LedgerParses` violated |
+| `LedgerAppendOneWritePower.cfg` | single write alone, under power loss | `LedgerParses` violated, so the torn-tail handling is needed too |
+| `LedgerAppendOneWrite.cfg`, `LedgerAppendRepair.cfg` | alternatives considered (repair = truncate the torn tail; rejected because not every appender holds `run.lock`) | ok |
+| `LedgerAppendSanity*.cfg` | reachability controls | power loss, a mid-append crash, and two acked appends all happen |
+
+**Bug found (INV-684).** `writeln!(f, "{line}")` on an unbuffered `File` issues two
+`write(2)` calls: the record, then `"\n"`. A SIGKILL between them, or a concurrent
+appender landing in between, leaves a `}{` or blank line. `read_jsonl` then fails
+the whole ledger, and intake, daily and index stop.
+
+| Obligation | Code | Test |
+|---|---|---|
+| One write per record, never glued to a torn tail | `ovp_domain::jsonl::append_line` (used by `ovp_intake::vaultops::append_jsonl`, `crystal::patch::append_patch_record`); inline copy in `ovp_evolve::ledger::append_entry` | `concurrent_appenders_never_produce_malformed_lines`, `torn_tail_is_skipped_and_never_glued_to` |
+| Skip only truncated-prefix lines (serde `Category::Eof`); anything else fails loud | `ovp_domain::jsonl::parse_ledger` (used by `read_jsonl`, `read_patch_ledger`); inline in `ovp_evolve::ledger::read_entries` | `corrupt_line_that_is_not_a_prefix_still_fails` |
+
+Out of scope for this model: a power loss that persists garbage or NUL bytes rather
+than a prefix. That still fails the read loudly, as before.

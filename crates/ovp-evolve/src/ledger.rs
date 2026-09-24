@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -61,6 +61,11 @@ pub enum LedgerError {
 }
 
 /// Append a ledger entry to the JSONL file.
+///
+/// Same rules as `ovp_domain::jsonl` (this crate does not depend on
+/// ovp-domain): the record and its `"\n"` go out in ONE write, since
+/// `writeln!` would issue two and let a crash or a concurrent appender leave a
+/// malformed line; and a torn tail (not ending in `"\n"`) is never glued to.
 pub fn append_entry(path: &Path, entry: &LedgerEntry) -> Result<(), LedgerError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -70,30 +75,45 @@ pub fn append_entry(path: &Path, entry: &LedgerEntry) -> Result<(), LedgerError>
         .append(true)
         .open(path)?;
     let line = serde_json::to_string(entry).map_err(|e| LedgerError::JsonLine { line: 0, source: e })?;
-    writeln!(file, "{line}")?;
+    let mut buf = Vec::with_capacity(line.len() + 2);
+    if !ends_with_newline_or_empty(path)? {
+        buf.push(b'\n');
+    }
+    buf.extend_from_slice(line.as_bytes());
+    buf.push(b'\n');
+    file.write_all(&buf)?;
     Ok(())
 }
 
-/// Read all ledger entries from a JSONL file.
+fn ends_with_newline_or_empty(path: &Path) -> std::io::Result<bool> {
+    let mut f = File::open(path)?;
+    if f.metadata()?.len() == 0 {
+        return Ok(true);
+    }
+    f.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    f.read_exact(&mut last)?;
+    Ok(last[0] == b'\n')
+}
+
+/// Read all ledger entries from a JSONL file. A line that is a truncated JSON
+/// prefix (an append torn by power loss, never acknowledged) is skipped; any
+/// other malformed line is an error.
 pub fn read_entries(path: &Path) -> Result<Vec<LedgerEntry>, LedgerError> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
+    let raw = std::fs::read(path)?;
     let mut entries = Vec::new();
-    for (idx, line) in reader.lines().enumerate() {
-        let line = line?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+    for (idx, line) in raw.split(|b| *b == b'\n').enumerate() {
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let entry: LedgerEntry =
-            serde_json::from_str(trimmed).map_err(|e| LedgerError::JsonLine {
-                line: idx + 1,
-                source: e,
-            })?;
-        entries.push(entry);
+        match serde_json::from_slice::<LedgerEntry>(line) {
+            Ok(entry) => entries.push(entry),
+            Err(e) if e.classify() == serde_json::error::Category::Eof => {}
+            Err(source) => return Err(LedgerError::JsonLine { line: idx + 1, source }),
+        }
     }
     Ok(entries)
 }
