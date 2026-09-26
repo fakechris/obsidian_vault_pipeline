@@ -250,7 +250,10 @@ impl RunLock {
                 .map_err(|e| format!("creating {}: {e}", parent.display()))?;
         }
         match Self::try_create(&path) {
-            Ok(lock) => Ok(lock),
+            Ok(lock) => {
+                Self::clear_stale_guard(&path);
+                Ok(lock)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Stale-lock recovery: release is Drop-only, so a crash or
                 // Ctrl-C (default SIGINT runs no destructors) strands the lock
@@ -265,6 +268,19 @@ impl RunLock {
                     && let Some(lock) = Self::reclaim_under_guard(&path) {
                         return Ok(lock);
                     }
+                // Only when BOTH owners are dead: a live run.lock with a stale
+                // guard is reachable (a reclaimer lost the create race, then
+                // died holding the guard), and telling the operator to delete
+                // a live lock would break mutual exclusion.
+                let guard = Self::guard_path(&path);
+                if Self::owner_is_dead(&path) && Self::owner_is_dead(&guard) {
+                    return Err(format!(
+                        "a previous OVP run died while reclaiming a stale lock, leaving \
+                         {} and {}; if no run is active, delete both files and retry",
+                        path.display(),
+                        guard.display()
+                    ));
+                }
                 Err(format!(
                     "another OVP run appears to be in progress (lock file {}); \
                      if no run is active, delete the lock file and retry",
@@ -286,7 +302,7 @@ impl RunLock {
     /// `None` when the guard is contested or the lock turned out to be fresh
     /// on the re-check — the caller falls back to the in-progress error.
     fn reclaim_under_guard(path: &Path) -> Option<Self> {
-        let guard = path.with_extension("lock.reclaim");
+        let guard = Self::guard_path(path);
         if !Self::claim_guard(&guard) {
             return None;
         }
@@ -306,28 +322,37 @@ impl RunLock {
         lock
     }
 
-    /// Atomically claim the reclaim guard (PID-stamped like the lock). A guard
-    /// stranded by a crash mid-reclaim is itself reclaimed by the same
-    /// dead-owner rule: removal + ONE `create_new` retry — the create is
-    /// atomic, so exactly one racer wins it.
+    fn guard_path(lock: &Path) -> PathBuf {
+        lock.with_extension("lock.reclaim")
+    }
+
+    /// Atomically claim the reclaim guard (PID-stamped like the lock). A
+    /// guard that already exists is NEVER taken over here, even when its
+    /// owner is dead: `remove_file` deletes by path, so two racers that both
+    /// judged it stale could each delete the other's fresh guard and both
+    /// enter the reclaim section — and then both reclaim run.lock
+    /// (docs/tla/RunLock.tla, `RunLockLegacy.cfg`). A stale guard is cleared
+    /// only by a process that holds the lock ([`clear_stale_guard`]).
     fn claim_guard(guard: &Path) -> bool {
-        fn stamp(mut f: std::fs::File) -> bool {
-            let _ = writeln!(f, "{}", std::process::id());
-            true
-        }
         match OpenOptions::new().write(true).create_new(true).open(guard) {
-            Ok(f) => stamp(f),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                if !Self::owner_is_dead(guard) {
-                    return false;
-                }
-                let _ = std::fs::remove_file(guard);
-                match OpenOptions::new().write(true).create_new(true).open(guard) {
-                    Ok(f) => stamp(f),
-                    Err(_) => false,
-                }
+            Ok(mut f) => {
+                let _ = writeln!(f, "{}", std::process::id());
+                true
             }
             Err(_) => false,
+        }
+    }
+
+    /// Called right after winning run.lock through the ordinary `create_new`
+    /// path. A guard left by a process that died mid-reclaim would otherwise
+    /// wait to block the next stale-lock recovery. Safe to delete by path:
+    /// with [`claim_guard`] never taking over a guard, a stale guard file is
+    /// replaced only after someone deletes it, and only a lock holder does —
+    /// of which there is one.
+    fn clear_stale_guard(lock: &Path) {
+        let guard = Self::guard_path(lock);
+        if Self::owner_is_dead(&guard) {
+            let _ = std::fs::remove_file(&guard);
         }
     }
 
@@ -542,19 +567,65 @@ mod tests {
     }
 
     #[test]
-    fn run_lock_recovers_from_a_stranded_reclaim_guard() {
+    fn run_lock_refuses_to_take_over_a_stranded_reclaim_guard() {
         // Crash DURING a previous reclaim: both the lock and the reclaim
-        // guard are stranded with dead owners. Acquire must recover through
-        // both layers (guard reclaimed by the same dead-owner rule).
+        // guard are stranded with dead owners. Taking the guard over is what
+        // let two racers both hold run.lock (docs/tla/RunLockLegacy.cfg), so
+        // acquire refuses and names BOTH files for the operator.
         let dir = tempfile::tempdir().unwrap();
         let dead_pid = reaped_dead_pid();
         let lock_path = dir.path().join(".ovp/run.lock");
+        let guard_path = lock_path.with_extension("lock.reclaim");
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         std::fs::write(&lock_path, format!("{dead_pid}\n")).unwrap();
-        std::fs::write(lock_path.with_extension("lock.reclaim"), format!("{dead_pid}\n")).unwrap();
+        std::fs::write(&guard_path, format!("{dead_pid}\n")).unwrap();
 
-        let _lock = RunLock::acquire(dir.path()).expect("recovers through stale lock AND guard");
-        assert!(!lock_path.with_extension("lock.reclaim").exists(), "guard cleaned up");
+        let err = RunLock::acquire(dir.path()).expect_err("stranded guard is not taken over");
+        assert!(err.contains("run.lock.reclaim") && err.contains("delete both"), "got: {err}");
+        assert!(lock_path.exists() && guard_path.exists(), "nothing deleted");
+
+        // Following the instruction recovers.
+        std::fs::remove_file(&lock_path).unwrap();
+        std::fs::remove_file(&guard_path).unwrap();
+        RunLock::acquire(dir.path()).expect("recovers after manual deletion");
+    }
+
+    #[test]
+    fn run_lock_holder_clears_a_stale_reclaim_guard() {
+        // A guard stranded while run.lock itself is free (the dead reclaimer
+        // had already released or never created the lock) is cleared by the
+        // next ordinary acquirer, so it cannot block a later stale-lock
+        // recovery. A guard with a LIVE owner is left alone.
+        let dir = tempfile::tempdir().unwrap();
+        let guard_path = dir.path().join(".ovp/run.lock.reclaim");
+        std::fs::create_dir_all(guard_path.parent().unwrap()).unwrap();
+
+        std::fs::write(&guard_path, format!("{}\n", reaped_dead_pid())).unwrap();
+        drop(RunLock::acquire(dir.path()).expect("free lock"));
+        assert!(!guard_path.exists(), "stale guard cleared by the holder");
+
+        std::fs::write(&guard_path, format!("{}\n", std::process::id())).unwrap();
+        drop(RunLock::acquire(dir.path()).expect("free lock"));
+        assert!(guard_path.exists(), "live guard untouched");
+    }
+
+    #[test]
+    fn run_lock_live_owner_with_stale_guard_is_plain_busy() {
+        // A live run.lock plus a dead-owner guard must NOT produce the
+        // "delete both files" instruction: that lock belongs to a running process.
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join(".ovp/run.lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        std::fs::write(&lock_path, format!("{}\n", std::process::id())).unwrap();
+        std::fs::write(
+            lock_path.with_extension("lock.reclaim"),
+            format!("{}\n", reaped_dead_pid()),
+        )
+        .unwrap();
+
+        let err = RunLock::acquire(dir.path()).expect_err("live owner must refuse");
+        assert!(!err.contains("delete both"), "got: {err}");
+        assert!(err.contains("in progress"), "got: {err}");
     }
 
     #[test]
