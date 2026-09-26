@@ -13,6 +13,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+/// A token unique to this process run: pid + start time (nanos), taken once.
+/// Stored on every claim so recovery can tell "this process's own claim" from
+/// "a claim by an earlier process that happened to have the same PID".
+pub fn process_claim_token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{}-{nanos}", std::process::id())
+    })
+}
+
 const QUEUE_SCHEMA: &str = "ovp.source-work-queue/v1";
 const QUEUE_REL: &str = ".ovp/source-work-queue.json";
 /// Cross-process exclusive lock for queue file mutations (enqueue/cancel/…).
@@ -104,11 +118,14 @@ pub struct QueueItem {
     pub started_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<u64>,
-    /// PID of the worker that claimed this item (set by `claim_next`). A
-    /// `running` item is recovered only when this process is gone; `None`
-    /// (written by a pre-INV-686 binary) counts as gone.
+    /// PID of the worker that claimed this item (set by `claim_next`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<u32>,
+    /// Per-process claim token of that worker ([`process_claim_token`]).
+    /// Unlike the PID, it is never reused: after a reboot, or when a new
+    /// worker is handed the dead claimer's PID, the token still differs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_token: Option<String>,
     /// Client should surface a desktop/browser notification when terminal.
     #[serde(default = "default_true")]
     pub notify: bool,
@@ -416,6 +433,7 @@ impl SourceWorkQueue {
             started_at: None,
             finished_at: None,
             claimed_by: None,
+                claim_token: None,
             notify: req.notify,
             notify_sent: false,
             priority: req.priority,
@@ -544,9 +562,18 @@ impl SourceWorkQueue {
         self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.reload_from_disk(&mut g);
+        // Abandoned = not this process's own claim, and either (a) this
+        // process is the elected worker (the WORKER_LOCK holder, so no other
+        // live worker exists and the claimer must be gone, whatever its PID
+        // now names) or (b) the claimer's PID is verifiably dead. (a) is what
+        // survives PID reuse, e.g. after a reboot. This process's own claims
+        // are closed by `fail_still_running`, never recovered here.
+        let me = process_claim_token();
+        let i_am_worker = self.worker_owner_is_this_process();
         let recovered = recover_interrupted(&self.vault_root, &mut g, |item| {
-            item.claimed_by
-                .is_none_or(|pid| ovp_intake::probe_pid(pid) == Some(false))
+            item.claim_token.as_deref() != Some(me)
+                && (i_am_worker
+                    || item.claimed_by.is_none_or(|pid| ovp_intake::probe_pid(pid) == Some(false)))
         });
         if recovered > 0 {
             self.persist_tracked(&g)?;
@@ -562,6 +589,7 @@ impl SourceWorkQueue {
         item.status = ItemStatus::Running;
         item.started_at = Some(now_secs());
         item.claimed_by = Some(std::process::id());
+        item.claim_token = Some(process_claim_token().to_string());
         if item.translate.wanted && item.translate.status == TaskStatus::Queued {
             item.translate.status = TaskStatus::Running;
         }
@@ -1227,6 +1255,7 @@ mod tests {
                 started_at: Some(2),
                 finished_at: None,
                 claimed_by: None,
+                claim_token: None,
                 notify: true,
                 notify_sent: false,
                 priority: 0,
@@ -1285,6 +1314,7 @@ mod tests {
                 started_at: Some(2),
                 finished_at: None,
                 claimed_by: None,
+                claim_token: None,
                 notify: true,
                 notify_sent: false,
                 priority: 0,
@@ -1348,6 +1378,32 @@ mod tests {
         let pid = child.id();
         child.wait().unwrap();
         pid
+    }
+
+    /// CodeRabbit on #506: a crashed claimer's PID can be reused (after a
+    /// reboot, possibly by the new worker itself). The elected worker recovers
+    /// any claim that is not its own, whatever the recorded PID now names.
+    #[test]
+    fn elected_worker_recovers_a_claim_whose_pid_was_reused() {
+        let vault = tmp();
+        let q = SourceWorkQueue::open(&vault);
+        let a = q.enqueue(enq("sha-reused", false)).unwrap();
+        q.claim_next().unwrap();
+        {
+            // Claimed by an EARLIER process run that had our very PID.
+            let mut g = q.state.lock().unwrap_or_else(|p| p.into_inner());
+            let it = g.items.iter_mut().find(|i| i.id == a.id).unwrap();
+            it.claim_token = Some(format!("{}-earlier-run", std::process::id()));
+            q.persist_tracked(&g).unwrap();
+        }
+        // Not the elected worker: the PID looks alive, so hands off.
+        assert!(q.claim_next().is_none());
+        // Elected worker: recover and re-claim.
+        let _worker = ovp_intake::RunLock::acquire_named(&vault, WORKER_LOCK).unwrap();
+        let again = q.claim_next().expect("recovered and claimed");
+        assert_eq!(again.id, a.id);
+        assert_eq!(again.claim_token.as_deref(), Some(process_claim_token()));
+        let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]
@@ -1633,7 +1689,10 @@ mod tests {
             let it = g.items.iter_mut().find(|i| i.id == a.id).unwrap();
             it.translate.attempts = 2;
             it.translate.not_before = Some(future);
-            it.claimed_by = Some(dead_pid());
+            // Claimed by another, now-dead process: its PID and its token.
+            let pid = dead_pid();
+            it.claimed_by = Some(pid);
+            it.claim_token = Some(format!("{pid}-dead-run"));
             q.persist_tracked(&g).unwrap();
         }
         // A reader never recovers: the item still shows Running.

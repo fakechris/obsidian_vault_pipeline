@@ -3699,51 +3699,36 @@ fn run_source_work_item(
     item: ovp_memory::source_work_queue::QueueItem,
 ) {
     use ovp_memory::source_work_queue::{TaskKind, TaskStatus};
-    let Some(factory) = state.ask_client.clone() else {
-        let _ = state.source_work_queue.finish_task(
-            &item.id,
-            TaskKind::Translate,
-            Err("llm not configured".into()),
-        );
-        if item.summarize.wanted {
-            let _ = state.source_work_queue.finish_task(
-                &item.id,
-                TaskKind::Summarize,
-                Err("llm not configured".into()),
-            );
+    // Setup errors fail ONLY the tasks claim_next armed (wanted + Running),
+    // the same gate the launch path uses below: an unwanted task or a
+    // terminal sibling of a partial retry must keep its result (CodeRabbit
+    // on #506).
+    let armed_t = item.translate.wanted && item.translate.status == TaskStatus::Running;
+    let armed_s = item.summarize.wanted && item.summarize.status == TaskStatus::Running;
+    let fail_armed = |err: &str| {
+        if armed_t {
+            let _ = state
+                .source_work_queue
+                .finish_task(&item.id, TaskKind::Translate, Err(err.to_string()));
         }
+        if armed_s {
+            let _ = state
+                .source_work_queue
+                .finish_task(&item.id, TaskKind::Summarize, Err(err.to_string()));
+        }
+    };
+    let Some(factory) = state.ask_client.clone() else {
+        fail_armed("llm not configured");
         return;
     };
     let Some(model) = state.current_model() else {
-        let err = "index not available".to_string();
-        if item.translate.wanted {
-            let _ = state
-                .source_work_queue
-                .finish_task(&item.id, TaskKind::Translate, Err(err.clone()));
-        }
-        if item.summarize.wanted {
-            let _ = state
-                .source_work_queue
-                .finish_task(&item.id, TaskKind::Summarize, Err(err));
-        }
+        fail_armed("index not available");
         return;
     };
     let (md, title, url) = match source_markdown_for(state, &model, &item.sha256) {
         Ok(v) => v,
         Err(_) => {
-            let err = "source markdown unavailable".to_string();
-            if item.translate.wanted {
-                let _ = state.source_work_queue.finish_task(
-                    &item.id,
-                    TaskKind::Translate,
-                    Err(err.clone()),
-                );
-            }
-            if item.summarize.wanted {
-                let _ = state
-                    .source_work_queue
-                    .finish_task(&item.id, TaskKind::Summarize, Err(err));
-            }
+            fail_armed("source markdown unavailable");
             return;
         }
     };

@@ -165,7 +165,10 @@ The worker's unlocked skip-mark could likewise persist a stale copy over another
 process's enqueue.
 
 The fix: readers never write. Recovery runs in `claim_next`, under the lock, and
-only for items whose recorded claimer (`QueueItem::claimed_by`) is verifiably dead.
+only for claims that are not this process's own (`QueueItem::claim_token`, unique
+per process run). Such a claim is recovered when this process is the elected
+worker, or when the claimer's PID (`claimed_by`) is verifiably dead. The worker
+condition is what survives PID reuse after a reboot (CodeRabbit on #506).
 This replaces the 12-minute timeout, which could requeue a live long-running item.
 Because recovery covers only dead claimers, the worker itself must never leave a
 claim `running`. codex review found three paths that could (a failed terminal
@@ -176,7 +179,7 @@ A live claimer keeps the one-article-at-a-time gate closed.
 | Obligation | Code (`crates/ovp-memory/src/source_work_queue.rs`) | Test |
 |---|---|---|
 | Opening the queue elsewhere never touches a live item | `SourceWorkQueue::open`, `snapshot` | `opening_the_queue_elsewhere_never_requeues_a_live_item` |
-| Recover only dead-claimer items, keeping the retry budget | `claim_next` + `recover_interrupted` | `abandoned_running_recovery_preserves_attempts_and_not_before`, `a_live_claimer_keeps_its_item_even_for_a_new_worker`, `claim_requeues_*`, `claim_promotes_*` |
+| Recover only claims that are not our own (elected worker, or a dead claimer PID), keeping the retry budget | `claim_next` + `recover_interrupted`, `process_claim_token` | `abandoned_running_recovery_preserves_attempts_and_not_before`, `elected_worker_recovers_a_claim_whose_pid_was_reused`, `a_live_claimer_keeps_its_item_even_for_a_new_worker`, `claim_requeues_*`, `claim_promotes_*` |
 | Worker-side writes are locked and reload first | `mark_task_skipped_if_not_wanted`, `fail_still_running` | `skip_mark_keeps_a_concurrent_enqueue` |
 | A live worker never leaves its own claim `running` (recovery covers only dead claimers). Every exit path, early returns and panics included, retries the terminal write before the next claim | `ovp_server::source_work_queue_worker` / `run_source_work_item`, `fail_still_running` → `Result` | `fail_still_running_reports_a_failed_write_and_succeeds_on_retry` |
 | A reader opened mid-run keeps reloading | `maybe_reload_from_disk` | `a_reader_opened_mid_run_keeps_seeing_updates` |
