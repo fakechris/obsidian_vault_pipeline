@@ -347,20 +347,26 @@ impl SessionStore {
     /// A leftover file from a crashed or older run is simply locked again.
     pub fn lock(&self) -> Result<SessionLock, StoreError> {
         // The PID stamp truncates the file, so never follow a symlink planted
-        // at the lock path: that would truncate the link's target.
+        // at the lock path: that would truncate the link's target. On unix
+        // this is atomic (O_NOFOLLOW makes the open itself fail on a link).
+        // Elsewhere, fall back to a check before the open.
+        #[cfg(not(unix))]
         if fs::symlink_metadata(&self.lock_path).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(StoreError::Io(format!(
                 "lock {}: is a symlink, refusing to use it",
                 self.lock_path.display()
             )));
         }
-        let mut file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&self.lock_path)
-            .map_err(|e| StoreError::Io(format!("lock: {e}")))?;
+        let mut opts = fs::OpenOptions::new();
+        opts.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = opts.open(&self.lock_path).map_err(|e| {
+            StoreError::Io(format!("lock {}: {e} (a symlink is refused)", self.lock_path.display()))
+        })?;
         if !file.metadata().is_ok_and(|m| m.is_file()) {
             return Err(StoreError::Io(format!(
                 "lock {}: not a regular file",
@@ -368,10 +374,16 @@ impl SessionStore {
             )));
         }
         let key = fs::canonicalize(&self.lock_path).unwrap_or_else(|_| self.lock_path.clone());
-        let mut held = held_in_process();
-        if held.contains(&key) {
+        // Reserve the key in the in-process set, then release that mutex
+        // before the (possibly sleeping) retries, so a contended session
+        // never stalls lock attempts on unrelated sessions. The reservation
+        // is removed on every failure path.
+        if !held_in_process().insert(key.clone()) {
             return Err(StoreError::SessionBusy { holder_pid: std::process::id() });
         }
+        let release_reservation = |key: &PathBuf| {
+            held_in_process().remove(key);
+        };
         // Retry WouldBlock briefly. A flock lives on the open file
         // DESCRIPTION: when any thread of this process spawns a child, the
         // child holds a copy of every fd from fork until exec closes the
@@ -390,11 +402,13 @@ impl SessionStore {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
                 Err(fs::TryLockError::WouldBlock) => {
+                    release_reservation(&key);
                     return Err(StoreError::SessionBusy {
                         holder_pid: read_holder_pid(&self.lock_path),
                     });
                 }
                 Err(fs::TryLockError::Error(e)) => {
+                    release_reservation(&key);
                     return Err(StoreError::Io(format!("lock {}: {e}", self.lock_path.display())));
                 }
             }
@@ -404,7 +418,6 @@ impl SessionStore {
             .set_len(0)
             .and_then(|_| file.seek(SeekFrom::Start(0)))
             .and_then(|_| write!(file, "{}", std::process::id()));
-        held.insert(key.clone());
         Ok(SessionLock { key, file: Some(file) })
     }
 

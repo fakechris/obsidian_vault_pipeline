@@ -154,12 +154,13 @@ Release(p) ==
     /\ Goto(p, "done")
     /\ UNCHANGED <<graveAt, data, nextIno, alive, attempt, seen, mine>>
 
+\* `holds` is kept, so a crashed process with holds[p] = TRUE is one that died
+\* HOLDING the lock. Every safety use of `holds` is gated on `alive`.
 Crash(p) ==
     /\ pc[p] \notin {"done", "busy", "crashed"}
     /\ alive' = [alive EXCEPT ![p] = FALSE]
-    /\ holds' = [holds EXCEPT ![p] = FALSE]
     /\ Goto(p, "crashed")
-    /\ UNCHANGED <<lockAt, graveAt, data, nextIno, attempt, seen, mine>>
+    /\ UNCHANGED <<lockAt, graveAt, data, nextIno, attempt, seen, mine, holds>>
 
 Step(p) ==
   IF Mode = "flock" THEN FlockTry(p) \/ FlockRelease(p) \/ Crash(p) ELSE
@@ -185,7 +186,9 @@ HolderOwnsFile == \A p \in Procs : (alive[p] /\ holds[p]) => lockAt = mine[p]
 \* Two processes both judge the SAME stale owner dead (the race window opens).
 NeverTwoRenamers == Cardinality({p \in Procs : pc[p] = "rename"}) <= 1
 \* A stale lock is actually reclaimed and held by someone.
-NeverReclaims  == ~\E p \in Procs : attempt[p] = 1 /\ holds[p]
+NeverReclaims  == ~\E p \in Procs : attempt[p] = 1 /\ alive[p] /\ holds[p]
 \* flock mode: the lock is taken again after a holder crashed.
-NeverRetakenAfterCrash == ~\E p, q \in Procs : pc[p] = "crashed" /\ holds[q]
+\* (p died while holding; a live q holds it afterwards.)
+NeverRetakenAfterCrash ==
+    ~\E p, q \in Procs : p # q /\ pc[p] = "crashed" /\ holds[p] /\ alive[q] /\ holds[q]
 =============================================================================
