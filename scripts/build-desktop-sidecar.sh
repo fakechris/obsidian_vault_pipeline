@@ -44,11 +44,11 @@ if [ -n "${OVP2_SIDECAR_FEATURES:-}" ]; then
   FEATURES="$OVP2_SIDECAR_FEATURES"
 elif [ "$TRIPLE" = "aarch64-apple-darwin" ]; then
   # The documented local-staging target gets the embedder by default.
-  FEATURES="anthropic,pinboard-live,web-fetch-live,github-live,embed"
+  FEATURES="anthropic,decision-live,pinboard-live,web-fetch-live,github-live,embed"
 else
   # Everything else (x86_64-apple-darwin release job, any third-party
   # triple) keeps the lean set — opt in via OVP2_SIDECAR_FEATURES.
-  FEATURES="anthropic,pinboard-live,web-fetch-live,github-live"
+  FEATURES="anthropic,decision-live,pinboard-live,web-fetch-live,github-live"
 fi
 OUT_DIR="apps/desktop/src-tauri/binaries"
 OUT="$OUT_DIR/ovp2-${TRIPLE}"

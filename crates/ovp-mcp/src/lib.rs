@@ -642,6 +642,13 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     };
     let mut tools = VaultTools::new(&state.vault_root)
         .with_result_cap(cfg.max_result_bytes.saturating_sub(2 * 1024));
+    let decision_error = |e: ovp_llm::decision::DecisionError| RpcError { code: -32000, message: e.to_string() };
+    if let Some(settings) = ovp_app::decisions::load_optional_settings(&state.vault_root).map_err(decision_error)? {
+        tools = tools.with_decision_reranker(ovp_memory::decision_rerank::DecisionReranker::new(
+            &state.vault_root, settings, std::sync::Arc::new(ovp_app::decisions::SearchDecisionFactory),
+            session.clone(),
+        ).map_err(decision_error)?);
+    }
     let outcome = run_agent_turn(
         client.as_mut(),
         &mut tools,
@@ -2741,6 +2748,20 @@ mod tests {
     /// on an unindexed fixture vault — the reply carries the answer, honest
     /// receipts (the fabricated key flagged UNVERIFIED), the session id for
     /// continuation, and the deliverable turn lands on saved-chat History.
+    #[test]
+    fn decision_relevance_replay_reaches_mcp_agent_context() {
+        #[allow(dead_code)]
+        mod fixture { include!("../../../fixtures/decision-rerank-v1/support.rs"); }
+        for mode in [ovp_llm::decision::runtime::DecisionMode::Off, ovp_llm::decision::runtime::DecisionMode::Shadow, ovp_llm::decision::runtime::DecisionMode::Enabled] {
+            let (tmp, mut state) = fixture_vault();
+            fixture::install(tmp.path(), mode);
+            let enabled = mode == ovp_llm::decision::runtime::DecisionMode::Enabled;
+            state.ask_client = Some(std::sync::Arc::new(move || Ok(Box::new(fixture::AgentClient(enabled)) as Box<dyn ovp_llm::ModelClient>)));
+            let value = call(&state, "ask", serde_json::json!({"question":"retrieval","chat":"relevance-test"})).unwrap();
+            assert!(value["content"][0]["text"].as_str().unwrap().contains("verified order"), "{value}");
+        }
+    }
+
     #[test]
     fn ask_runs_a_full_agent_turn_with_receipts_and_history() {
         struct Scripted;

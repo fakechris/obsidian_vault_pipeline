@@ -8,13 +8,13 @@ or the paired runner. Unknown fields, duplicate JSON keys, unsupported suppliers
 unknown profiles and invalid namespaces fail explicitly.
 
 [Example settings](../manifests/decision-settings.example.json) declare two
-independent capabilities, both **off**. They are a configuration template for the
-INV-645/646 consumers; this delivery does not automatically read this file from
-Ask or Crystal, nor alter their production behavior. A consumer loads settings
-from its operator configuration path, calls `evaluate`, persists the observation
-to its experiment trace, and applies only `observation.applied` when present.
-When absent, it keeps the existing baseline. Re-read settings between operations
-to make a switch back to off take effect immediately.
+independent capabilities, both **off**. They are a configuration template. Ask now reads `.ovp/decisions.json` from
+the operator vault at each new CLI, Portal, or MCP turn; Crystal remains pending
+INV-646. The file is optional. A missing file preserves the existing retrieval
+path. The `evidence_relevance` capability applies only a complete
+`observation.applied`; off, control, shadow, abstain, replay miss, read error,
+timeout, trace error, and oversized result retain the original order. Restarting
+a turn picks up a change back to off.
 
 | Setting | Meaning |
 | --- | --- |
@@ -115,3 +115,37 @@ is never overwritten. Candidate promotion is separate from adding this runner.
 To use live/record execution, build with `--features decision-live` and explicitly
 supply the credential environment variable named by the profile. Changing
 execution to live alone does not enable any production capability.
+
+## Ask relevance consumer (INV-645)
+
+The versioned question contract is `evidence_relevance/v1`. It asks for both
+directness and whether an excerpt supports, contradicts, contextualizes, or
+cannot establish the query premise. A directly relevant contradiction may rank
+first. The contract uses source IDs, SHA-256 revisions, and line coordinates in
+the **annotation-redacted source view**; these are not physical file line numbers.
+Source text is untrusted evidence. The top 20 candidates are judged in one
+bounded batch; any candidate without verifiable source identity or readable
+content sends the complete batch to baseline. Remaining candidates keep their
+original relative order.
+
+Agent `search_sources` and `search_evidence` return the same hit objects, with
+`semantic_evidence` added only in enabled mode. CLI `ask` retains each evidence
+ID, quote, and path, adding a labeled semantic assessment to its context only
+in enabled mode. The assessment is a provider judgment, not admission or proof.
+Tool result size is checked before applying the order. Experiment traces are
+written with private file permissions under `.ovp/decision-traces/`; record and
+replay cassettes live under `.ovp/cassettes/decisions/evidence_relevance/`.
+Shadow executes the decision but returns byte-identical retrieval results.
+`SearchDecisionFactory` sets a 500 ms transport timeout and zero HTTP retries;
+replay makes no network call. Live and record require a build with
+`decision-live` (included in packaged CLI, sidecar, and desktop builds).
+Switching suppliers changes only the configured profile and factory registration.
+
+The committed two-source replay fixture tests routing, contradiction handling,
+source preservation, and CLI/Portal/MCP wiring. It is not a retrieval quality
+benchmark. The 34 query gold and 10 query holdout qrels require the corresponding
+frozen vault and verified labels before nDCG@10, Recall@20, exact/negative
+guardrails, and p95 can be measured. `evolve validate` accepts the runtime
+candidate; `evolve ab` currently requires `eval_plan.paired_run` and cannot run
+on the integration test path. The candidate therefore remains pending and the
+prompt version is not promoted.

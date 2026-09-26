@@ -99,3 +99,58 @@ mod tests {
         ));
     }
 }
+
+/// Shared operator path for CLI, Portal and MCP; absence means baseline only.
+pub fn load_optional_settings(vault: &Path) -> Result<Option<DecisionSettings>, DecisionError> {
+    let path = vault.join(".ovp/decisions.json");
+    match std::fs::metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(DecisionError::InvalidRequest(
+            "cannot stat decision settings",
+        )),
+        Ok(meta) if meta.len() > 1024 * 1024 => {
+            Err(DecisionError::InvalidRequest("decision settings too large"))
+        }
+        Ok(_) => load_settings(&path).map(Some),
+    }
+}
+
+/// Search-specific latency budget. Replay uses the same strict offline client.
+#[derive(Debug)]
+pub struct SearchDecisionFactory;
+impl DecisionClientFactory for SearchDecisionFactory {
+    fn supports(&self, profile: &DecisionProfile, execution: ExecutionMode) -> bool {
+        BuiltinDecisionFactory.supports(profile, execution)
+    }
+    fn build(
+        &self,
+        profile: &DecisionProfile,
+        execution: ExecutionMode,
+        cache: &Path,
+    ) -> Result<Box<dyn DecisionClient>, DecisionError> {
+        if execution == ExecutionMode::Replay {
+            return BuiltinDecisionFactory.build(profile, execution, cache);
+        }
+        if !self.supports(profile, execution) {
+            return Err(DecisionError::Unsupported("provider execution mode"));
+        }
+        #[cfg(feature = "decision-live")]
+        {
+            let client = Box::new(TypeSafeDecisionClient::from_env(
+                profile.clone(),
+                HttpOptions {
+                    timeout: std::time::Duration::from_millis(500),
+                    max_retries: 0,
+                    ..HttpOptions::default()
+                },
+            )?);
+            if execution == ExecutionMode::Record {
+                Ok(Box::new(CachedDecisionClient::record(client, cache)?))
+            } else {
+                Ok(client)
+            }
+        }
+        #[cfg(not(feature = "decision-live"))]
+        Err(DecisionError::Unsupported("decision-live build feature"))
+    }
+}
