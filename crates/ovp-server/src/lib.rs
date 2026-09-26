@@ -373,7 +373,7 @@ struct AppState {
     source_work_queue: Arc<ovp_memory::source_work_queue::SourceWorkQueue>,
     /// Held for process lifetime when THIS portal won the worker election.
     /// Dropping the process releases the lock so another portal can take over.
-    _source_work_worker_lock: Option<ovp_intake::RunLock>,
+    _source_work_worker_lock: Option<ovp_intake::OsLock>,
     /// True when this process runs the background source-work worker.
     source_work_worker_here: bool,
 }
@@ -814,7 +814,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     // Cross-process worker election: only ONE portal (desktop or CLI serve)
     // runs the LLM worker for a given vault. Others still serve the API and
     // can enqueue; jobs are claimed by the lock holder after disk reload.
-    let worker_lock = ovp_intake::RunLock::acquire_named(
+    let worker_lock = ovp_intake::OsLock::acquire_named(
         &vault_root,
         ovp_memory::source_work_queue::WORKER_LOCK,
     );

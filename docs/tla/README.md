@@ -168,7 +168,10 @@ The fix: readers never write. Recovery runs in `claim_next`, under the lock, and
 only for claims that are not this process's own (`QueueItem::claim_token`, unique
 per process run). Such a claim is recovered when this process is the elected
 worker, or when the claimer's PID (`claimed_by`) is verifiably dead. The worker
-condition is what survives PID reuse after a reboot (CodeRabbit on #506).
+condition is what survives PID reuse after a reboot (CodeRabbit on #506). For
+that to hold, the worker election lock itself (`WORKER_LOCK`) is an
+`ovp_intake::OsLock` (`File::try_lock`), not a PID file. A PID-file election
+would refuse forever after a reboot reused the dead worker's PID (codex on #506).
 This replaces the 12-minute timeout, which could requeue a live long-running item.
 Because recovery covers only dead claimers, the worker itself must never leave a
 claim `running`. codex review found three paths that could (a failed terminal

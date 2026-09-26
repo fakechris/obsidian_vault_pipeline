@@ -31,7 +31,10 @@ const QUEUE_SCHEMA: &str = "ovp.source-work-queue/v1";
 const QUEUE_REL: &str = ".ovp/source-work-queue.json";
 /// Cross-process exclusive lock for queue file mutations (enqueue/cancel/…).
 const QUEUE_WRITE_LOCK: &str = "source-work-queue.write.lock";
-/// Cross-process election: only one process runs the background worker.
+/// Cross-process election: only one process runs the background worker. An
+/// OS advisory lock ([`ovp_intake::OsLock`]) held for the portal's lifetime:
+/// the kernel frees it when the worker dies, so PID reuse cannot block a new
+/// election (codex on INV-686).
 pub const WORKER_LOCK: &str = "source-work-worker.lock";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,11 +312,11 @@ impl SourceWorkQueue {
 
     /// True when `pid` is the live owner of the worker lock (or no lock and
     /// we are about to take it — caller decides).
+    ///
+    /// Answered from this process's own lock record, not the PID in the file:
+    /// after PID reuse a dead worker's stale PID can equal ours.
     pub fn worker_owner_is_this_process(&self) -> bool {
-        match self.worker_owner_pid() {
-            Some(p) => p == std::process::id(),
-            None => false,
-        }
+        ovp_intake::OsLock::held_by_this_process(&self.vault_root, WORKER_LOCK)
     }
 
     /// Brief exclusive lock around a disk-coordinated mutation. Retries a few
@@ -1399,7 +1402,7 @@ mod tests {
         // Not the elected worker: the PID looks alive, so hands off.
         assert!(q.claim_next().is_none());
         // Elected worker: recover and re-claim.
-        let _worker = ovp_intake::RunLock::acquire_named(&vault, WORKER_LOCK).unwrap();
+        let _worker = ovp_intake::OsLock::acquire_named(&vault, WORKER_LOCK).unwrap();
         let again = q.claim_next().expect("recovered and claimed");
         assert_eq!(again.id, a.id);
         assert_eq!(again.claim_token.as_deref(), Some(process_claim_token()));
