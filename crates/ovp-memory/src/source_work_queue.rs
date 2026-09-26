@@ -952,7 +952,9 @@ fn now_secs() -> u64 {
 
 fn read_lock_pid(path: &Path) -> Option<u32> {
     let raw = std::fs::read_to_string(path).ok()?;
-    let pid = raw.trim().parse::<u32>().ok().filter(|p| *p > 0)?;
+    // `oslock <pid>` (OsLock) or a bare PID (pre-INV-686 RunLock).
+    let raw = raw.trim();
+    let pid = raw.strip_prefix("oslock ").unwrap_or(raw).trim().parse::<u32>().ok().filter(|p| *p > 0)?;
     // Only report an owner the OS confirms is still running: an unanswerable
     // probe means we cannot vouch for the holder, so the lock is not reported.
     (ovp_intake::probe_pid(pid) == Some(true)).then_some(pid)

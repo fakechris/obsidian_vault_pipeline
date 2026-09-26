@@ -460,11 +460,31 @@ impl OsLock {
                 }
             }
         }
+        // Rolling upgrade: an OLDER binary took this name as a PID-file
+        // RunLock (create_new + a bare PID) and knows nothing of the OS lock.
+        // A bare live PID therefore means an old-version holder may be
+        // running, so refuse. We stamp `oslock <pid>`, which an old binary
+        // cannot parse and treats as a live holder, so it refuses too. Only
+        // bare-PID files left by old binaries are exposed to PID reuse, and
+        // the first new holder rewrites them.
+        let mut prior = String::new();
+        let _ = std::io::Read::read_to_string(&mut file, &mut prior);
+        if let Ok(pid) = prior.trim().parse::<u32>()
+            && pid != std::process::id()
+            && probe_pid(pid) != Some(false)
+        {
+            drop(file);
+            os_locks_held().remove(&key);
+            return Err(format!(
+                "{} is held by an older ovp2 (pid {pid}); stop it, or delete the file if that process is not ovp2",
+                path.display()
+            ));
+        }
         use std::io::Seek;
         let _ = file
             .set_len(0)
             .and_then(|_| file.seek(std::io::SeekFrom::Start(0)))
-            .and_then(|_| write!(file, "{}", std::process::id()));
+            .and_then(|_| write!(file, "oslock {}", std::process::id()));
         Ok(Self { key, file: Some(file) })
     }
 
@@ -772,12 +792,32 @@ mod tests {
     }
 
     #[test]
+    fn os_lock_refuses_a_live_legacy_holder_and_ignores_a_dead_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join(".ovp/w.lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        // An older binary's bare-PID lock whose owner is alive: refuse. Our
+        // parent (the test runner) is a live PID that is not us.
+        #[cfg(unix)]
+        {
+            std::fs::write(&lock_path, format!("{}\n", std::os::unix::process::parent_id())).unwrap();
+            let err = OsLock::acquire_named(dir.path(), "w.lock").expect_err("live legacy holder");
+            assert!(err.contains("older ovp2"), "{err}");
+            assert!(!OsLock::held_by_this_process(dir.path(), "w.lock"), "reservation released");
+        }
+        // A bare PID whose owner is gone: take it, and stamp the new format.
+        std::fs::write(&lock_path, format!("{}\n", reaped_dead_pid())).unwrap();
+        drop(OsLock::acquire_named(dir.path(), "w.lock").expect("dead legacy owner"));
+        assert!(std::fs::read_to_string(&lock_path).unwrap().starts_with("oslock "));
+    }
+
+    #[test]
     fn os_lock_excludes_ignores_leftover_files_and_reports_ownership() {
         let dir = tempfile::tempdir().unwrap();
         let lock_path = dir.path().join(".ovp/w.lock");
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
-        // A leftover file with a (possibly reused) PID is not a held lock.
-        std::fs::write(&lock_path, format!("{}\n", std::process::id())).unwrap();
+        // A leftover new-format file (possibly with a reused PID) is not a held lock.
+        std::fs::write(&lock_path, format!("oslock {}\n", std::process::id())).unwrap();
         assert!(!OsLock::held_by_this_process(dir.path(), "w.lock"));
         let held = OsLock::acquire_named(dir.path(), "w.lock").expect("free");
         assert!(OsLock::held_by_this_process(dir.path(), "w.lock"));
