@@ -20,7 +20,7 @@
       "mode": "off",
       "execution": "replay",
       "profile": "typesafe-primary",
-      "question_namespace": "strength_check/v1",
+      "question_namespace": "claim_strength_shadow/v1",
       "experiment": null
     }
   }

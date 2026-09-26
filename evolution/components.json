@@ -78,6 +78,20 @@
       ]
     },
     {
+      "id": "prompt.decision_strength",
+      "surface": "prompt",
+      "current_version": "v0",
+      "file": "crates/ovp-domain/src/decision_strength.rs",
+      "quality_buckets": ["crystal_provenance", "coverage"]
+    },
+    {
+      "id": "runtime.crystal_strength_shadow",
+      "surface": "runtime",
+      "current_version": "v0",
+      "file": "crates/ovp-cli/src/commands/crystal_strength_shadow.rs",
+      "quality_buckets": ["crystal_provenance", "cost_efficiency"]
+    },
+    {
       "id": "prompt.crystal_strength",
       "surface": "prompt",
       "current_version": "v1",
