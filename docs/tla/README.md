@@ -99,3 +99,31 @@ Known limitations (codex review, accepted):
 - A short write (disk full, file-size limit) is not retried. `write_once` returns an
   error and leaves a torn tail for the next append to mark. A concurrent appender
   landing right after a short write can still glue onto the fragment.
+
+### `SessionLock.tla` — one turn per chat session
+
+| Config | Models | Expect |
+|---|---|---|
+| `SessionLockFlock.cfg` | current code: `File::try_lock` on a never-deleted `<session>.lock` | `Mutex` holds (3 processes, exhaustive) |
+| `SessionLock.cfg` | code before INV-685: PID file, stale lock reclaimed by renaming it to a per-process grave | `Mutex` violated (2 processes) |
+| `SessionLockVerify.cfg` | rejected patch: re-read the grave and link it back if it turns out live | `Mutex` violated (needs 3 processes; passes with 2) |
+| `SessionLockSanity*.cfg` | reachability controls | two contenders reach the rename, a stale lock is reclaimed, the flock is retaken after a crash |
+
+**Bug found (INV-685).** `rename(lock, grave)` moves whatever file is at the path
+*now*. A and B both judge the same dead PID stale. A renames the stale lock away and
+creates a fresh one. B's rename then moves **A's fresh lock** into B's grave, and B
+creates its own. Both hold the session. The code comment "rename() arbitrates,
+exactly one mover wins" is true only of a single rename, not of the check that
+came before it.
+
+| Obligation | Code (`crates/ovp-memory/src/agent_transcript.rs`) | Test |
+|---|---|---|
+| Another process's live holder excludes us; its death frees the lock with no reclaim step | `SessionStore::lock` (`File::try_lock`) | `session_lock_excludes_another_process_until_it_dies` (re-runs the test binary as the holder, then kills it) |
+| Two stores in one process serialize | `held_in_process` | `same_process_second_store_is_busy_and_released_on_drop` |
+| The lock file is never deleted; a leftover file is not a held lock | `SessionLock::drop` | `leftover_lock_file_is_not_busy` |
+
+The model does not cover filesystems where `try_lock` is unsupported (it returns an
+error and the turn fails loudly), or a mix of old and new binaries during an upgrade.
+In that mix, the old binary treats the never-deleted file as a stale PID lock and
+reclaims it by rename, so the two versions do not exclude each other. Upgrade the
+sidecar and the desktop app together.

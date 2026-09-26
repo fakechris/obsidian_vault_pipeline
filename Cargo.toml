@@ -34,11 +34,12 @@ members = [
 [workspace.package]
 version = "2.0.1"
 edition = "2024"
-# 1.88 = the floor of the `embed` dep tree (ort 2.0.0-rc.12 / time 0.3.53),
-# which release builds enable (dist-workspace.toml `features`). Nothing pins an
-# older toolchain (no rust-toolchain.toml; release CI installs current stable),
-# so raising the declared MSRV beats pinning the embed deps back.
-rust-version = "1.88"
+# 1.89 = std `File::try_lock` (the session lock, INV-685). The previous floor,
+# 1.88, came from the `embed` dep tree (ort 2.0.0-rc.12 / time 0.3.53), which
+# release builds enable (dist-workspace.toml `features`). Nothing pins an older
+# toolchain (no rust-toolchain.toml; release CI installs current stable), so
+# raising the declared MSRV beats pinning deps back.
+rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 authors = ["OVP Next"]
 # Required by dist for GitHub release hosting. NOTE: this repo is currently
