@@ -58,3 +58,44 @@ Out of scope for this model:
 Replacing the PID files with an OS lock (`File::try_lock`, stable since Rust 1.89, on a
 lock file that is never deleted) would remove both limitations and the whole reclaim
 protocol. It needs an MSRV bump and Windows CI validation.
+
+### `LedgerAppend.tla` — JSONL ledgers always parse, and acknowledged appends survive
+
+| Config | Models | Expect |
+|---|---|---|
+| `LedgerAppendPrefix.cfg` / `…PrefixConcurrent.cfg` | current code: one write per record; a torn tail is closed with `"\n"` + a marker line; the reader skips a torn line only if a marker follows it or it is the unterminated final segment; serialized / concurrent appenders; SIGKILL + power loss | `LedgerParses`, `AckedDurable` hold (3 processes, exhaustive) |
+| `LedgerAppend.cfg` / `…Concurrent.cfg` | code before INV-684: `writeln!` = two writes | `LedgerParses` violated |
+| `LedgerAppendOneWritePower.cfg` | single write alone, under power loss | `LedgerParses` violated, so the torn-tail handling is needed too |
+| `LedgerAppendOneWrite.cfg`, `LedgerAppendRepair.cfg` | alternatives considered (repair = truncate the torn tail; rejected because not every appender holds `run.lock`) | ok |
+| `LedgerAppendSanity*.cfg` | reachability controls | power loss, a mid-append crash, and two acked appends all happen |
+
+**Bug found (INV-684).** `writeln!(f, "{line}")` on an unbuffered `File` issues two
+`write(2)` calls: the record, then `"\n"`. A SIGKILL between them, or a concurrent
+appender landing in between, leaves a `}{` or blank line. `read_jsonl` then fails
+the whole ledger, and intake, daily and index stop.
+
+| Obligation | Code | Test |
+|---|---|---|
+| One write per record; a torn tail is closed with `TORN_MARKER`, never glued to | `ovp_domain::jsonl::append_line` (used by `ovp_intake::vaultops::append_jsonl`, `crystal::patch::append_patch_record`); plain-newline copy in `ovp_evolve::ledger::append_entry` | `concurrent_appenders_never_produce_malformed_lines`, `torn_tail_is_skipped_and_never_glued_to` |
+| Skip a torn line only with evidence (marker follows, or unterminated tail) | `ovp_domain::jsonl::parse_ledger` with `TornLines::Skip` (`read_jsonl`) | `terminated_truncated_line_without_marker_still_fails`, `corrupt_line_that_is_not_a_prefix_still_fails` |
+| Human corrections, the crystal store's `StoreEvent` ledger (review decisions) and the evolution decision record fail loud on any bad line | `TornLines::Fail` (`read_patch_ledger`, `ovp_intake::read_jsonl_strict` for the authoritative `StoreEvent` readers: `ovp2 index`, crystal patch, and theme pages. The live portal projection keeps Skip and a warning, so it degrades instead of emptying); strict `ovp_evolve::ledger::read_entries` | `fail_policy_rejects_a_torn_line`, `strict_reader_rejects_a_marked_torn_line_that_the_default_reader_skips`, `human_patch_drift_skips_overlay_and_corrupt_ledger_fails_loudly` |
+
+Why not skip every truncated line: codex review pointed out that serde's `Eof`
+classification alone does not prove a torn append (`{"candidate_id":` followed by a
+newline is also `Eof`). A sync tool truncating an acknowledged record looks the same
+too. Hence the marker as evidence, and the loud `Fail` policy for ledgers of human
+input.
+
+The model does not represent the `Fail` readers: those ledgers deliberately stop
+under a power-loss tear, as before, and the operator deletes the torn line (plus its
+marker line). Also out of scope: a power loss that persists garbage or NUL bytes
+rather than a prefix. That still fails the read loudly.
+
+Known limitations (codex review, accepted):
+- A second power loss that tears the repair write itself can persist the `"\n"` but
+  not the marker. The old fragment is then terminated and unmarked, and the ledger
+  fails loud, which is the pre-INV-684 behavior. This needs two power losses, the
+  second one inside that one write.
+- A short write (disk full, file-size limit) is not retried. `write_once` returns an
+  error and leaves a torn tail for the next append to mark. A concurrent appender
+  landing right after a short write can still glue onto the fragment.

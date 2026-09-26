@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -61,6 +61,13 @@ pub enum LedgerError {
 }
 
 /// Append a ledger entry to the JSONL file.
+///
+/// The record and its `"\n"` go out in ONE write: `writeln!` would issue two
+/// and let a crash or a concurrent appender leave a malformed line. A torn
+/// tail (not ending in `"\n"`) gets its own line so the new record is never
+/// glued to it. Mirrors `ovp_domain::jsonl::append_line`, which this crate
+/// cannot use without depending on ovp-domain. The reader stays strict: this
+/// is the append-only decision record, so a torn line fails loud (AGENTS.md).
 pub fn append_entry(path: &Path, entry: &LedgerEntry) -> Result<(), LedgerError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -70,8 +77,38 @@ pub fn append_entry(path: &Path, entry: &LedgerEntry) -> Result<(), LedgerError>
         .append(true)
         .open(path)?;
     let line = serde_json::to_string(entry).map_err(|e| LedgerError::JsonLine { line: 0, source: e })?;
-    writeln!(file, "{line}")?;
-    Ok(())
+    let mut buf = Vec::with_capacity(line.len() + 2);
+    if !ends_with_newline_or_empty(path)? {
+        buf.push(b'\n');
+    }
+    buf.extend_from_slice(line.as_bytes());
+    buf.push(b'\n');
+    // ONE write(2), not write_all: a retried short write is a second write
+    // another appender can land in front of. A short write is an error.
+    loop {
+        match file.write(&buf) {
+            Ok(n) if n == buf.len() => return Ok(()),
+            Ok(n) => {
+                return Err(LedgerError::Io(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    format!("short write: {n} of {} bytes (disk full?)", buf.len()),
+                )));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(LedgerError::Io(e)),
+        }
+    }
+}
+
+fn ends_with_newline_or_empty(path: &Path) -> std::io::Result<bool> {
+    let mut f = File::open(path)?;
+    if f.metadata()?.len() == 0 {
+        return Ok(true);
+    }
+    f.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    f.read_exact(&mut last)?;
+    Ok(last[0] == b'\n')
 }
 
 /// Read all ledger entries from a JSONL file.

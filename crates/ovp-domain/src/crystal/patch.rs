@@ -22,7 +22,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -742,21 +741,12 @@ pub fn read_patch_ledger(path: &Path) -> Result<Vec<HumanPatchRecord>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let file = std::fs::File::open(path)
+    let raw = std::fs::read(path)
         .map_err(|e| format!("reading patch ledger {}: {e}", path.display()))?;
-    let reader = BufReader::new(file);
-    let mut records = Vec::new();
-    for (i, line) in reader.lines().enumerate() {
-        let line = line.map_err(|e| format!("{}:{}: {e}", path.display(), i + 1))?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let record: HumanPatchRecord = serde_json::from_str(trimmed)
-            .map_err(|e| format!("{}:{}: malformed patch record: {e}", path.display(), i + 1))?;
-        records.push(record);
-    }
-    Ok(records)
+    // Human corrections fail loud on ANY bad line, a torn one included: a
+    // truncated record may be an acknowledged correction cut by a sync tool.
+    crate::jsonl::parse_ledger(&raw, crate::jsonl::TornLines::<fn(usize)>::Fail)
+    .map_err(|b| format!("{}:{}: malformed patch record: {}", path.display(), b.line, b.error))
 }
 
 /// Append a single `HumanPatchRecord` line to `.ovp/crystal/patches.jsonl`.
@@ -791,7 +781,7 @@ pub fn append_patch_record(path: &Path, record: &HumanPatchRecord) -> Result<(),
     };
     let serialized = serde_json::to_string(record)
         .map_err(|e| format!("serializing patch record {}: {e}", record.patch_id))?;
-    writeln!(file, "{serialized}")
+    crate::jsonl::append_line(&mut file, path, &serialized)
         .map_err(|e| format!("appending to patch ledger {}: {e}", path.display()))?;
     file.sync_data()
         .map_err(|e| format!("syncing patch ledger {}: {e}", path.display()))?;

@@ -28,7 +28,7 @@ use ovp_domain::crystal::theme_pages::{
 use ovp_domain::crystal::themes::ThemesFile;
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
 use ovp_domain::vault_layout::VaultLayout;
-use ovp_intake::read_jsonl;
+use ovp_intake::read_jsonl_strict;
 use ovp_llm::ModelClient;
 
 use crate::CliError;
@@ -327,7 +327,7 @@ pub fn run(args: CrystalThemePagesArgs) -> Result<(), CliError> {
     };
 
     let ledger = store.join("ledger.jsonl");
-    let events: Vec<StoreEvent> = read_jsonl(&ledger).map_err(|e| {
+    let events: Vec<StoreEvent> = read_jsonl_strict(&ledger).map_err(|e| {
         CliError::Io(format!(
             "crystal-theme-pages: ledger {}: {e}",
             ledger.display()

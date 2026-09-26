@@ -89,7 +89,8 @@ pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> 
         }
         Err(e) => return Err(format!("opening {}: {e}", path.display())),
     };
-    writeln!(f, "{line}").map_err(|e| format!("appending to {}: {e}", path.display()))?;
+    ovp_domain::jsonl::append_line(&mut f, path, &line)
+        .map_err(|e| format!("appending to {}: {e}", path.display()))?;
     f.sync_data().map_err(|e| format!("syncing {}: {e}", path.display()))?;
     if created {
         sync_dir(parent)?;
@@ -128,25 +129,44 @@ fn ledger_parent(path: &Path) -> &Path {
     }
 }
 
-/// Read a whole JSONL ledger. Missing file → empty (first run); a malformed
+/// Read a whole JSONL ledger. Missing file → empty (first run). A torn final
+/// record left by a power loss is skipped with a warning; any other malformed
 /// line is a hard error naming the line.
 pub fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, String> {
-    let raw = match std::fs::read_to_string(path) {
+    let raw = match std::fs::read(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(format!("reading {}: {e}", path.display())),
     };
-    let mut records = Vec::new();
-    for (i, line) in raw.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let rec: T = serde_json::from_str(line).map_err(|e| {
-            format!("ledger {} line {}: malformed record: {e}", path.display(), i + 1)
-        })?;
-        records.push(rec);
-    }
-    Ok(records)
+    ovp_domain::jsonl::parse_ledger(
+        &raw,
+        ovp_domain::jsonl::TornLines::Skip(|line| {
+            eprintln!(
+                "ovp: skipping torn record at {} line {line} (an append interrupted by power loss)",
+                path.display()
+            )
+        }),
+    )
+    .map_err(|b| {
+        format!("ledger {} line {}: malformed record: {}", path.display(), b.line, b.error)
+    })
+}
+
+/// Like [`read_jsonl`] but a torn record is a hard error too
+/// (`TornLines::Fail`). For ledgers that carry human decisions, such as the
+/// crystal store's `ledger.jsonl` (`StoreEvent`, which includes review
+/// decisions): a truncated line there may be an acknowledged decision cut
+/// by a sync tool, so it must fail loud, not vanish.
+pub fn read_jsonl_strict<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, String> {
+    let raw = match std::fs::read(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+    };
+    ovp_domain::jsonl::parse_ledger(&raw, ovp_domain::jsonl::TornLines::<fn(usize)>::Fail)
+        .map_err(|b| {
+            format!("ledger {} line {}: malformed record: {}", path.display(), b.line, b.error)
+        })
 }
 
 /// One `OVP_RULES.md` write-log event for `60-Logs/pipeline.jsonl`. The key is
@@ -649,6 +669,18 @@ mod tests {
         assert!(err.contains("run.lock"), "got: {err}");
         drop(lock);
         let _again = RunLock::acquire(dir.path()).expect("released on drop");
+    }
+
+    #[test]
+    fn strict_reader_rejects_a_marked_torn_line_that_the_default_reader_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        std::fs::write(&path, "{\"a\":1}\n{\"a\":").unwrap(); // torn tail
+        append_jsonl(&path, &serde_json::json!({"a": 2})).unwrap(); // closes it with the marker
+        let skipped: Vec<serde_json::Value> = read_jsonl(&path).unwrap();
+        assert_eq!(skipped.len(), 2, "machine ledgers skip the proven torn line");
+        let err = read_jsonl_strict::<serde_json::Value>(&path).unwrap_err();
+        assert!(err.contains("line 2"), "human-decision ledgers fail loud: {err}");
     }
 
     #[test]

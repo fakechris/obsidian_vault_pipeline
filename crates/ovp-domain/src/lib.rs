@@ -21,6 +21,9 @@ pub mod crystal;
 pub mod decision_strength;
 /// One diagnostic shape shared by lint / doctor / crystal-lint (pure projection).
 pub mod diagnostics;
+/// Crash- and concurrency-safe JSONL ledger append/read (one write per record,
+/// torn tails skipped). See `docs/tla/LedgerAppend.tla`.
+pub mod jsonl;
 /// M19 tolerant model-reply JSON handling (parser-local recovery + bounded
 /// repair-request builder) for the grounded reader trunk. See
 /// `docs/stage-m19-json-robustness.md`.
