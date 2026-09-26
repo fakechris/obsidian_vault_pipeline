@@ -10,7 +10,7 @@ use ovp_domain::VaultLayout;
 use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_ID, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::lineage::{lineage_index, ClaimLineage};
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
-use ovp_intake::read_jsonl;
+use ovp_intake::{read_jsonl, read_jsonl_strict};
 use std::collections::BTreeMap;
 
 use crate::{MAX_SOURCE_DOC_BYTES, is_plain_relative};
@@ -40,7 +40,7 @@ pub fn load_lineage_index(vault_root: &Path, layout: &VaultLayout) -> BTreeMap<S
 /// passthrough (the reader must keep working; `ovp2 index` is where corruption
 /// fails loud).
 pub fn load_active_records(vault_root: &Path, layout: &VaultLayout) -> Vec<DurableRecord> {
-    let mut records = load_active_records_core(vault_root, layout).unwrap_or_default();
+    let mut records = load_active_records_core(vault_root, layout, false).unwrap_or_default();
     // Live-server degrade: a corrupt human patch ledger keeps the unpatched
     // records serving (never an empty portal) — the corruption is reported,
     // and `ovp2 index` is where it fails loud.
@@ -60,23 +60,27 @@ pub fn load_active_records_strict(
     vault_root: &Path,
     layout: &VaultLayout,
 ) -> Result<Vec<DurableRecord>, String> {
-    let mut records = load_active_records_core(vault_root, layout)?;
+    let mut records = load_active_records_core(vault_root, layout, true)?;
     overlay_human_patches(&mut records, vault_root, layout)?;
     Ok(records)
 }
 
 /// Ledger + themes fold WITHOUT the human-patch overlay — the shared core of
-/// both public loaders (which differ only in how overlay failures degrade).
+/// both public loaders, which differ in how failures degrade. `strict`
+/// selects the ledger reader: the strict loader rejects even a proven torn
+/// `StoreEvent` (`read_jsonl_strict`). The live loader skips it with a warning
+/// (`read_jsonl`).
 fn load_active_records_core(
     vault_root: &Path,
     layout: &VaultLayout,
+    strict: bool,
 ) -> Result<Vec<DurableRecord>, String> {
     let store = vault_root.join(layout.crystal_store_dir());
     let ledger = store.join("ledger.jsonl");
     // `read_jsonl` returns Ok(empty) for a missing file (fresh vault) and Err
     // for a present-but-corrupt one — propagate the latter.
-    let events: Vec<StoreEvent> =
-        read_jsonl(&ledger).map_err(|e| format!("crystal ledger {}: {e}", ledger.display()))?;
+    let events: Vec<StoreEvent> = if strict { read_jsonl_strict(&ledger) } else { read_jsonl(&ledger) }
+        .map_err(|e| format!("crystal ledger {}: {e}", ledger.display()))?;
     let mut records: Vec<DurableRecord> = fold_ledger(&events)
         .into_iter()
         .filter(|r| r.status == CrystalStatus::Active)
