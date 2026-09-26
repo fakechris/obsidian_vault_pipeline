@@ -6,7 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+decision-live = ["ovp-app/decision-live"]
+
 [dependencies]
+ovp-app = { path = "../ovp-app" }
 ovp-index = { path = "../ovp-index" }
 ovp-domain = { path = "../ovp-domain" }
 ovp-api-projection = { path = "../ovp-api-projection" }

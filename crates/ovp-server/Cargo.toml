@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [features]
+decision-live = ["ovp-app/decision-live"]
 default = []
 # Live Anthropic-compatible transport for POST /api/ask (desktop + serve).
 # Off by default so the offline test gauntlet stays HTTP-free; product builds
@@ -19,6 +20,7 @@ anthropic = ["ovp-llm/anthropic"]
 chrono = { workspace = true }
 
 [dependencies]
+ovp-app = { path = "../ovp-app" }
 ovp-api-projection = { path = "../ovp-api-projection" }
 ovp-index = { path = "../ovp-index" }
 ovp-domain = { path = "../ovp-domain" }
@@ -33,4 +35,5 @@ chrono = { workspace = true }
 tiny_http = "0.12"
 
 [dev-dependencies]
+tempfile.workspace = true
 ovp-daily = { path = "../ovp-daily" }

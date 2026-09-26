@@ -4663,6 +4663,12 @@ fn handle_ask_agent(
             };
             let mut tools = VaultTools::new(&vault_root)
                 .with_result_cap(cfg.max_result_bytes.saturating_sub(2 * 1024));
+            if let Some(settings) = ovp_app::decisions::load_optional_settings(&vault_root).map_err(|e|e.to_string())? {
+                tools = tools.with_decision_reranker(ovp_memory::decision_rerank::DecisionReranker::new(
+                    &vault_root, settings, Arc::new(ovp_app::decisions::SearchDecisionFactory),
+                    response_session.clone(),
+                ).map_err(|e|e.to_string())?);
+            }
             const MAX_PROGRESS_EVENTS: usize = 256;
             let sink = |ev: AgentProgress| {
                 let json = match &ev {
@@ -7794,6 +7800,25 @@ mod tests {
     /// A3b: the flag-gated agent path serves a full turn — response shape,
     /// resolved citations, executor coverage, durable transcript, progress
     /// feed. The scripted client answers with no tool calls (0-tool final).
+    #[test]
+    fn decision_relevance_replay_reaches_portal_agent_context() {
+        #[allow(dead_code)]
+        mod fixture { include!("../../../fixtures/decision-rerank-v1/support.rs"); }
+        for mode in [ovp_llm::decision::runtime::DecisionMode::Off, ovp_llm::decision::runtime::DecisionMode::Shadow, ovp_llm::decision::runtime::DecisionMode::Enabled] {
+            let tmp = tempfile::tempdir().unwrap();
+            fixture::install(tmp.path(), mode);
+            let enabled = mode == ovp_llm::decision::runtime::DecisionMode::Enabled;
+            let mut st = state(tmp.path().to_path_buf(), None);
+            st.ask_agent = true;
+            st.ask_client = Some(Arc::new(move || Ok(Box::new(fixture::AgentClient(enabled)) as Box<dyn ModelClient>)));
+            let response = ask(&st, r#"{"question":"retrieval","chat":"relevance-test"}"#);
+            assert_eq!(response.status_code(), 200);
+            let value: serde_json::Value = serde_json::from_slice(response.into_reader().get_ref()).unwrap();
+            assert_eq!(value["stopped_reason"], "final", "{value}");
+            assert!(value.to_string().contains("verified order"));
+        }
+    }
+
     #[test]
     fn agent_ask_serves_a_full_turn_with_receipts() {
         let vault = portal_vault("agent-turn", "50-Inbox/03-Processed/good.md", "body\n");

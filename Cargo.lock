@@ -2964,6 +2964,7 @@ name = "ovp-mcp"
 version = "2.0.1"
 dependencies = [
  "ovp-api-projection",
+ "ovp-app",
  "ovp-doctor",
  "ovp-domain",
  "ovp-index",
@@ -3084,6 +3085,7 @@ version = "2.0.1"
 dependencies = [
  "chrono",
  "ovp-api-projection",
+ "ovp-app",
  "ovp-daily",
  "ovp-domain",
  "ovp-index",
@@ -3094,6 +3096,7 @@ dependencies = [
  "ovp-scheduler",
  "serde",
  "serde_json",
+ "tempfile",
  "tiny_http",
 ]
 
