@@ -124,7 +124,12 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
     // Pass the guard IN so the reader phase can write live per-source progress
     // to the same heartbeat (`18/90 · <current>`); the terminal finalize below
     // still fires on the guard here.
-    match run_inner(args, Some(lock), Some(&mut counts), Some(&guard)) {
+    // `lock` stays owned HERE, so it outlives the terminal `finalize_*` write
+    // below (and the guard's Drop, which runs first because `guard` was
+    // declared after `lock`). Released any earlier, the next run could take
+    // the lock and write "running", then this run's "completed" would
+    // overwrite it; both share the date-based run_id (INV-686).
+    match run_inner(args, Some(&lock), Some(&mut counts), Some(&guard)) {
         Ok(()) => {
             // stderr, not stdout: this fires AFTER run_inner has emitted the
             // final `daily-result:` line, and a caller reading stdout's last
@@ -146,10 +151,11 @@ pub fn run(args: DailyArgs) -> Result<(), CliError> {
 
 fn run_inner(
     args: DailyArgs,
-    // The run lock, acquired by `run()` BEFORE the heartbeat (so a lock
-    // contender never writes a heartbeat). Held for the lifetime of this call.
-    // None only for dry runs, which take no lock.
-    _lock: Option<ovp_intake::RunLock>,
+    // The run lock, acquired and held by `run()` BEFORE the heartbeat (so a
+    // lock contender never writes a heartbeat) until AFTER the heartbeat's
+    // terminal write. Borrowed here as proof it is held. None only for dry
+    // runs, which take no lock.
+    _lock: Option<&ovp_intake::RunLock>,
     mut counts: Option<&mut ovp_daily::RunCounts>,
     // The armed heartbeat guard (None for dry runs). While the reader phase
     // runs, `on_source` calls `guard.progress(..)` after each source so the

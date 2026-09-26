@@ -21,3 +21,11 @@ SessionLock   SessionLockVerify.cfg                 Mutex
 SessionLock   SessionLockSanityRenamers.cfg         NeverTwoRenamers
 SessionLock   SessionLockSanityReclaims.cfg         NeverReclaims
 SessionLock   SessionLockSanityFlockRetaken.cfg     NeverRetakenAfterCrash
+RegistryWrite    RegistryWrite.cfg                    ok
+RegistryWrite    RegistryWriteLegacyTorn.cfg          RegistryParses
+RegistryWrite    RegistryWriteUniqueTmpOnly.cfg       NoLostUpdate
+RegistryWrite    RegistryWriteSanityOverlap.cfg       NeverTwoInFlight
+SourceWorkQueue  SourceWorkQueue.cfg                  ok
+SourceWorkQueue  SourceWorkQueueLegacyDouble.cfg      NoDoubleExecution
+SourceWorkQueue  SourceWorkQueueLegacyLost.cfg        NoLostEnqueue
+SourceWorkQueue  SourceWorkQueueSanityBoth.cfg        NeverBothExecuted

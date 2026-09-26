@@ -13,11 +13,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+/// A token unique to this process run: pid + start time (nanos), taken once.
+/// Stored on every claim so recovery can tell "this process's own claim" from
+/// "a claim by an earlier process that happened to have the same PID".
+pub fn process_claim_token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{}-{nanos}", std::process::id())
+    })
+}
+
 const QUEUE_SCHEMA: &str = "ovp.source-work-queue/v1";
 const QUEUE_REL: &str = ".ovp/source-work-queue.json";
 /// Cross-process exclusive lock for queue file mutations (enqueue/cancel/…).
 const QUEUE_WRITE_LOCK: &str = "source-work-queue.write.lock";
-/// Cross-process election: only one process runs the background worker.
+/// Cross-process election: only one process runs the background worker. An
+/// OS advisory lock ([`ovp_intake::OsLock`]) held for the portal's lifetime:
+/// the kernel frees it when the worker dies, so PID reuse cannot block a new
+/// election (codex on INV-686).
 pub const WORKER_LOCK: &str = "source-work-worker.lock";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +121,14 @@ pub struct QueueItem {
     pub started_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<u64>,
+    /// PID of the worker that claimed this item (set by `claim_next`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_by: Option<u32>,
+    /// Per-process claim token of that worker ([`process_claim_token`]).
+    /// Unlike the PID, it is never reused: after a reboot, or when a new
+    /// worker is handed the dead claimer's PID, the token still differs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_token: Option<String>,
     /// Client should surface a desktop/browser notification when terminal.
     #[serde(default = "default_true")]
     pub notify: bool,
@@ -154,12 +179,6 @@ pub struct EnqueueRequest {
     pub priority: i32,
 }
 
-/// How long a `running` item may sit with no finish before restart recovery
-/// treats it as abandoned (seconds). LLM translate of a long article can take
-/// several minutes; 12m is a generous upper bound that still unblocks a stuck
-/// gate within a refresh cycle users notice.
-const STALE_RUNNING_SECS: u64 = 12 * 60;
-
 /// Total tries (initial attempt + automatic retries) before a transient
 /// task failure goes terminal `Failed`. Retry schedule: 1m, 2m after the
 /// first two transient failures; the third is terminal.
@@ -179,20 +198,15 @@ pub struct SourceWorkQueue {
 }
 
 impl SourceWorkQueue {
+    /// Read-only open. Restart recovery does NOT run here: `open` also runs in
+    /// processes that are not the worker (a second portal, `ovp2 source-work
+    /// backfill`), and "running" on disk may be the live worker's in-flight
+    /// item. An unlocked recover-and-persist from such a process could requeue
+    /// it, or overwrite the worker's later `finish_task`, so the article ran
+    /// twice (docs/tla/SourceWorkQueue.tla). Recovery lives in [`Self::claim_next`].
     pub fn open(vault_root: &Path) -> Self {
         let path = vault_root.join(QUEUE_REL);
-        let mut file = load_file(&path).unwrap_or_default();
-        // Restart recovery: anything left `running` was mid-flight when the
-        // process died. Promote to Done when artifacts already exist (no need
-        // to re-burn LLM); otherwise re-queue so `claim_next` is not blocked
-        // forever (one-running-at-a-time gate).
-        let recovered = recover_interrupted(vault_root, &mut file);
-        if recovered > 0 {
-            let _ = persist(&path, &file);
-            eprintln!(
-                "source-work-queue: recovered {recovered} interrupted item(s) after restart"
-            );
-        }
+        let file = load_file(&path).unwrap_or_default();
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         Self {
             path,
@@ -220,15 +234,12 @@ impl SourceWorkQueue {
         if !newer {
             return;
         }
-        if g.items.iter().any(|i| i.status == ItemStatus::Running) {
-            // We own a run — do not replace in-memory state mid-flight.
-            return;
-        }
-        if let Some(mut file) = load_file(&self.path) {
-            let n = recover_interrupted(&self.vault_root, &mut file);
-            if n > 0 {
-                let _ = self.persist_tracked(&file);
-            }
+        // No "we own a run, keep memory" exception: every queue WRITE reloads
+        // from disk under the write lock first, so memory is never more
+        // authoritative than disk. The exception froze a second portal's view
+        // forever when it opened the queue during another worker's run.
+        // Read only: no recovery and no persist from a reader (see `open`).
+        if let Some(file) = load_file(&self.path) {
             *g = file;
             if let Some(m) = disk_m {
                 *self
@@ -236,67 +247,25 @@ impl SourceWorkQueue {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner()) = Some(m);
             }
-            if n > 0 {
-                eprintln!(
-                    "source-work-queue: reloaded disk + recovered {n} interrupted item(s)"
-                );
-            }
         }
-    }
-
-    /// Unstick items that have been `running` longer than [`STALE_RUNNING_SECS`]
-    /// (abandoned after crash/kill while this process still thought they ran).
-    fn recover_stale_running(&self, g: &mut QueueFile) -> usize {
-        let now = now_secs();
-        let mut stale_ids = Vec::new();
-        for item in g.items.iter() {
-            if item.status != ItemStatus::Running {
-                continue;
-            }
-            let started = item.started_at.unwrap_or(item.created_at);
-            if now.saturating_sub(started) >= STALE_RUNNING_SECS {
-                stale_ids.push(item.id.clone());
-            }
-        }
-        if stale_ids.is_empty() {
-            return 0;
-        }
-        // Re-run full interrupted recovery on the whole file so artifacts can
-        // promote to Done.
-        let n = recover_interrupted(&self.vault_root, g);
-        // Force any remaining long-running items (no artifacts) back to queued
-        // even if started_at was just cleared. Preserve `attempts`/`not_before`
-        // on the requeued tasks: resetting them here would hand every stuck
-        // task a free retry budget (and pull its backoff earlier) every 12
-        // minutes — an infinite stale-recovery retry loop.
-        for item in g.items.iter_mut() {
-            if stale_ids.contains(&item.id) && item.status == ItemStatus::Running {
-                item.status = ItemStatus::Queued;
-                item.started_at = None;
-                if item.translate.status == TaskStatus::Running {
-                    item.translate.status = TaskStatus::Queued;
-                }
-                if item.summarize.status == TaskStatus::Running {
-                    item.summarize.status = TaskStatus::Queued;
-                }
-            }
-        }
-        if n > 0 || !stale_ids.is_empty() {
-            let _ = self.persist_tracked(g);
-            eprintln!(
-                "source-work-queue: unstuck {} stale running item(s)",
-                stale_ids.len()
-            );
-        }
-        stale_ids.len()
     }
 
     /// After a worker finishes an item (or panics), force any still-Running
     /// tasks on `id` into Failed so the serial gate cannot stick.
-    pub fn fail_still_running(&self, id: &str, reason: &str) {
+    ///
+    /// Returns `Err` when the terminal state could not be written (the write
+    /// lock timed out, or the persist failed). The worker must retry until
+    /// `Ok` before claiming again. Recovery only covers DEAD claimers, so an
+    /// item left `running` by this live process would close the
+    /// one-article gate for good.
+    pub fn fail_still_running(&self, id: &str, reason: &str) -> Result<(), String> {
+        // Locked + reload: persisting a stale in-memory copy would erase a
+        // concurrent enqueue/cancel from another process.
+        self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.reload_from_disk(&mut g);
         let Some(item) = g.items.iter_mut().find(|i| i.id == id) else {
-            return;
+            return Ok(());
         };
         let mut touched = false;
         if item.translate.wanted && item.translate.status == TaskStatus::Running {
@@ -319,14 +288,16 @@ impl SourceWorkQueue {
             touched = true;
         }
         if touched {
-            let _ = self.persist_tracked(&g);
+            self.persist_tracked(&g)?;
         }
+        Ok(())
+        })
     }
 
+    /// Read-only view for the portal. Never recovers or persists (see `open`).
     pub fn snapshot(&self) -> QueueFile {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.maybe_reload_from_disk(&mut g);
-        self.recover_stale_running(&mut g);
         g.clone()
     }
 
@@ -341,11 +312,11 @@ impl SourceWorkQueue {
 
     /// True when `pid` is the live owner of the worker lock (or no lock and
     /// we are about to take it — caller decides).
+    ///
+    /// Answered from this process's own lock record, not the PID in the file:
+    /// after PID reuse a dead worker's stale PID can equal ours.
     pub fn worker_owner_is_this_process(&self) -> bool {
-        match self.worker_owner_pid() {
-            Some(p) => p == std::process::id(),
-            None => false,
-        }
+        ovp_intake::OsLock::held_by_this_process(&self.vault_root, WORKER_LOCK)
     }
 
     /// Brief exclusive lock around a disk-coordinated mutation. Retries a few
@@ -372,8 +343,7 @@ impl SourceWorkQueue {
     ///
     /// Does **not** run [`recover_interrupted`]: that would re-queue a
     /// just-claimed `Running` item mid-flight (breaking the one-at-a-time
-    /// gate). Restart recovery belongs in [`Self::open`] and
-    /// [`Self::recover_stale_running`] only.
+    /// gate). Recovery belongs in [`Self::claim_next`] only.
     fn reload_from_disk(&self, g: &mut QueueFile) {
         if let Some(file) = load_file(&self.path) {
             *g = file;
@@ -465,6 +435,8 @@ impl SourceWorkQueue {
             created_at: now,
             started_at: None,
             finished_at: None,
+            claimed_by: None,
+                claim_token: None,
             notify: req.notify,
             notify_sent: false,
             priority: req.priority,
@@ -581,11 +553,35 @@ impl SourceWorkQueue {
     /// priority, older `created_at` (FIFO). UI interactive jobs (priority 100)
     /// therefore jump ahead of bulk backfill (priority 0) without reordering
     /// the whole list by hand.
+    ///
+    /// Recovery runs here, under the write lock, and only for items whose
+    /// claiming worker is verifiably dead ([`QueueItem::claimed_by`]): promote
+    /// to Done if the artifacts exist, otherwise requeue (retry budget and
+    /// backoff preserved). This replaces the old 12-minute timeout, which could
+    /// requeue a live long-running item. A live claimer, including this
+    /// process, keeps the one-article-at-a-time gate closed. This worker's own
+    /// abandoned tasks are closed by [`Self::fail_still_running`].
     pub fn claim_next(&self) -> Option<QueueItem> {
         self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.reload_from_disk(&mut g);
-        self.recover_stale_running(&mut g);
+        // Abandoned = not this process's own claim, and either (a) this
+        // process is the elected worker (the WORKER_LOCK holder, so no other
+        // live worker exists and the claimer must be gone, whatever its PID
+        // now names) or (b) the claimer's PID is verifiably dead. (a) is what
+        // survives PID reuse, e.g. after a reboot. This process's own claims
+        // are closed by `fail_still_running`, never recovered here.
+        let me = process_claim_token();
+        let i_am_worker = self.worker_owner_is_this_process();
+        let recovered = recover_interrupted(&self.vault_root, &mut g, |item| {
+            item.claim_token.as_deref() != Some(me)
+                && (i_am_worker
+                    || item.claimed_by.is_none_or(|pid| ovp_intake::probe_pid(pid) == Some(false)))
+        });
+        if recovered > 0 {
+            self.persist_tracked(&g)?;
+            eprintln!("source-work-queue: recovered {recovered} abandoned item(s)");
+        }
         if g.items.iter().any(|i| i.status == ItemStatus::Running) {
             return Ok(None); // one article at a time
         }
@@ -595,6 +591,8 @@ impl SourceWorkQueue {
         let item = &mut g.items[idx];
         item.status = ItemStatus::Running;
         item.started_at = Some(now_secs());
+        item.claimed_by = Some(std::process::id());
+        item.claim_token = Some(process_claim_token().to_string());
         if item.translate.wanted && item.translate.status == TaskStatus::Queued {
             item.translate.status = TaskStatus::Running;
         }
@@ -675,8 +673,8 @@ impl SourceWorkQueue {
             // NEVER route the retry through `recompute_item_status`: with the
             // sibling task still Running it would leave the item `Running`,
             // and claim_next's one-item-running gate would jam the WHOLE
-            // queue behind this item's backoff until `recover_stale_running`
-            // (12 min). Re-queue the item explicitly instead.
+            // queue behind this item's backoff. Re-queue the item explicitly
+            // instead.
             if item.status != ItemStatus::Cancelled {
                 item.status = ItemStatus::Queued;
                 item.started_at = None;
@@ -728,7 +726,12 @@ impl SourceWorkQueue {
     }
 
     pub fn mark_task_skipped_if_not_wanted(&self, id: &str) {
+        // Locked + reload, like every other queue write (docs/tla/SourceWorkQueue.tla,
+        // SourceWorkQueueLegacyLost: an unlocked persist of this process's stale
+        // copy erased another process's enqueue).
+        let _ = self.with_write_lock(|| {
         let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.reload_from_disk(&mut g);
         if let Some(item) = g.items.iter_mut().find(|i| i.id == id) {
             if !item.translate.wanted {
                 item.translate.status = TaskStatus::Skipped;
@@ -745,8 +748,10 @@ impl SourceWorkQueue {
             } else {
                 recompute_item_status(item);
             }
-            let _ = self.persist_tracked(&g);
+            self.persist_tracked(&g)?;
         }
+        Ok(())
+        });
     }
 }
 
@@ -947,7 +952,9 @@ fn now_secs() -> u64 {
 
 fn read_lock_pid(path: &Path) -> Option<u32> {
     let raw = std::fs::read_to_string(path).ok()?;
-    let pid = raw.trim().parse::<u32>().ok().filter(|p| *p > 0)?;
+    // `oslock <pid>` (OsLock) or a bare PID (pre-INV-686 RunLock).
+    let raw = raw.trim();
+    let pid = raw.strip_prefix("oslock ").unwrap_or(raw).trim().parse::<u32>().ok().filter(|p| *p > 0)?;
     // Only report an owner the OS confirms is still running: an unanswerable
     // probe means we cannot vouch for the holder, so the lock is not reported.
     (ovp_intake::probe_pid(pid) == Some(true)).then_some(pid)
@@ -955,9 +962,23 @@ fn read_lock_pid(path: &Path) -> Option<u32> {
 
 /// Recover items left mid-flight across process death. Returns how many
 /// queue items were touched.
-fn recover_interrupted(vault_root: &Path, file: &mut QueueFile) -> usize {
+/// Recover interrupted items for which `abandoned` holds (its claimer is gone).
+fn recover_interrupted(
+    vault_root: &Path,
+    file: &mut QueueFile,
+    abandoned: impl Fn(&QueueItem) -> bool,
+) -> usize {
     let mut n = 0usize;
     for item in file.items.iter_mut() {
+        // Cheap state check first: `abandoned` may probe a PID (spawning
+        // `kill -0`), and terminal items keep their `claimed_by`, so probing
+        // every item would spawn a process per retained item on each idle poll.
+        let has_running = item.status == ItemStatus::Running
+            || item.translate.status == TaskStatus::Running
+            || item.summarize.status == TaskStatus::Running;
+        if !has_running || !abandoned(item) {
+            continue;
+        }
         let mut touched = false;
 
         // Soft-cancelled mid-run: tasks may still be Running — park them.
@@ -1063,11 +1084,16 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn tmp() -> PathBuf {
+        // The counter matters: macOS SystemTime has microsecond resolution, so
+        // two parallel tests could get the same "nanos" and delete each
+        // other's vault (a flaky failure seen while adding INV-686 tests).
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let n = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let p = std::env::temp_dir().join(format!("ovp-swq-{n}"));
+        let p = std::env::temp_dir().join(format!("ovp-swq-{n}-{seq}"));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
@@ -1203,7 +1229,7 @@ mod tests {
     }
 
     #[test]
-    fn open_requeues_interrupted_running_items() {
+    fn claim_requeues_interrupted_running_items() {
         let vault = tmp();
         let path = vault.join(QUEUE_REL);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1233,6 +1259,8 @@ mod tests {
                 created_at: 1,
                 started_at: Some(2),
                 finished_at: None,
+                claimed_by: None,
+                claim_token: None,
                 notify: true,
                 notify_sent: false,
                 priority: 0,
@@ -1240,20 +1268,20 @@ mod tests {
         };
         persist(&path, &file).unwrap();
         let q = SourceWorkQueue::open(&vault);
-        let snap = q.snapshot();
-        assert_eq!(snap.items.len(), 1);
-        // No artifacts on disk → re-queued for retry.
-        assert_eq!(snap.items[0].status, ItemStatus::Queued);
-        assert_eq!(snap.items[0].translate.status, TaskStatus::Queued);
-        assert_eq!(snap.items[0].summarize.status, TaskStatus::Queued);
-        // Worker can claim again after recovery.
+        // open/snapshot never recover: a reader cannot tell a dead claimer's
+        // item from a live one's (INV-686).
+        assert_eq!(q.snapshot().items[0].status, ItemStatus::Running);
+        // The worker's claim recovers it (no claimer recorded = pre-INV-686
+        // writer = gone): no artifacts → re-queued, then claimed again.
         let claimed = q.claim_next().unwrap();
         assert_eq!(claimed.id, "swq-stuck");
+        assert_eq!(claimed.translate.status, TaskStatus::Running);
+        assert_eq!(claimed.claimed_by, Some(std::process::id()));
         let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]
-    fn open_promotes_interrupted_when_artifacts_exist() {
+    fn claim_promotes_interrupted_when_artifacts_exist() {
         let vault = tmp();
         let path = vault.join(QUEUE_REL);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1290,6 +1318,8 @@ mod tests {
                 created_at: 1,
                 started_at: Some(2),
                 finished_at: None,
+                claimed_by: None,
+                claim_token: None,
                 notify: true,
                 notify_sent: false,
                 priority: 0,
@@ -1297,12 +1327,14 @@ mod tests {
         };
         persist(&path, &file).unwrap();
         let q = SourceWorkQueue::open(&vault);
+        assert_eq!(q.snapshot().items[0].status, ItemStatus::Running);
+        // The claim recovers it; artifacts on disk promote it to Done, so
+        // nothing is left to claim.
+        assert!(q.claim_next().is_none());
         let snap = q.snapshot();
         assert_eq!(snap.items[0].status, ItemStatus::Done);
         assert_eq!(snap.items[0].translate.status, TaskStatus::Done);
         assert_eq!(snap.items[0].summarize.status, TaskStatus::Done);
-        // Gate free — next claim can proceed.
-        assert!(q.claim_next().is_none());
         let _ = std::fs::remove_dir_all(&vault);
     }
 
@@ -1340,6 +1372,59 @@ mod tests {
     }
 
     // ---- fail-back lifecycle (queue_failback-v1) ----
+
+    /// A PID that verifiably no longer runs: a reaped child of this process.
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    /// CodeRabbit on #506: a crashed claimer's PID can be reused (after a
+    /// reboot, possibly by the new worker itself). The elected worker recovers
+    /// any claim that is not its own, whatever the recorded PID now names.
+    #[test]
+    fn elected_worker_recovers_a_claim_whose_pid_was_reused() {
+        let vault = tmp();
+        let q = SourceWorkQueue::open(&vault);
+        let a = q.enqueue(enq("sha-reused", false)).unwrap();
+        q.claim_next().unwrap();
+        {
+            // Claimed by an EARLIER process run that had our very PID.
+            let mut g = q.state.lock().unwrap_or_else(|p| p.into_inner());
+            let it = g.items.iter_mut().find(|i| i.id == a.id).unwrap();
+            it.claim_token = Some(format!("{}-earlier-run", std::process::id()));
+            q.persist_tracked(&g).unwrap();
+        }
+        // Not the elected worker: the PID looks alive, so hands off.
+        assert!(q.claim_next().is_none());
+        // Elected worker: recover and re-claim.
+        let _worker = ovp_intake::OsLock::acquire_named(&vault, WORKER_LOCK).unwrap();
+        let again = q.claim_next().expect("recovered and claimed");
+        assert_eq!(again.id, a.id);
+        assert_eq!(again.claim_token.as_deref(), Some(process_claim_token()));
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn a_live_claimer_keeps_its_item_even_for_a_new_worker() {
+        // The item's claimer (this process) is alive, so another worker's
+        // claim must not recover it: the gate stays closed.
+        let vault = tmp();
+        let first = SourceWorkQueue::open(&vault);
+        first.enqueue(enq("sha-mine", false)).unwrap();
+        first.enqueue(enq("sha-next", false)).unwrap();
+        first.claim_next().unwrap();
+        let second = SourceWorkQueue::open(&vault);
+        assert!(second.claim_next().is_none());
+        assert_eq!(second.snapshot().items.iter().filter(|i| i.status == ItemStatus::Running).count(), 1);
+        let _ = std::fs::remove_dir_all(&vault);
+    }
 
     fn enq(sha: &str, summarize: bool) -> EnqueueRequest {
         EnqueueRequest {
@@ -1596,31 +1681,111 @@ mod tests {
     }
 
     #[test]
-    fn stale_recovery_preserves_attempts_and_not_before() {
+    fn abandoned_running_recovery_preserves_attempts_and_not_before() {
         let vault = tmp();
         let q = SourceWorkQueue::open(&vault);
         let a = q.enqueue(enq("sha-stale", false)).unwrap();
         q.claim_next().unwrap();
         // Simulate: retried twice already (attempts=2 + future backoff), then
-        // the process lost track — item went stale while Running.
+        // the worker died with the item Running.
         let future = now_secs() + 3600;
         {
             let mut g = q.state.lock().unwrap_or_else(|p| p.into_inner());
             let it = g.items.iter_mut().find(|i| i.id == a.id).unwrap();
-            it.started_at = Some(now_secs() - STALE_RUNNING_SECS - 60);
             it.translate.attempts = 2;
             it.translate.not_before = Some(future);
+            // Claimed by another, now-dead process: its PID and its token.
+            let pid = dead_pid();
+            it.claimed_by = Some(pid);
+            it.claim_token = Some(format!("{pid}-dead-run"));
             q.persist_tracked(&g).unwrap();
         }
-        let snap = q.snapshot(); // triggers recover_stale_running
-        let it = &snap.items[0];
+        // A reader never recovers: the item still shows Running.
+        assert_eq!(q.snapshot().items[0].status, ItemStatus::Running);
+        // The next worker's claim recovers it; the backoff keeps it unclaimed.
+        let worker = SourceWorkQueue::open(&vault);
+        assert!(worker.claim_next().is_none());
+        let it = &worker.snapshot().items[0];
         assert_eq!(it.status, ItemStatus::Queued);
         assert_eq!(it.translate.status, TaskStatus::Queued);
-        // Retry budget and backoff survive stale recovery — no infinite
-        // 12-minute retry loop, no pulled-forward not_before.
+        // Retry budget and backoff survive recovery — no free retries, no
+        // pulled-forward not_before.
         assert_eq!(it.translate.attempts, 2);
         assert_eq!(it.translate.not_before, Some(future));
-        assert!(q.claim_next().is_none());
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// docs/tla/SourceWorkQueue.tla, SourceWorkQueueLegacyDouble: a second
+    /// process opening the queue while the worker runs an item must not
+    /// requeue it, or the worker would run the same article twice.
+    #[test]
+    fn opening_the_queue_elsewhere_never_requeues_a_live_item() {
+        let vault = tmp();
+        let worker = SourceWorkQueue::open(&vault);
+        let a = worker.enqueue(enq("sha-live", false)).unwrap();
+        worker.claim_next().unwrap();
+
+        let other = SourceWorkQueue::open(&vault); // e.g. `ovp2 source-work backfill`
+        assert_eq!(other.snapshot().items[0].status, ItemStatus::Running);
+        worker.finish_task(&a.id, TaskKind::Translate, Ok(())).unwrap();
+        let _ = other.snapshot();
+
+        let done = worker.snapshot().items[0].clone();
+        assert_eq!(done.status, ItemStatus::Done);
+        assert!(worker.claim_next().is_none(), "the finished item is not claimed again");
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn a_reader_opened_mid_run_keeps_seeing_updates() {
+        let vault = tmp();
+        let worker = SourceWorkQueue::open(&vault);
+        let a = worker.enqueue(enq("sha-run", false)).unwrap();
+        worker.claim_next().unwrap();
+        let reader = SourceWorkQueue::open(&vault); // sees `a` Running
+        assert_eq!(reader.snapshot().items[0].status, ItemStatus::Running);
+        // Make the next write's mtime strictly newer on coarse-mtime filesystems.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        worker.finish_task(&a.id, TaskKind::Translate, Ok(())).unwrap();
+        worker.enqueue(enq("sha-later", false)).unwrap();
+        let snap = reader.snapshot();
+        assert_eq!(snap.items.len(), 2, "later enqueue visible");
+        let first = snap.items.iter().find(|i| i.id == a.id).unwrap();
+        assert_eq!(first.status, ItemStatus::Done, "finish visible");
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// codex P1 on INV-686: when the terminal write fails (write lock busy),
+    /// `fail_still_running` must report it so the worker retries instead of
+    /// moving on and leaving its own live claim `running` forever.
+    #[test]
+    fn fail_still_running_reports_a_failed_write_and_succeeds_on_retry() {
+        let vault = tmp();
+        let q = SourceWorkQueue::open(&vault);
+        let a = q.enqueue(enq("sha-stuck-live", false)).unwrap();
+        q.claim_next().unwrap();
+        let held = ovp_intake::RunLock::acquire_named(&vault, QUEUE_WRITE_LOCK).unwrap();
+        assert!(q.fail_still_running(&a.id, "worker done").is_err());
+        assert_eq!(q.snapshot().items[0].status, ItemStatus::Running);
+        drop(held);
+        q.fail_still_running(&a.id, "worker done").unwrap();
+        assert_ne!(q.snapshot().items[0].status, ItemStatus::Running);
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// SourceWorkQueueLegacyLost: the worker's skip-mark after a claim must not
+    /// persist a stale copy over another process's enqueue.
+    #[test]
+    fn skip_mark_keeps_a_concurrent_enqueue() {
+        let vault = tmp();
+        let worker = SourceWorkQueue::open(&vault);
+        let a = worker.enqueue(enq("sha-a", false)).unwrap();
+        worker.claim_next().unwrap();
+        let other = SourceWorkQueue::open(&vault);
+        other.enqueue(enq("sha-b", false)).unwrap();
+        worker.mark_task_skipped_if_not_wanted(&a.id);
+        let shas: Vec<_> = other.snapshot().items.iter().map(|i| i.sha256.clone()).collect();
+        assert!(shas.contains(&"sha-b".to_string()), "enqueue survived: {shas:?}");
         let _ = std::fs::remove_dir_all(&vault);
     }
 

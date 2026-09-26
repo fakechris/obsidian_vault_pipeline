@@ -27,6 +27,10 @@ flate2 = { version = "1.0" }
 # `probe_pid` — Windows has no `kill -0`, and the alternatives (`tasklist`
 # parsing) are localized and therefore unreliable. Already in the tree via
 # tempfile/tauri, so this adds no build cost.
+[target.'cfg(unix)'.dependencies]
+# O_NOFOLLOW for OsLock (vaultops.rs).
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

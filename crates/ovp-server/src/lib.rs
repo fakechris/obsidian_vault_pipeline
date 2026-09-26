@@ -373,7 +373,7 @@ struct AppState {
     source_work_queue: Arc<ovp_memory::source_work_queue::SourceWorkQueue>,
     /// Held for process lifetime when THIS portal won the worker election.
     /// Dropping the process releases the lock so another portal can take over.
-    _source_work_worker_lock: Option<ovp_intake::RunLock>,
+    _source_work_worker_lock: Option<ovp_intake::OsLock>,
     /// True when this process runs the background source-work worker.
     source_work_worker_here: bool,
 }
@@ -814,7 +814,7 @@ pub fn run_server(config: ServeConfig) -> Result<(), String> {
     // Cross-process worker election: only ONE portal (desktop or CLI serve)
     // runs the LLM worker for a given vault. Others still serve the API and
     // can enqueue; jobs are claimed by the lock holder after disk reload.
-    let worker_lock = ovp_intake::RunLock::acquire_named(
+    let worker_lock = ovp_intake::OsLock::acquire_named(
         &vault_root,
         ovp_memory::source_work_queue::WORKER_LOCK,
     );
@@ -2167,6 +2167,26 @@ fn handle_schedule_features(state: &AppState, body: &str) -> Response<std::io::C
         );
     };
 
+    // Same dispatch lock every CLI registry writer holds (init / install /
+    // enable / disable / tick). Without it, this read-modify-write loses a
+    // concurrent edit, and before per-process tmp names it could publish a
+    // half-written registry that fails every tick (docs/tla/RegistryWrite.tla).
+    // Non-blocking: a tick holds the lock for its whole dispatch (a daily run
+    // takes minutes), so report busy instead of hanging the request.
+    let _dispatch_lock =
+        match ovp_intake::RunLock::acquire_named(&state.vault_root, "scheduler.lock") {
+            Ok(lock) => lock,
+            Err(_) => {
+                return json_response(
+                    409,
+                    &serde_json::json!({
+                        "error": "the scheduler is busy (a scheduled run or schedule edit is in progress); try again when it finishes",
+                        "code": "scheduler_busy",
+                    })
+                    .to_string(),
+                );
+            }
+        };
     let mut reg = match ovp_scheduler::load_registry(&state.vault_root) {
         // as_written: this path saves, and must not drop quarantined jobs.
         Ok(Some(r)) => r.as_written,
@@ -3634,7 +3654,6 @@ fn handle_source_work_queue_delete(
 
 /// Background loop: claim one article, run its wanted tasks (parallel), finish.
 fn source_work_queue_worker(state: Arc<AppState>) {
-    use ovp_memory::source_work_queue::{TaskKind, TaskStatus};
     loop {
         state
             .source_work_queue
@@ -3642,150 +3661,17 @@ fn source_work_queue_worker(state: Arc<AppState>) {
         let Some(item) = state.source_work_queue.claim_next() else {
             continue;
         };
-        let Some(factory) = state.ask_client.clone() else {
-            let _ = state.source_work_queue.finish_task(
-                &item.id,
-                TaskKind::Translate,
-                Err("llm not configured".into()),
-            );
-            if item.summarize.wanted {
-                let _ = state.source_work_queue.finish_task(
-                    &item.id,
-                    TaskKind::Summarize,
-                    Err("llm not configured".into()),
-                );
-            }
-            continue;
-        };
-        let Some(model) = state.current_model() else {
-            let err = "index not available".to_string();
-            if item.translate.wanted {
-                let _ = state
-                    .source_work_queue
-                    .finish_task(&item.id, TaskKind::Translate, Err(err.clone()));
-            }
-            if item.summarize.wanted {
-                let _ = state
-                    .source_work_queue
-                    .finish_task(&item.id, TaskKind::Summarize, Err(err));
-            }
-            continue;
-        };
-        let (md, title, url) = match source_markdown_for(&state, &model, &item.sha256) {
-            Ok(v) => v,
-            Err(_) => {
-                let err = "source markdown unavailable".to_string();
-                if item.translate.wanted {
-                    let _ = state.source_work_queue.finish_task(
-                        &item.id,
-                        TaskKind::Translate,
-                        Err(err.clone()),
-                    );
-                }
-                if item.summarize.wanted {
-                    let _ = state
-                        .source_work_queue
-                        .finish_task(&item.id, TaskKind::Summarize, Err(err));
-                }
-                continue;
-            }
-        };
-        // Prefer live title from the note when the queue item has none.
-        let title = title.or(item.title.clone());
-        let model_name = ovp_memory::ask::AskArgs::default().model_name;
-        let vault = state.vault_root.clone();
-        let q = Arc::clone(&state.source_work_queue);
         let id = item.id.clone();
-        let sha = item.sha256.clone();
-        let md_t = md.clone();
-        let md_s = md;
-        let title_t = title.clone();
-        let title_s = title;
-        let url_t = url.clone();
-        let url_s = url;
-        let force_t = item.translate.force;
-        let force_s = item.summarize.force;
-        // Run ONLY the tasks claim_next armed (Running): after a partial
-        // retry the terminal sibling (Done / permanently Failed) must not
-        // execute again — with force=true that would repeat a paid LLM call,
-        // and a permanent sibling would be retried despite first-failure
-        // terminal semantics (codex P2 on PR #411).
-        let do_t = item.translate.wanted && item.translate.status == TaskStatus::Running;
-        let do_s = item.summarize.wanted && item.summarize.status == TaskStatus::Running;
-        let factory_t = factory.clone();
-        let factory_s = factory;
-
-        let mut handles = Vec::new();
-        if do_t {
-            let q = Arc::clone(&q);
-            let id = id.clone();
-            let vault = vault.clone();
-            let sha = sha.clone();
-            let model_name = model_name.clone();
-            handles.push(std::thread::spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (|| {
-                        let mut client = factory_t()?;
-                        ovp_memory::source_work::translate_source(
-                            &vault,
-                            &sha,
-                            title_t.as_deref(),
-                            url_t.as_deref(),
-                            &md_t,
-                            client.as_mut(),
-                            &model_name,
-                            force_t,
-                        )
-                        .map(|_| ())
-                    })()
-                }));
-                let result = match result {
-                    Ok(r) => r,
-                    Err(_) => Err("translate task panicked".into()),
-                };
-                let _ = q.finish_task(&id, TaskKind::Translate, result);
-            }));
-        } else {
-            state
-                .source_work_queue
-                .mark_task_skipped_if_not_wanted(&id);
-        }
-        if do_s {
-            let q = Arc::clone(&q);
-            let id = id.clone();
-            let vault = vault.clone();
-            let sha = sha.clone();
-            let model_name = model_name.clone();
-            handles.push(std::thread::spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (|| {
-                        let mut client = factory_s()?;
-                        ovp_memory::source_work::summarize_source(
-                            &vault,
-                            &sha,
-                            title_s.as_deref(),
-                            url_s.as_deref(),
-                            &md_s,
-                            client.as_mut(),
-                            &model_name,
-                            force_s,
-                        )
-                        .map(|_| ())
-                    })()
-                }));
-                let result = match result {
-                    Ok(r) => r,
-                    Err(_) => Err("summarize task panicked".into()),
-                };
-                let _ = q.finish_task(&id, TaskKind::Summarize, result);
-            }));
-        } else {
-            state
-                .source_work_queue
-                .mark_task_skipped_if_not_wanted(&id);
-        }
-        for h in handles {
-            let _ = h.join();
+        // Every exit path of the item (early error returns AND a panic
+        // anywhere in its lifecycle) falls through to the terminal cleanup
+        // below. A panic must not kill this thread either: the process would
+        // stay alive, keeping WORKER_LOCK and its claim, with no worker left
+        // to claim anything (INV-686).
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_source_work_item(&state, item)
+        }));
+        if run.is_err() {
+            eprintln!("source-work-queue: worker panicked on {id}; recording failure");
         }
         // Ensure item status recomputed if both skipped oddly.
         state
@@ -3793,9 +3679,181 @@ fn source_work_queue_worker(state: Arc<AppState>) {
             .mark_task_skipped_if_not_wanted(&id);
         // Belt-and-suspenders: never leave a claimed article as `running`
         // after the worker moves on (panic / missing finish_task / etc.).
+        // Do NOT move on until that terminal state is on disk. Recovery only
+        // covers dead claimers, so an item this live process leaves `running`
+        // would close claim_next's one-article gate for good (INV-686).
+        while let Err(e) = state
+            .source_work_queue
+            .fail_still_running(&id, "worker finished without task result")
+        {
+            eprintln!("source-work-queue: cannot record the end of {id} yet ({e}); retrying");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    }
+}
+
+/// Run one claimed article's tasks to completion. Returns early on setup
+/// errors after recording them; the caller does the terminal cleanup.
+fn run_source_work_item(
+    state: &Arc<AppState>,
+    item: ovp_memory::source_work_queue::QueueItem,
+) {
+    use ovp_memory::source_work_queue::{TaskKind, TaskStatus};
+    // Setup errors fail ONLY the tasks claim_next armed (wanted + Running),
+    // the same gate the launch path uses below: an unwanted task or a
+    // terminal sibling of a partial retry must keep its result (CodeRabbit
+    // on #506).
+    let armed_t = item.translate.wanted && item.translate.status == TaskStatus::Running;
+    let armed_s = item.summarize.wanted && item.summarize.status == TaskStatus::Running;
+    let fail_armed = |err: &str| {
+        if armed_t {
+            let _ = state
+                .source_work_queue
+                .finish_task(&item.id, TaskKind::Translate, Err(err.to_string()));
+        }
+        if armed_s {
+            let _ = state
+                .source_work_queue
+                .finish_task(&item.id, TaskKind::Summarize, Err(err.to_string()));
+        }
+    };
+    let Some(factory) = state.ask_client.clone() else {
+        fail_armed("llm not configured");
+        return;
+    };
+    let Some(model) = state.current_model() else {
+        fail_armed("index not available");
+        return;
+    };
+    let (md, title, url) = match source_markdown_for(state, &model, &item.sha256) {
+        Ok(v) => v,
+        Err(_) => {
+            fail_armed("source markdown unavailable");
+            return;
+        }
+    };
+    // Prefer live title from the note when the queue item has none.
+    let title = title.or(item.title.clone());
+    let model_name = ovp_memory::ask::AskArgs::default().model_name;
+    let vault = state.vault_root.clone();
+    let q = Arc::clone(&state.source_work_queue);
+    let id = item.id.clone();
+    let sha = item.sha256.clone();
+    let md_t = md.clone();
+    let md_s = md;
+    let title_t = title.clone();
+    let title_s = title;
+    let url_t = url.clone();
+    let url_s = url;
+    let force_t = item.translate.force;
+    let force_s = item.summarize.force;
+    // Run ONLY the tasks claim_next armed (Running): after a partial
+    // retry the terminal sibling (Done / permanently Failed) must not
+    // execute again — with force=true that would repeat a paid LLM call,
+    // and a permanent sibling would be retried despite first-failure
+    // terminal semantics (codex P2 on PR #411).
+    let do_t = item.translate.wanted && item.translate.status == TaskStatus::Running;
+    let do_s = item.summarize.wanted && item.summarize.status == TaskStatus::Running;
+    let factory_t = factory.clone();
+    let factory_s = factory;
+
+    let mut handles = Vec::new();
+    if do_t {
+        let q = Arc::clone(&q);
+        let id = id.clone();
+        let vault = vault.clone();
+        let sha = sha.clone();
+        let model_name = model_name.clone();
+        // Builder::spawn returns Err instead of panicking, so a refused
+        // thread cannot unwind past an already-running sibling task (which
+        // `handles` joins below) and free the one-article gate early.
+        let spawned = std::thread::Builder::new().spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (|| {
+                    let mut client = factory_t()?;
+                    ovp_memory::source_work::translate_source(
+                        &vault,
+                        &sha,
+                        title_t.as_deref(),
+                        url_t.as_deref(),
+                        &md_t,
+                        client.as_mut(),
+                        &model_name,
+                        force_t,
+                    )
+                    .map(|_| ())
+                })()
+            }));
+            let result = match result {
+                Ok(r) => r,
+                Err(_) => Err("translate task panicked".into()),
+            };
+            let _ = q.finish_task(&id, TaskKind::Translate, result);
+        });
+        match spawned {
+            Ok(h) => handles.push(h),
+            Err(e) => {
+                let _ = state.source_work_queue.finish_task(
+                    &item.id,
+                    TaskKind::Translate,
+                    Err(format!("cannot start task thread: {e}")),
+                );
+            }
+        }
+    } else {
         state
             .source_work_queue
-            .fail_still_running(&id, "worker finished without task result");
+            .mark_task_skipped_if_not_wanted(&id);
+    }
+    if do_s {
+        let q = Arc::clone(&q);
+        let id = id.clone();
+        let vault = vault.clone();
+        let sha = sha.clone();
+        let model_name = model_name.clone();
+        // Builder::spawn returns Err instead of panicking, so a refused
+        // thread cannot unwind past an already-running sibling task (which
+        // `handles` joins below) and free the one-article gate early.
+        let spawned = std::thread::Builder::new().spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (|| {
+                    let mut client = factory_s()?;
+                    ovp_memory::source_work::summarize_source(
+                        &vault,
+                        &sha,
+                        title_s.as_deref(),
+                        url_s.as_deref(),
+                        &md_s,
+                        client.as_mut(),
+                        &model_name,
+                        force_s,
+                    )
+                    .map(|_| ())
+                })()
+            }));
+            let result = match result {
+                Ok(r) => r,
+                Err(_) => Err("summarize task panicked".into()),
+            };
+            let _ = q.finish_task(&id, TaskKind::Summarize, result);
+        });
+        match spawned {
+            Ok(h) => handles.push(h),
+            Err(e) => {
+                let _ = state.source_work_queue.finish_task(
+                    &item.id,
+                    TaskKind::Summarize,
+                    Err(format!("cannot start task thread: {e}")),
+                );
+            }
+        }
+    } else {
+        state
+            .source_work_queue
+            .mark_task_skipped_if_not_wanted(&id);
+    }
+    for h in handles {
+        let _ = h.join();
     }
 }
 
@@ -6648,6 +6706,32 @@ mod tests {
         assert!(daily["next_run"].as_str().unwrap().contains("T09:00:00"));
         let crystal = jobs.iter().find(|j| j["id"] == "crystallize").unwrap();
         assert_eq!(crystal["cadence"], "weekly Sun 10:00");
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn schedule_features_takes_the_scheduler_lock() {
+        let vault = portal_vault("sched-feat-lock", "50-Inbox/03-Processed/good.md", "body\n");
+        let st = state(vault.clone(), None);
+        let reg = ovp_scheduler::default_registry("live", (9, 0), false, None);
+        ovp_scheduler::save_registry(&vault, &reg).unwrap();
+        let before = std::fs::read_to_string(vault.join(".ovp/schedule.json")).unwrap();
+        let body = r#"{"job":"daily","pinboard_live":true}"#;
+
+        // A tick / CLI edit holds scheduler.lock → busy, registry untouched.
+        let held = ovp_intake::RunLock::acquire_named(&vault, "scheduler.lock").unwrap();
+        let resp = dispatch(&st, Method::Post, "/api/schedule/features", body);
+        assert_eq!(resp.status_code(), 409);
+        assert_eq!(body_json(resp)["code"], "scheduler_busy");
+        assert_eq!(std::fs::read_to_string(vault.join(".ovp/schedule.json")).unwrap(), before);
+
+        // Released → the edit lands.
+        drop(held);
+        let resp = dispatch(&st, Method::Post, "/api/schedule/features", body);
+        assert_eq!(resp.status_code(), 200);
+        let saved = ovp_scheduler::load_registry(&vault).unwrap().unwrap().as_written;
+        assert!(saved.get("daily").unwrap().argv.iter().any(|a| a == "--pinboard-live"));
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

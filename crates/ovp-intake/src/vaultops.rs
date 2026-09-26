@@ -392,6 +392,126 @@ impl RunLock {
     }
 }
 
+/// OS advisory lock (flock / LockFileEx via `File::try_lock`) on
+/// `.ovp/<name>`, held for the guard's lifetime. The kernel releases it when
+/// the holder dies, so there is no stale-owner reclaim step and PID reuse
+/// cannot pin it. [`RunLock`]'s PID file can: after a reboot, a dead
+/// holder's PID may name a live process, which reads as "still held". The file
+/// is never deleted, because every contender must lock the same inode. The PID
+/// written into it is for display only. Same primitive as the chat session
+/// lock (ovp-memory agent_transcript.rs, docs/tla/SessionLock.tla).
+#[derive(Debug)]
+pub struct OsLock {
+    key: PathBuf,
+    file: Option<std::fs::File>,
+}
+
+impl OsLock {
+    pub fn acquire_named(vault_root: &Path, name: &str) -> Result<Self, String> {
+        let path = vault_root.join(".ovp").join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        }
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // The PID stamp truncates: never follow a planted symlink.
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        #[cfg(not(unix))]
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!("lock {}: is a symlink, refusing to use it", path.display()));
+        }
+        let mut file = opts
+            .open(&path)
+            .map_err(|e| format!("lock {}: {e} (a symlink is refused)", path.display()))?;
+        if !file.metadata().is_ok_and(|m| m.is_file()) {
+            return Err(format!("lock {}: not a regular file", path.display()));
+        }
+        let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        // Reserve in the in-process set first (two handles in one process
+        // must exclude each other even where the OS lock is per-process),
+        // then retry without holding that set's mutex.
+        if !os_locks_held().insert(key.clone()) {
+            return Err(format!("{} is already held by this process", path.display()));
+        }
+        // Retry WouldBlock briefly: a child spawned by any thread holds a
+        // copy of every fd between fork and exec, which delays a release for
+        // those microseconds (see the session lock). A real holder keeps the
+        // lock far longer.
+        let mut attempt = 0;
+        loop {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) if attempt < 10 => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    os_locks_held().remove(&key);
+                    return Err(format!("{} is held by another process", path.display()));
+                }
+                Err(std::fs::TryLockError::Error(e)) => {
+                    os_locks_held().remove(&key);
+                    return Err(format!("lock {}: {e}", path.display()));
+                }
+            }
+        }
+        // Rolling upgrade: an OLDER binary took this name as a PID-file
+        // RunLock (create_new + a bare PID) and knows nothing of the OS lock.
+        // A bare live PID therefore means an old-version holder may be
+        // running, so refuse. We stamp `oslock <pid>`, which an old binary
+        // cannot parse and treats as a live holder, so it refuses too. Only
+        // bare-PID files left by old binaries are exposed to PID reuse, and
+        // the first new holder rewrites them.
+        let mut prior = String::new();
+        let _ = std::io::Read::read_to_string(&mut file, &mut prior);
+        if let Ok(pid) = prior.trim().parse::<u32>()
+            && pid != std::process::id()
+            && probe_pid(pid) != Some(false)
+        {
+            drop(file);
+            os_locks_held().remove(&key);
+            return Err(format!(
+                "{} is held by an older ovp2 (pid {pid}); stop it, or delete the file if that process is not ovp2",
+                path.display()
+            ));
+        }
+        use std::io::Seek;
+        let _ = file
+            .set_len(0)
+            .and_then(|_| file.seek(std::io::SeekFrom::Start(0)))
+            .and_then(|_| write!(file, "oslock {}", std::process::id()));
+        Ok(Self { key, file: Some(file) })
+    }
+
+    /// True when THIS process holds the named lock. Answered from the
+    /// in-process record, never from the PID in the file: a dead holder's
+    /// stale PID may equal ours after PID reuse.
+    pub fn held_by_this_process(vault_root: &Path, name: &str) -> bool {
+        let path = vault_root.join(".ovp").join(name);
+        let key = std::fs::canonicalize(&path).unwrap_or(path);
+        os_locks_held().contains(&key)
+    }
+}
+
+impl Drop for OsLock {
+    fn drop(&mut self) {
+        // Release the OS lock before leaving the in-process set.
+        drop(self.file.take());
+        os_locks_held().remove(&self.key);
+    }
+}
+
+fn os_locks_held() -> std::sync::MutexGuard<'static, std::collections::BTreeSet<PathBuf>> {
+    static HELD: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    HELD.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Three-valued process-liveness probe, shared by every stale-owner check in
 /// the workspace (run lock, daily heartbeat, source-work queue, agent
 /// transcript). It answers ONLY the OS question; each caller keeps its own
@@ -669,6 +789,43 @@ mod tests {
         assert!(err.contains("run.lock"), "got: {err}");
         drop(lock);
         let _again = RunLock::acquire(dir.path()).expect("released on drop");
+    }
+
+    #[test]
+    fn os_lock_refuses_a_live_legacy_holder_and_ignores_a_dead_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join(".ovp/w.lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        // An older binary's bare-PID lock whose owner is alive: refuse. Our
+        // parent (the test runner) is a live PID that is not us.
+        #[cfg(unix)]
+        {
+            std::fs::write(&lock_path, format!("{}\n", std::os::unix::process::parent_id())).unwrap();
+            let err = OsLock::acquire_named(dir.path(), "w.lock").expect_err("live legacy holder");
+            assert!(err.contains("older ovp2"), "{err}");
+            assert!(!OsLock::held_by_this_process(dir.path(), "w.lock"), "reservation released");
+        }
+        // A bare PID whose owner is gone: take it, and stamp the new format.
+        std::fs::write(&lock_path, format!("{}\n", reaped_dead_pid())).unwrap();
+        drop(OsLock::acquire_named(dir.path(), "w.lock").expect("dead legacy owner"));
+        assert!(std::fs::read_to_string(&lock_path).unwrap().starts_with("oslock "));
+    }
+
+    #[test]
+    fn os_lock_excludes_ignores_leftover_files_and_reports_ownership() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join(".ovp/w.lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        // A leftover new-format file (possibly with a reused PID) is not a held lock.
+        std::fs::write(&lock_path, format!("oslock {}\n", std::process::id())).unwrap();
+        assert!(!OsLock::held_by_this_process(dir.path(), "w.lock"));
+        let held = OsLock::acquire_named(dir.path(), "w.lock").expect("free");
+        assert!(OsLock::held_by_this_process(dir.path(), "w.lock"));
+        OsLock::acquire_named(dir.path(), "w.lock").expect_err("second holder refused");
+        drop(held);
+        assert!(!OsLock::held_by_this_process(dir.path(), "w.lock"));
+        assert!(lock_path.exists(), "the lock file is never deleted");
+        drop(OsLock::acquire_named(dir.path(), "w.lock").expect("free again"));
     }
 
     #[test]

@@ -127,3 +127,65 @@ error and the turn fails loudly), or a mix of old and new binaries during an upg
 In that mix, the old binary treats the never-deleted file as a stale PID lock and
 reclaims it by rename, so the two versions do not exclude each other. Upgrade the
 sidecar and the desktop app together.
+
+### `RegistryWrite.tla` — `.ovp/schedule.json` is never torn and no edit is lost
+
+| Config | Models | Expect |
+|---|---|---|
+| `RegistryWrite.cfg` | current code: the portal takes `scheduler.lock` like every CLI writer; per-call tmp names | `RegistryParses`, `NoLostUpdate` hold (3 writers) |
+| `RegistryWriteLegacyTorn.cfg` | before INV-686: unlocked portal, fixed `schedule.json.tmp` | `RegistryParses` violated |
+| `RegistryWriteUniqueTmpOnly.cfg` | unique tmp names but an unlocked portal | `NoLostUpdate` violated, so the lock is needed too |
+
+**Bug found (INV-686, item 1).** `std::fs::write` opens with `O_TRUNC` by path. A
+second writer using the same fixed tmp name truncates the inode the first writer
+is still filling, and the first writer's `rename` then publishes a half-written
+registry. The registry fails validation at load time, so **every** tick stops.
+
+| Obligation | Code | Test |
+|---|---|---|
+| Per-call tmp name | `ovp_scheduler::write_json_atomic` | `concurrent_saves_never_publish_a_torn_registry` (fails 3/3 with the fixed name) |
+| Portal edit under `scheduler.lock`; busy → 409, not a hang | `ovp_server::handle_schedule_features` | `schedule_features_takes_the_scheduler_lock` |
+
+### `SourceWorkQueue.tla` — no article runs twice, no enqueue is lost
+
+| Config | Models | Expect |
+|---|---|---|
+| `SourceWorkQueue.cfg` | current code: `open`/`snapshot` only read; recovery happens in `claim_next` under the write lock; the skip-mark is locked and reloads | `NoDoubleExecution`, `NoLostEnqueue` hold |
+| `SourceWorkQueueLegacyDouble.cfg` | before INV-686 | `NoDoubleExecution` violated |
+| `SourceWorkQueueLegacyLost.cfg` | before INV-686 | `NoLostEnqueue` violated |
+
+**Bug found (INV-686, item 2).** The worker runs article x. Then:
+1. `ovp2 source-work backfill` (or a second portal) calls `open()`, reads x as
+   `running`, and requeues it in memory.
+2. The worker finishes x.
+3. `open()` persists its stale copy, unlocked, so x is back to `queued`.
+4. The worker claims x again, and the article's LLM work runs twice.
+
+The worker's unlocked skip-mark could likewise persist a stale copy over another
+process's enqueue.
+
+The fix: readers never write. Recovery runs in `claim_next`, under the lock, and
+only for claims that are not this process's own (`QueueItem::claim_token`, unique
+per process run). Such a claim is recovered when this process is the elected
+worker, or when the claimer's PID (`claimed_by`) is verifiably dead. The worker
+condition is what survives PID reuse after a reboot (CodeRabbit on #506). For
+that to hold, the worker election lock itself (`WORKER_LOCK`) is an
+`ovp_intake::OsLock` (`File::try_lock`), not a PID file. A PID-file election
+would refuse forever after a reboot reused the dead worker's PID (codex on #506).
+This replaces the 12-minute timeout, which could requeue a live long-running item.
+Because recovery covers only dead claimers, the worker itself must never leave a
+claim `running`. codex review found three paths that could (a failed terminal
+write, an early `continue`, a panic outside the per-task `catch_unwind`); all three
+now reach a retried terminal write.
+A live claimer keeps the one-article-at-a-time gate closed.
+
+| Obligation | Code (`crates/ovp-memory/src/source_work_queue.rs`) | Test |
+|---|---|---|
+| Opening the queue elsewhere never touches a live item | `SourceWorkQueue::open`, `snapshot` | `opening_the_queue_elsewhere_never_requeues_a_live_item` |
+| Recover only claims that are not our own (elected worker, or a dead claimer PID), keeping the retry budget | `claim_next` + `recover_interrupted`, `process_claim_token` | `abandoned_running_recovery_preserves_attempts_and_not_before`, `elected_worker_recovers_a_claim_whose_pid_was_reused`, `a_live_claimer_keeps_its_item_even_for_a_new_worker`, `claim_requeues_*`, `claim_promotes_*` |
+| Worker-side writes are locked and reload first | `mark_task_skipped_if_not_wanted`, `fail_still_running` | `skip_mark_keeps_a_concurrent_enqueue` |
+| A live worker never leaves its own claim `running` (recovery covers only dead claimers). Every exit path, early returns and panics included, retries the terminal write before the next claim | `ovp_server::source_work_queue_worker` / `run_source_work_item`, `fail_still_running` → `Result` | `fail_still_running_reports_a_failed_write_and_succeeds_on_retry` |
+| A reader opened mid-run keeps reloading | `maybe_reload_from_disk` | `a_reader_opened_mid_run_keeps_seeing_updates` |
+
+INV-686 item 3 (the daily heartbeat) was not modeled. The run lock is now held by
+`ovp-cli daily::run` until after the heartbeat's terminal write.
