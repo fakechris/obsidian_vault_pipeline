@@ -18,6 +18,7 @@ pub mod knowledge_index;
 /// matcher; fail-loud (a non-grounded claim can never be durable). No durable
 /// write / graph / Referent. See `docs/stage-m22-crystal-gates.md`.
 pub mod crystal;
+pub mod decision_strength;
 /// One diagnostic shape shared by lint / doctor / crystal-lint (pure projection).
 pub mod diagnostics;
 /// Crash- and concurrency-safe JSONL ledger append/read (one write per record,
@@ -85,3 +86,5 @@ pub use transforms::{
     ARTICLE_SCHEMA_VERSION, DEFAULT_ARTICLE_MAX_TOKENS, DEFAULT_ARTICLE_MODEL,
     DEFAULT_PAPER_MAX_TOKENS, DEFAULT_PAPER_MODEL, PAPER_PROMPT_ID, PAPER_SCHEMA_VERSION,
 };
+
+pub mod decision_relevance;

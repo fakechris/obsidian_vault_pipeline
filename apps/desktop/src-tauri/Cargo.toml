@@ -33,7 +33,7 @@ serde_json = { workspace = true }
 # In-process portal server (reused verbatim) + the vault layout for defaults.
 # anthropic: product builds ship live Ask via System → LLM Provider
 # (.ovp/providers.toml), without set_var on the multi-threaded Tauri host.
-ovp-server = { path = "../../../crates/ovp-server", features = ["anthropic"] }
+ovp-server = { path = "../../../crates/ovp-server", features = ["anthropic", "decision-live"] }
 ovp-domain = { path = "../../../crates/ovp-domain" }
 
 [dev-dependencies]

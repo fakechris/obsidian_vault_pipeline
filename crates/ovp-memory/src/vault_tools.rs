@@ -165,9 +165,12 @@ impl std::fmt::Display for VaultToolError {
 impl std::error::Error for VaultToolError {}
 
 /// The ask-agent tool registry. Its only mutable state is read-through caches
-/// and coverage; all vault operations are read-only (`read_only_by_construction`).
+/// and coverage; content operations are read-only (`read_only_by_construction`).
+/// An explicitly configured decision reranker may write experiment traces and
+/// record-mode cassettes under `.ovp/`; it never modifies source content.
 #[derive(Debug)]
 pub struct VaultTools {
+    decision_reranker: Option<crate::decision_rerank::DecisionReranker>,
     vault_root: PathBuf,
     /// Serialized-result budget. MUST be coordinated with the driving
     /// runtime's `AgentConfig.max_result_bytes` (A3 wiring passes it in via
@@ -191,6 +194,7 @@ pub struct VaultTools {
 impl VaultTools {
     pub fn new(vault_root: impl Into<PathBuf>) -> Self {
         Self {
+            decision_reranker: None,
             vault_root: vault_root.into(),
             serialized_cap: MAX_SERIALIZED_RESULT_BYTES,
             fulltext_corpus_scan_bytes: MAX_FULLTEXT_CORPUS_SCAN_BYTES,
@@ -217,6 +221,11 @@ impl VaultTools {
     /// downstream blind-truncation this API exists to prevent.
     pub fn with_result_cap(mut self, serialized_cap: usize) -> Self {
         self.serialized_cap = serialized_cap;
+        self
+    }
+
+    pub fn with_decision_reranker(mut self, reranker: crate::decision_rerank::DecisionReranker) -> Self {
+        self.decision_reranker = Some(reranker);
         self
     }
 
@@ -333,14 +342,18 @@ impl VaultTools {
                             }
                         })
                 });
-                Ok(search_sources_ranked_windowed(
+                let mut result = search_sources_ranked_windowed(
                     &model,
                     &query,
                     limit,
                     fts,
                     date_from.as_deref(),
                     date_to.as_deref(),
-                ))
+                );
+                if let Some(reranker) = &self.decision_reranker {
+                    reranker.rerank_tool(&model, &query, &mut result, "search_sources", remaining.saturating_sub(started.elapsed()), self.serialized_cap);
+                }
+                Ok(result)
             }
             ParsedCall::SearchEvidence { query, limit } => {
                 let model = self.cached_index().map_err(|e| {
@@ -378,7 +391,11 @@ impl VaultTools {
                         units,
                     })
                 });
-                Ok(search_evidence_fused(&model, &query, limit, fts))
+                let mut result = search_evidence_fused(&model, &query, limit, fts);
+                if let Some(reranker) = &self.decision_reranker {
+                    reranker.rerank_tool(&model, &query, &mut result, "search_evidence", remaining.saturating_sub(started.elapsed()), self.serialized_cap);
+                }
+                Ok(result)
             }
             ParsedCall::SearchFulltext {
                 query,
@@ -1026,7 +1043,7 @@ fn tokenize_search_terms_capped(query: &str) -> (Vec<String>, bool) {
     (terms, capped)
 }
 
-fn tokenize_search_terms(query: &str) -> Vec<String> {
+pub(crate) fn tokenize_search_terms(query: &str) -> Vec<String> {
     tokenize_search_terms_capped(query).0
 }
 
@@ -3295,7 +3312,7 @@ fn redact_head_annotation(
     Ok(out)
 }
 
-fn read_source_text(
+pub(crate) fn read_source_text(
     vault_root: &Path,
     model: &IndexModel,
     source_id: &str,

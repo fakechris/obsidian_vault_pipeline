@@ -23,3 +23,5 @@ pub mod source_work_queue;
 pub mod vault_tools;
 pub mod verify;
 pub mod working_memory;
+
+pub mod decision_rerank;

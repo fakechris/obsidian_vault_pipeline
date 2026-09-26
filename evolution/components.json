@@ -1,11 +1,23 @@
 {
   "components": [
     {
+      "id": "runtime.decision_client",
+      "surface": "runtime",
+      "current_version": "v0",
+      "file": "crates/ovp-llm/src/decision/mod.rs",
+      "quality_buckets": [
+        "operational_reliability",
+        "cost_efficiency"
+      ]
+    },
+    {
       "id": "runtime.evolve_ab",
       "surface": "runtime",
       "current_version": "v1",
       "file": "crates/ovp-evolve/src/paired.rs",
-      "quality_buckets": ["operational_reliability"]
+      "quality_buckets": [
+        "operational_reliability"
+      ]
     },
     {
       "id": "prompt.unit_extract",
@@ -64,6 +76,20 @@
         "crystal_provenance",
         "coverage"
       ]
+    },
+    {
+      "id": "prompt.decision_strength",
+      "surface": "prompt",
+      "current_version": "v0",
+      "file": "crates/ovp-domain/src/decision_strength.rs",
+      "quality_buckets": ["crystal_provenance", "coverage"]
+    },
+    {
+      "id": "runtime.crystal_strength_shadow",
+      "surface": "runtime",
+      "current_version": "v0",
+      "file": "crates/ovp-cli/src/commands/crystal_strength_shadow.rs",
+      "quality_buckets": ["crystal_provenance", "cost_efficiency"]
     },
     {
       "id": "prompt.crystal_strength",
@@ -227,6 +253,16 @@
       "file": "crates/ovp-memory/src/source_work_queue.rs",
       "quality_buckets": [
         "operational_reliability"
+      ]
+    },
+    {
+      "id": "prompt.decision_relevance",
+      "surface": "prompt",
+      "file": "crates/ovp-domain/src/decision_relevance.rs",
+      "current_version": "v0",
+      "quality_buckets": [
+        "coverage",
+        "extraction_fidelity"
       ]
     }
   ]

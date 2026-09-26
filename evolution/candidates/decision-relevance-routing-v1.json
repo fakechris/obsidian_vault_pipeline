@@ -1,0 +1,36 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "base_version": "absent/v0",
+  "target_version": "evidence-relevance/v1",
+  "guardrails": {
+    "accepted_without_quote": 0
+  },
+  "eval_plan": {
+    "replay_set": "crates/ovp-memory/tests/decision_rerank.rs",
+    "soak": false
+  },
+  "rollback": "Revert the INV-645 commits or set evidence_relevance.mode=off. No evidence deletion or admission promotion.",
+  "ablation_required": false,
+  "id": "decision-relevance-routing-v1",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "hypothesis": "A shared bounded reranker changes ordering only when enabled with complete judgments; off/shadow/failure preserve baseline candidates and citations across CLI, HTTP and MCP. A later frozen gold study must improve nDCG@10 by at least 10% relative without recall@20 loss or exact/negative regressions, under a 1 second added p95 target.",
+  "predicted_delta": {
+    "off_shadow_order_changes": {
+      "target": 0
+    },
+    "candidate_loss": {
+      "target": 0
+    },
+    "relative_ndcg_at_10": {
+      "baseline": "unmeasured; no tuning or acceptance",
+      "target": 1.1
+    },
+    "recall_at_20_delta": {
+      "target": 0
+    },
+    "added_p95_ms": {
+      "target": 1000
+    }
+  }
+}

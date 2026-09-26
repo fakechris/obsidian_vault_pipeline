@@ -43,6 +43,8 @@ pub struct CandidateGuardrails {
 /// Plan for evaluating this candidate.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EvalPlan {
+    #[serde(default)]
+    pub decision_run: Option<crate::decision_plan::DecisionPlan>,
     /// Executable plan; absent for historical comparison-only candidates.
     #[serde(default)]
     pub paired_run: Option<crate::paired::RetrievalPlan>,
@@ -113,6 +115,12 @@ impl CandidateSpec {
             )));
         }
 
+        if self.eval_plan.paired_run.is_some() && self.eval_plan.decision_run.is_some() {
+            return Err(CandidateError::Validation("choose exactly one paired runner".into()));
+        }
+        if let Some(plan) = &self.eval_plan.decision_run {
+            plan.validate().map_err(CandidateError::Validation)?;
+        }
         if let Some(plan) = &self.eval_plan.paired_run {
             plan.validate()
                 .map_err(|e| CandidateError::Validation(format!("invalid eval_plan.paired_run: {e}")))?;

@@ -596,6 +596,9 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
         )));
     }
 
+    // Observe revised claims separately; only the existing verdicts enter the gate.
+    super::crystal_strength_shadow::observe(Some(&args.vault_root), &args.vault_root.join(".ovp/crystal/decision-observations"), &revised, &catalog, &verdicts);
+
     let header = CrystalHeader {
         title: args.title.clone().unwrap_or_else(|| "Crystal".into()),
         scope: String::new(),

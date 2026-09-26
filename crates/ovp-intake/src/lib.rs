@@ -51,6 +51,7 @@ pub use sweep::{
     SweepOutcome, MIN_READER_BODY_CHARS,
 };
 pub use vaultops::{
-    append_jsonl, append_pipeline_event, hex_sha256, probe_pid, OsLock, read_jsonl, rel_to, safe_move,
+    append_jsonl, append_pipeline_event, hex_sha256, probe_pid, OsLock, read_jsonl, read_jsonl_strict,
+    rel_to, safe_move,
     write_new, PipelineLogEvent, RunLock,
 };

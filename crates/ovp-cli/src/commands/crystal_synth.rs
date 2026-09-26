@@ -686,6 +686,12 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
 
     let durable_provenance = count_durable_provenance(&grounded, &index);
 
+    // Independent, off-by-default typed judgment. Never feeds admission or the ledger.
+    let observer_vault = args.vault_root.clone().or_else(|| {
+        crate::commands::crystal_write::vault_of_crystal_store(&paths.store)
+    });
+    super::crystal_strength_shadow::observe(observer_vault.as_deref(), &args.work_dir, &grounded, &catalog, &verdicts);
+
     // (f) Durable write — delegate to the shared crystal-write core. --------
     let header = CrystalHeader {
         title: args.title.clone().unwrap_or_else(|| "Crystal".into()),
@@ -1310,9 +1316,16 @@ mod tests {
         let lines1 = ledger.lines().filter(|l| !l.trim().is_empty()).count();
         assert_eq!(lines1, 1, "exactly one durable claim written");
 
-        // Second run: idempotent — no new ledger lines.
-        run(mk_args()).expect("second run ok");
+        // Turn on the separate typed observer with an intentionally missing replay
+        // cassette. The real Crystal path must still write the same ledger.
+        std::fs::create_dir_all(tmp.path().join(".ovp")).unwrap();
+        std::fs::write(tmp.path().join(".ovp/decisions.json"), r#"{"profiles":{"p":{"id":"p","provider":"fixture","endpoint":"fixture://strength","model":"synthetic-v1","credential_ref":"UNUSED"}},"capabilities":{"strength_check":{"mode":"shadow","execution":"replay","profile":"p","question_namespace":"claim_strength_shadow/v1","experiment":null}}}"#).unwrap();
+        let mut shadow_args = mk_args();
+        shadow_args.vault_root = Some(tmp.path().to_path_buf());
+        run(shadow_args).expect("shadow rerun ok");
+        assert!(std::fs::read_dir(&work).unwrap().filter_map(Result::ok).any(|e|e.file_name().to_string_lossy().starts_with("decision-strength-shadow-")));
         let ledger2 = std::fs::read_to_string(store.join("ledger.jsonl")).unwrap();
+        assert_eq!(ledger2, ledger, "shadow cannot change existing ledger bytes");
         let lines2 = ledger2.lines().filter(|l| !l.trim().is_empty()).count();
         assert_eq!(
             lines2, 1,

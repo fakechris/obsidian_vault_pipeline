@@ -1,0 +1,27 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "base_version": "absent/v0",
+  "target_version": "evidence-relevance/v1",
+  "guardrails": {
+    "accepted_without_quote": 0
+  },
+  "eval_plan": {
+    "replay_set": "crates/ovp-memory/tests/decision_rerank.rs",
+    "soak": false
+  },
+  "rollback": "Revert the INV-645 commits or set evidence_relevance.mode=off. No evidence deletion or admission promotion.",
+  "ablation_required": false,
+  "id": "decision-relevance-contract-v1",
+  "surface": "prompt",
+  "component": "prompt.decision_relevance",
+  "hypothesis": "An independent relevance rubric distinguishes useful support, contradiction and insufficient context on fixed excerpts; synthetic contract tests preserve stable IDs and require no generated rationale. No empirical model-quality acceptance is claimed.",
+  "predicted_delta": {
+    "typed_judgment_dimensions": {
+      "baseline": 0,
+      "target": 2
+    },
+    "generated_ids": {
+      "target": 0
+    }
+  }
+}

@@ -6,6 +6,8 @@ pub mod root_cause;
 pub mod scorecard;
 pub mod ab_runner;
 pub mod paired;
+pub mod decision_plan;
+pub mod decision_paired;
 mod paired_io;
 mod paired_report;
 mod paired_process;

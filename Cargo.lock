@@ -2893,6 +2893,8 @@ name = "ovp-evolve"
 version = "2.0.1"
 dependencies = [
  "chrono",
+ "ovp-app",
+ "ovp-llm",
  "serde",
  "serde_json",
  "sha2",
@@ -2963,6 +2965,7 @@ name = "ovp-mcp"
 version = "2.0.1"
 dependencies = [
  "ovp-api-projection",
+ "ovp-app",
  "ovp-doctor",
  "ovp-domain",
  "ovp-index",
@@ -2979,6 +2982,7 @@ name = "ovp-memory"
 version = "2.0.1"
 dependencies = [
  "chrono",
+ "libc",
  "ovp-domain",
  "ovp-embed",
  "ovp-index",
@@ -3083,6 +3087,7 @@ version = "2.0.1"
 dependencies = [
  "chrono",
  "ovp-api-projection",
+ "ovp-app",
  "ovp-daily",
  "ovp-domain",
  "ovp-index",
@@ -3093,6 +3098,7 @@ dependencies = [
  "ovp-scheduler",
  "serde",
  "serde_json",
+ "tempfile",
  "tiny_http",
 ]
 
