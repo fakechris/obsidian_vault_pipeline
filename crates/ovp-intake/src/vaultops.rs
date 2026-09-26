@@ -152,6 +152,23 @@ pub fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, String> {
     })
 }
 
+/// Like [`read_jsonl`] but a torn record is a hard error too
+/// (`TornLines::Fail`). For ledgers that carry human decisions, such as the
+/// crystal store's `ledger.jsonl` (`StoreEvent`, which includes review
+/// decisions): a truncated line there may be an acknowledged decision cut
+/// by a sync tool, so it must fail loud, not vanish.
+pub fn read_jsonl_strict<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, String> {
+    let raw = match std::fs::read(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+    };
+    ovp_domain::jsonl::parse_ledger(&raw, ovp_domain::jsonl::TornLines::<fn(usize)>::Fail)
+        .map_err(|b| {
+            format!("ledger {} line {}: malformed record: {}", path.display(), b.line, b.error)
+        })
+}
+
 /// One `OVP_RULES.md` write-log event for `60-Logs/pipeline.jsonl`. The key is
 /// `event_type` to match the legacy events already in that file, so vault-wide
 /// queries on `.event_type` cover both generations.
@@ -652,6 +669,18 @@ mod tests {
         assert!(err.contains("run.lock"), "got: {err}");
         drop(lock);
         let _again = RunLock::acquire(dir.path()).expect("released on drop");
+    }
+
+    #[test]
+    fn strict_reader_rejects_a_marked_torn_line_that_the_default_reader_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        std::fs::write(&path, "{\"a\":1}\n{\"a\":").unwrap(); // torn tail
+        append_jsonl(&path, &serde_json::json!({"a": 2})).unwrap(); // closes it with the marker
+        let skipped: Vec<serde_json::Value> = read_jsonl(&path).unwrap();
+        assert_eq!(skipped.len(), 2, "machine ledgers skip the proven torn line");
+        let err = read_jsonl_strict::<serde_json::Value>(&path).unwrap_err();
+        assert!(err.contains("line 2"), "human-decision ledgers fail loud: {err}");
     }
 
     #[test]

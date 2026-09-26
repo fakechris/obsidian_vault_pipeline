@@ -10,7 +10,7 @@ use ovp_domain::VaultLayout;
 use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_ID, UNCLASSIFIED_THEME};
 use ovp_domain::crystal::lineage::{lineage_index, ClaimLineage};
 use ovp_domain::crystal::{CrystalStatus, DurableRecord, StoreEvent, fold_ledger};
-use ovp_intake::read_jsonl;
+use ovp_intake::read_jsonl_strict;
 use std::collections::BTreeMap;
 
 use crate::{MAX_SOURCE_DOC_BYTES, is_plain_relative};
@@ -20,7 +20,7 @@ pub fn load_ledger_events(vault_root: &Path, layout: &VaultLayout) -> Vec<StoreE
     let ledger = vault_root
         .join(layout.crystal_store_dir())
         .join("ledger.jsonl");
-    read_jsonl(&ledger).unwrap_or_default()
+    read_jsonl_strict(&ledger).unwrap_or_default()
 }
 
 /// Lineage index for claim pages / graph detail (rebuildable projection).
@@ -68,10 +68,10 @@ fn load_active_records_core(
 ) -> Result<Vec<DurableRecord>, String> {
     let store = vault_root.join(layout.crystal_store_dir());
     let ledger = store.join("ledger.jsonl");
-    // `read_jsonl` returns Ok(empty) for a missing file (fresh vault) and Err
+    // `read_jsonl_strict` returns Ok(empty) for a missing file (fresh vault) and Err
     // for a present-but-corrupt one — propagate the latter.
     let events: Vec<StoreEvent> =
-        read_jsonl(&ledger).map_err(|e| format!("crystal ledger {}: {e}", ledger.display()))?;
+        read_jsonl_strict(&ledger).map_err(|e| format!("crystal ledger {}: {e}", ledger.display()))?;
     let mut records: Vec<DurableRecord> = fold_ledger(&events)
         .into_iter()
         .filter(|r| r.status == CrystalStatus::Active)

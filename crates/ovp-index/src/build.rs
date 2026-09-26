@@ -19,7 +19,7 @@ use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_ID, UNCLASSIFIED_THEM
 use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
 use ovp_domain::tags::{TagAliases, TagsInferredFile, canonical_tags};
 use ovp_domain::units::{read_source_from_path, read_source_with_meta};
-use ovp_intake::vaultops::{hex_sha256, read_jsonl, rel_to};
+use ovp_intake::vaultops::{hex_sha256, read_jsonl_strict, rel_to};
 use ovp_intake::{IntakeAction, read_intake_ledger, read_pinboard_ledger};
 use serde::Deserialize;
 
@@ -986,7 +986,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
     let store = vault_root.join(layout.crystal_store_dir());
     let mut claims = Vec::new();
 
-    let events: Vec<StoreEvent> = read_jsonl(&store.join("ledger.jsonl"))?;
+    let events: Vec<StoreEvent> = read_jsonl_strict(&store.join("ledger.jsonl"))?;
     for rec in fold_ledger(&events) {
         let status = match rec.status {
             CrystalStatus::Active => ClaimStatus::Durable,

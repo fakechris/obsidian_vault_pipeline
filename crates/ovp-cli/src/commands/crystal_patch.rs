@@ -16,7 +16,7 @@ use ovp_domain::crystal::patch::{
     fold_patch_ledger, format_diff, read_patch_ledger,
 };
 use ovp_domain::crystal::{CrystalStatus, StoreEvent, fold_ledger};
-use ovp_intake::read_jsonl;
+use ovp_intake::read_jsonl_strict;
 
 use crate::CliError;
 
@@ -190,7 +190,7 @@ fn run_apply(
         // Look up in crystal ledger.jsonl
         let ledger_file = store_dir.join("ledger.jsonl");
         if ledger_file.exists() {
-            let events: Vec<StoreEvent> = read_jsonl(&ledger_file)
+            let events: Vec<StoreEvent> = read_jsonl_strict(&ledger_file)
                 .map_err(|e| CliError::Io(format!("reading crystal ledger: {e}")))?;
             let durable_records = fold_ledger(&events);
             for rec in &durable_records {
