@@ -682,8 +682,12 @@ pub fn parse_strength_verdicts(
 
 /// Convenience: count durable-provenance claims in a scored candidate (used only
 /// for the CLI summary; the real routing is `final_routing` in the write path).
-pub fn count_durable_provenance(candidate: &CrystalCandidate, index: &GroundingIndex) -> usize {
-    let report = lint_candidate(candidate, index);
+pub fn count_durable_provenance(
+    candidate: &CrystalCandidate,
+    index: &GroundingIndex,
+    sources: &crate::crystal::SourceIdentities,
+) -> usize {
+    let report = crate::crystal::lint_candidate_with_sources(candidate, index, sources);
     score_candidate(&report)
         .iter()
         .filter(|s| s.class == ProvenanceClass::Durable)

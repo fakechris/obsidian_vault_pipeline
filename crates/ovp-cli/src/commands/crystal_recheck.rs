@@ -67,6 +67,33 @@ fn print_summary(report: &RecheckReport, limit: usize) {
     if report.stale.len() > limit {
         println!("  … {} more (see the JSON report)", report.stale.len() - limit);
     }
+    if !report.duplicate_identity.is_empty() {
+        println!(
+            "  {} durable claim(s) below 2 sources once duplicate packs of one source are collapsed",
+            report.duplicate_identity.len()
+        );
+        for row in report.duplicate_identity.iter().take(limit) {
+            println!(
+                "  ONE-SOURCE {} — {} packs, {} source(s)",
+                row.claim_id, row.distinct_cases, row.distinct_sources
+            );
+            for g in &row.merged_cases {
+                println!("      same source: {}", g.join(" = "));
+            }
+        }
+        if report.duplicate_identity.len() > limit {
+            println!(
+                "  … {} more (see the JSON report)",
+                report.duplicate_identity.len() - limit
+            );
+        }
+    }
+    if report.n_unresolved_identity > 0 {
+        println!(
+            "  source identity unresolved for {} claim(s) (no index entry) — counted per pack",
+            report.n_unresolved_identity
+        );
+    }
     // Staleness is a prompt to look, not a verdict that anything is wrong, so
     // this never fails the command. Gating on it would make a routine pack
     // rebuild look like corruption.

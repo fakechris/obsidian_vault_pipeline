@@ -249,10 +249,11 @@ pub(crate) struct RunStats {
 fn durable_source_counts(
     grounded: &CrystalCandidate,
     index: &ovp_domain::crystal::GroundingIndex,
+    sources: &ovp_domain::crystal::SourceIdentities,
     verdicts: &[ClaimStrengthVerdict],
 ) -> Vec<usize> {
-    use ovp_domain::crystal::{FinalClass, final_routing, lint_candidate, score_candidate};
-    let report = lint_candidate(grounded, index);
+    use ovp_domain::crystal::{FinalClass, final_routing, lint_candidate_with_sources, score_candidate};
+    let report = lint_candidate_with_sources(grounded, index, sources);
     let scores = score_candidate(&report);
     let mut out = Vec::new();
     for item in &grounded.items {
@@ -682,9 +683,11 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     };
     stats.synthesized = n_synthesized;
     stats.grounded = grounded.items.len();
-    stats.durable_distinct_sources = durable_source_counts(&grounded, &index, &verdicts);
+    // Same identity map write_durable will use, so the summary and the gate agree.
+    let sources = crate::commands::crystal_write::source_identities_for_store(&paths.store)?;
+    stats.durable_distinct_sources = durable_source_counts(&grounded, &index, &sources, &verdicts);
 
-    let durable_provenance = count_durable_provenance(&grounded, &index);
+    let durable_provenance = count_durable_provenance(&grounded, &index, &sources);
 
     // Independent, off-by-default typed judgment. Never feeds admission or the ledger.
     let observer_vault = args.vault_root.clone().or_else(|| {

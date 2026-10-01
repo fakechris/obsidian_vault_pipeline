@@ -9,9 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use ovp_domain::crystal::{
-    active_keys, build_durable_record, default_run_id, fold_ledger, lint_candidate,
+    active_keys, build_durable_record, default_run_id, fold_ledger, lint_candidate_with_sources,
     render_crystal_md, score_candidate, strength_coverage, ClaimStrengthVerdict, CrystalCandidate,
-    CrystalHeader, FinalClass, GroundingIndex, ReviewEntry, StoreEvent, StoreOp,
+    CrystalHeader, FinalClass, GroundingIndex, ReviewEntry, SourceIdentities, StoreEvent, StoreOp,
 };
 use ovp_domain::crystal::lineage::{decide_lineage, LineageDecision};
 
@@ -159,6 +159,19 @@ pub(crate) fn vault_of_crystal_store(store: &std::path::Path) -> Option<PathBuf>
     (vault.join(suffix) == store).then_some(vault)
 }
 
+/// Source identities for the vault that owns `store`, so the gate counts
+/// sources rather than reader packs (INV-915). A store outside a vault
+/// (diagnostic/test stores) has no read-model to consult and counts case_ids.
+pub(crate) fn source_identities_for_store(
+    store: &std::path::Path,
+) -> Result<SourceIdentities, CliError> {
+    match vault_of_crystal_store(store) {
+        Some(vault) => ovp_domain::crystal::source_identity::load_source_identities(&vault)
+            .map_err(CliError::Io),
+        None => Ok(SourceIdentities::new()),
+    }
+}
+
 pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     // Single-writer guard: crystal-write appends to the durable ledger and
     // rewrites the review queue + views, so it must hold the same `.ovp/run.lock`
@@ -226,7 +239,8 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         processed_review_ids,
         supersede_targets,
     } = inputs;
-    let report = lint_candidate(&candidate, &index);
+    let sources = source_identities_for_store(&store)?;
+    let report = lint_candidate_with_sources(&candidate, &index, &sources);
     let scores = score_candidate(&report);
     let claim_ids: Vec<String> = candidate.items.iter().map(|c| c.id.clone()).collect();
     let coverage = strength_coverage(&claim_ids, &verdicts);
