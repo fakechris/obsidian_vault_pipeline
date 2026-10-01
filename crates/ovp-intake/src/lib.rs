@@ -47,7 +47,7 @@ pub use pinboard::{
 #[cfg(feature = "pinboard-live")]
 pub use pinboard::LivePinboardFetch;
 pub use sweep::{
-    park_legacy_url_duplicates, processed_tree_urls, sweep_intake, IntakeConfig, LegacyDupGroup,
+    park_legacy_url_duplicates, processed_tree_urls, sweep_intake, url_key, IntakeConfig, LegacyDupGroup,
     SweepOutcome, MIN_READER_BODY_CHARS,
 };
 pub use vaultops::{

@@ -163,13 +163,16 @@ pub fn sweep_intake(
     let existing = read_intake_ledger(&ledger_path)?;
     let mut known_hashes = known_content_hashes(&existing);
     known_hashes.extend(extra_known_hashes.iter().cloned());
-    let mut urls = known_urls(&existing);
     // The ledger only reaches back to its own go-live; sources processed
     // BEFORE intake existed are invisible to `known_urls`, so a re-clip of a
     // legacy article used to slip through as a second full copy (58 such
     // pairs found in the live vault, 2026-08-07). The processed tree itself
-    // is the missing dedup authority.
-    urls.extend(processed_tree_urls(&cfg.vault_root, &layout)?);
+    // is the missing dedup authority. Keyed by [`url_key`], not raw string.
+    let mut urls: HashSet<String> = known_urls(&existing)
+        .into_iter()
+        .chain(processed_tree_urls(&cfg.vault_root, &layout)?)
+        .map(|u| url_key(&u))
+        .collect();
     let flagged = flagged_hashes(&existing);
 
     let mut outcome = SweepOutcome { dry_run, ..Default::default() };
@@ -232,7 +235,7 @@ pub fn sweep_intake(
 
             let url = (!source.source_url.is_empty()).then(|| source.source_url.clone());
             if let Some(u) = &url
-                && urls.contains(u) {
+                && urls.contains(&url_key(u)) {
                     let rec = dispose_duplicate(
                         cfg, &layout, &path, &from, &sha256,
                         format!("url:{u}"),
@@ -301,7 +304,7 @@ pub fn sweep_intake(
             }
             known_hashes.insert(sha256);
             if let Some(u) = url {
-                urls.insert(u);
+                urls.insert(url_key(&u));
             }
             outcome.ingested.push(rec);
         }
@@ -429,6 +432,21 @@ pub fn sweep_intake(
     Ok(outcome)
 }
 
+/// The key two captures are compared on: the same canonical URL the durable
+/// gate counts sources by, so intake and the gate agree on "same source"
+/// (INV-931). A re-share of one tweet (`?s=46&t=…`), a case change in the
+/// handle, `www.` or a trailing slash no longer read as a new source, while
+/// identity-bearing queries (`watch?v=`) still do. Anything that is not an
+/// http(s) URL is compared verbatim, as before. The two kinds are tagged so a
+/// canonical form (`e.x/post`) can never collide with a non-URL string that
+/// happens to read the same.
+pub fn url_key(url: &str) -> String {
+    match ovp_domain::crystal::source_identity::canonical_source_url(url) {
+        Some(canon) => format!("url:{canon}"),
+        None => format!("raw:{url}"),
+    }
+}
+
 /// URLs of every source already living under the processed tree (including
 /// previously parked duplicates). Best-effort per file: an unparseable or
 /// URL-less note contributes nothing — this is a dedup net, not a validator.
@@ -483,7 +501,8 @@ pub fn park_legacy_url_duplicates(
     // the walk (already-parked copies must not re-enter grouping).
     let dup_root = root.join("duplicates");
 
-    let mut by_url: std::collections::BTreeMap<String, Vec<(PathBuf, String)>> =
+    // Grouped by [`url_key`]; each copy keeps its own raw URL for the record.
+    let mut by_url: std::collections::BTreeMap<String, Vec<(PathBuf, String, String)>> =
         std::collections::BTreeMap::new();
     if root.is_dir() {
         for path in collect_markdown(&root)? {
@@ -496,19 +515,24 @@ pub fn park_legacy_url_duplicates(
             }
             let bytes =
                 std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
-            by_url.entry(s.source_url).or_default().push((path, hex_sha256(&bytes)));
+            by_url
+                .entry(url_key(&s.source_url))
+                .or_default()
+                .push((path, hex_sha256(&bytes), s.source_url));
         }
     }
 
     let mut groups = Vec::new();
-    for (url, mut copies) in by_url {
+    for (_, mut copies) in by_url {
         if copies.len() < 2 {
             continue;
         }
         copies.sort_by(|a, b| a.0.cmp(&b.0));
         let kept = rel_to(&cfg.vault_root, &copies[0].0);
+        // The kept copy's own URL, so `dup_of` stays a real, clickable link.
+        let url = copies[0].2.clone();
         let mut parked = Vec::new();
-        for (path, sha256) in &copies[1..] {
+        for (path, sha256, _) in &copies[1..] {
             let from = rel_to(&cfg.vault_root, path);
             let rec = dispose_duplicate(
                 cfg,

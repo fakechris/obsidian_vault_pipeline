@@ -583,3 +583,95 @@ fn sweep_ingests_and_processes_office_documents() {
     assert!(!capture.join("strategy_copy.docx").exists());
     assert!(root.join("50-Inbox/03-Processed/duplicates/2026-06/strategy_copy.docx").exists());
 }
+
+// -- canonical URL dedup (INV-931) -------------------------------------------
+
+#[test]
+fn a_reshared_tweet_is_a_duplicate_but_a_different_video_is_not() {
+    // Verbatim live-vault pair: one tweet, captured once bare and once via
+    // the share sheet. Raw-string dedup let both through as two sources.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let clippings = root.join("Clippings");
+    std::fs::create_dir_all(&clippings).unwrap();
+    std::fs::write(
+        clippings.join("a.md"),
+        clip("Better Harness", "https://x.com/Vtrivedy10/status/2041927488918413589", LONG_BODY),
+    )
+    .unwrap();
+    std::fs::write(
+        clippings.join("b.md"),
+        clip(
+            "Better Harness (share)",
+            "https://x.com/vtrivedy10/status/2041927488918413589?s=46&t=xZud",
+            &format!("{LONG_BODY} v2"),
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        clippings.join("c.md"),
+        clip("Video A", "https://www.youtube.com/watch?v=AAA&si=share", &format!("{LONG_BODY} a")),
+    )
+    .unwrap();
+    std::fs::write(
+        clippings.join("d.md"),
+        clip("Video B", "https://youtube.com/watch?v=BBB", &format!("{LONG_BODY} b")),
+    )
+    .unwrap();
+
+    let out = sweep_intake(&cfg(root), &HashSet::new(), false).unwrap();
+    assert_eq!(out.ingested.len(), 3, "{out:?}");
+    assert_eq!(out.duplicates.len(), 1);
+    // `dup_of` keeps the capture's own URL — the record stays a real link.
+    let dup_of = out.duplicates[0].dup_of.as_deref().unwrap();
+    assert!(dup_of.starts_with("url:https://x.com/"), "{dup_of}");
+
+    // A later re-clip with yet another variant (www., trailing slash) is
+    // caught against the ledger, not just within one sweep.
+    std::fs::write(
+        clippings.join("e.md"),
+        clip("Video A again", "https://youtube.com/watch?v=AAA", &format!("{LONG_BODY} a2")),
+    )
+    .unwrap();
+    let again = sweep_intake(&cfg(root), &HashSet::new(), false).unwrap();
+    assert_eq!(again.ingested.len(), 0, "{again:?}");
+    assert_eq!(again.duplicates.len(), 1);
+}
+
+#[test]
+fn park_legacy_groups_url_variants_and_records_the_kept_url() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let april = root.join("50-Inbox/03-Processed/2026-04");
+    let may = root.join("50-Inbox/03-Processed/2026-05");
+    std::fs::create_dir_all(&april).unwrap();
+    std::fs::create_dir_all(&may).unwrap();
+    std::fs::write(
+        april.join("2026-04-09_Better Harness.md"),
+        clip("Better Harness", "https://x.com/Vtrivedy10/status/2041927488918413589", LONG_BODY),
+    )
+    .unwrap();
+    std::fs::write(
+        may.join("2026-05-10_Better Harness.md"),
+        clip(
+            "Better Harness",
+            "https://x.com/vtrivedy10/status/2041927488918413589?s=46&t=x",
+            &format!("{LONG_BODY} v2"),
+        ),
+    )
+    .unwrap();
+
+    let plan = ovp_intake::park_legacy_url_duplicates(&cfg(root), true).unwrap();
+    assert_eq!(plan.len(), 1, "{plan:?}");
+    assert_eq!(plan[0].url, "https://x.com/Vtrivedy10/status/2041927488918413589");
+    assert!(plan[0].kept.contains("2026-04-09"), "oldest kept: {}", plan[0].kept);
+    assert_eq!(plan[0].parked.len(), 1);
+}
+
+#[test]
+fn url_key_compares_non_urls_verbatim_and_never_against_a_canonical_url() {
+    assert_eq!(ovp_intake::url_key("not a url"), "raw:not a url");
+    assert_eq!(ovp_intake::url_key("https://E.x/Post/"), "url:e.x/Post");
+    // A non-URL that reads like a canonical form is a different key.
+    assert_ne!(ovp_intake::url_key("e.x/Post"), ovp_intake::url_key("https://E.x/Post/"));
+}
