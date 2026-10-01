@@ -234,6 +234,13 @@ pub fn apply(vault: &Path, today: (i32, u32, u32)) -> Result<RegatePlan, CliErro
         .map_err(|e| CliError::Io(format!("serializing plan: {e}")))?;
     ovp_domain::tags::write_atomic(&path, &(text + "\n")).map_err(CliError::Io)?;
 
+    // Queue first, ledger second (as in rollback): a malformed review.json
+    // fails here with the ledger untouched, and if the append fails after
+    // the queue was written the claims are still active, so a retry plans
+    // them again and re-adding their queue entries is idempotent.
+    let keys: BTreeSet<&str> = plan.entries.iter().map(|e| e.claim_key.as_str()).collect();
+    let add: Vec<ReviewEntry> = plan.entries.iter().map(|e| e.review.clone()).collect();
+    edit_review(&store_dir(vault).join("review.json"), &keys, &add)?;
     let reason = format!("source_identity_regate:{}", plan.run_id);
     let events: Vec<StoreEvent> = plan
         .entries
@@ -247,11 +254,6 @@ pub fn apply(vault: &Path, today: (i32, u32, u32)) -> Result<RegatePlan, CliErro
         .collect();
     append_events(&store_dir(vault).join("ledger.jsonl"), &events)?;
 
-    // Append, leaving the existing queue as it is (order included), so a
-    // rollback that filters these keys back out restores it.
-    let keys: BTreeSet<&str> = plan.entries.iter().map(|e| e.claim_key.as_str()).collect();
-    let add: Vec<ReviewEntry> = plan.entries.iter().map(|e| e.review.clone()).collect();
-    edit_review(&store_dir(vault).join("review.json"), &keys, &add)?;
     Ok(plan)
 }
 
@@ -692,6 +694,24 @@ mod tests {
         assert_eq!(rollback(v, &first.run_id).unwrap(), 0);
         assert!(!active_keys(v).contains(&"ck-dup".to_string()));
         assert_eq!(rollback(v, &second.run_id).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_malformed_queue_fails_apply_before_the_ledger_moves() {
+        let tmp = vault();
+        let v = tmp.path();
+        let ledger = v.join(".ovp/crystal/ledger.jsonl");
+        let before = std::fs::read(&ledger).unwrap();
+        std::fs::write(v.join(".ovp/crystal/review.json"), "{not json").unwrap();
+        assert!(apply(v, TODAY).is_err());
+        assert_eq!(
+            std::fs::read(&ledger).unwrap(),
+            before,
+            "no retraction appended"
+        );
+        // Once the queue is repaired, the same claim is planned again.
+        std::fs::write(v.join(".ovp/crystal/review.json"), r#"{"review":[]}"#).unwrap();
+        assert_eq!(build_plan(v, TODAY).unwrap().entries.len(), 1);
     }
 
     #[test]
