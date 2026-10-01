@@ -374,8 +374,12 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     // regeneration left legacy + current packs; re-captures of one URL) would
     // otherwise be synthesized twice and could be cited as two sources. The
     // left-out packs stay on disk — existing claims still cite them.
+    // Selection follows the INPUT vault (reader dir), so redirecting output
+    // to a diagnostic --store does not change what is synthesized. Counting
+    // below follows the store, exactly as write_durable gates.
+    let input_ids = crate::commands::crystal_write::source_identities_for_packs_dir(&paths.reader_dir)?;
     let source_ids = crate::commands::crystal_write::source_identities_for_store(&paths.store)?;
-    let left_out = catalog.remove_cases(&shadowed_in_catalog(&catalog, &source_ids));
+    let left_out = catalog.remove_cases(&shadowed_in_catalog(&catalog, &input_ids));
     if !left_out.is_empty() {
         println!(
             "  one pack per source: {} duplicate pack(s) left out of synthesis (see shadowed-packs.json)",
