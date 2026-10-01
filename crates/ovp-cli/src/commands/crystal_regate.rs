@@ -205,15 +205,25 @@ fn edit_review(path: &Path, drop: &BTreeSet<&str>, add: &[ReviewEntry]) -> Resul
     body["review"] = serde_json::Value::Array(entries);
     let text = serde_json::to_string_pretty(&body)
         .map_err(|e| CliError::Io(format!("serializing review queue: {e}")))?;
-    std::fs::write(path, text + "\n")
-        .map_err(|e| CliError::Io(format!("writing {}: {e}", path.display())))
+    // Temp sibling + rename: a crash mid-write leaves the old queue or the
+    // whole new one, never a truncated file that loses unrelated entries.
+    ovp_domain::tags::write_atomic(path, &(text + "\n")).map_err(CliError::Io)
 }
 
 /// Retract the planned claims and queue them. Returns the saved plan.
 pub fn apply(vault: &Path, today: (i32, u32, u32)) -> Result<RegatePlan, CliError> {
-    let plan = build_plan(vault, today)?;
+    let mut plan = build_plan(vault, today)?;
     if plan.entries.is_empty() {
         return Ok(plan);
+    }
+    // apply → rollback → apply on the same claims hashes to the same id; a
+    // second run must not overwrite the first's plan or share its retraction
+    // reason, or rolling back one would undo the other.
+    let base = plan.run_id.clone();
+    let mut n = 1;
+    while plan_path(vault, &plan.run_id).exists() {
+        n += 1;
+        plan.run_id = format!("{base}-{n}");
     }
     // The plan goes to disk BEFORE the ledger moves, so whatever happens next
     // the run can be rolled back.
@@ -222,8 +232,7 @@ pub fn apply(vault: &Path, today: (i32, u32, u32)) -> Result<RegatePlan, CliErro
         .map_err(|e| CliError::Io(format!("creating {}: {e}", path.display())))?;
     let text = serde_json::to_string_pretty(&plan)
         .map_err(|e| CliError::Io(format!("serializing plan: {e}")))?;
-    std::fs::write(&path, text + "\n")
-        .map_err(|e| CliError::Io(format!("writing {}: {e}", path.display())))?;
+    ovp_domain::tags::write_atomic(&path, &(text + "\n")).map_err(CliError::Io)?;
 
     let reason = format!("source_identity_regate:{}", plan.run_id);
     let events: Vec<StoreEvent> = plan
@@ -665,6 +674,24 @@ mod tests {
             "retry finishes the job"
         );
         assert!(active_keys(v).contains(&"ck-dup".to_string()));
+    }
+
+    #[test]
+    fn a_second_apply_of_the_same_claims_is_a_separate_run() {
+        let tmp = vault();
+        let v = tmp.path();
+        let first = apply(v, TODAY).unwrap();
+        assert_eq!(rollback(v, &first.run_id).unwrap(), 1);
+        let second = apply(v, TODAY).unwrap();
+        assert_ne!(first.run_id, second.run_id);
+        assert!(
+            v.join(format!(".ovp/crystal/regate/{}.json", first.run_id))
+                .exists()
+        );
+        // Rolling the FIRST run back again must not undo the second.
+        assert_eq!(rollback(v, &first.run_id).unwrap(), 0);
+        assert!(!active_keys(v).contains(&"ck-dup".to_string()));
+        assert_eq!(rollback(v, &second.run_id).unwrap(), 1);
     }
 
     #[test]
