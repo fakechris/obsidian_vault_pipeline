@@ -635,6 +635,23 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Send durable claims that only reached two sources on duplicate packs of
+    /// ONE source (the `crystal-recheck` duplicate_identity list) back through
+    /// the gate. Dry-run by default; `--apply` retracts them in the ledger
+    /// (append-only) and queues them in review.json in the lane the current
+    /// gate routes them to; `--rollback <run>` undoes one applied run.
+    CrystalRegateSources {
+        #[arg(long)]
+        vault_root: PathBuf,
+        #[arg(long, conflicts_with = "rollback")]
+        apply: bool,
+        /// Run id printed by `--apply` (plan in `.ovp/crystal/regate/<run>.json`).
+        #[arg(long)]
+        rollback: Option<String>,
+        /// Cap the per-claim listing in the printed plan.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
     /// against the grounded units and score provenance. Mechanical, fail-loud, no
@@ -2134,6 +2151,17 @@ fn main() -> ExitCode {
                 limit,
             })
         }
+        Cmd::CrystalRegateSources {
+            vault_root,
+            apply,
+            rollback,
+            limit,
+        } => commands::crystal_regate::run(commands::crystal_regate::CrystalRegateArgs {
+            vault_root,
+            apply,
+            rollback,
+            limit,
+        }),
         Cmd::CrystalLint {
             candidate,
             packs_dir,

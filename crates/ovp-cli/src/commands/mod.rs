@@ -11,6 +11,7 @@ pub mod quarantine;
 pub mod crystal_lint;
 pub mod crystal_patch;
 pub mod crystal_recheck;
+pub mod crystal_regate;
 pub mod crystal_review;
 pub mod crystal_review_session;
 pub mod crystal_synth;
