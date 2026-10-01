@@ -46,6 +46,11 @@ pub struct RegatePlan {
     pub run_id: String,
     pub as_of: String,
     pub entries: Vec<RegateEntry>,
+    /// Listed by recheck but ALSO carrying citations that no longer ground.
+    /// The current gate would reject those, not caveat them; they are a
+    /// staleness problem for `crystal-recheck`, so this command leaves them.
+    #[serde(default)]
+    pub skipped_stale: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,9 +86,17 @@ pub fn build_plan(vault: &Path, today: (i32, u32, u32)) -> Result<RegatePlan, Cl
         .map(|r| (r.claim_key.clone(), r))
         .collect();
 
+    let stale: BTreeSet<&str> = report.stale.iter().map(|c| c.claim_id.as_str()).collect();
     let mut entries = Vec::new();
+    let mut skipped_stale = Vec::new();
     // recheck rebuilds its candidate with claim_key as the claim id.
     for dup in &report.duplicate_identity {
+        // Fully grounded + below the source minimum is exactly what the gate
+        // routes to caveated; a stale citation would make it a reject instead.
+        if stale.contains(dup.claim_id.as_str()) {
+            skipped_stale.push(dup.claim_id.clone());
+            continue;
+        }
         let Some(rec) = active.get(&dup.claim_id) else {
             return Err(CliError::Io(format!(
                 "recheck listed {} but the ledger has no active durable record for it",
@@ -133,6 +146,7 @@ pub fn build_plan(vault: &Path, today: (i32, u32, u32)) -> Result<RegatePlan, Cl
         run_id: default_run_id(&keys).replacen("run-", "regate-", 1),
         as_of: format!("{:04}-{:02}-{:02}", today.0, today.1, today.2),
         entries,
+        skipped_stale,
     })
 }
 
@@ -242,15 +256,26 @@ pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
     let plan: RegatePlan = serde_json::from_str(&text)
         .map_err(|e| CliError::Io(format!("parsing {}: {e}", path.display())))?;
 
+    // Only undo what THIS run did: a claim whose latest event is not this
+    // run's Retract has moved on (re-written, superseded, or retracted by
+    // something else) and is left alone, queue entry included.
     let ledger = store_dir(vault).join("ledger.jsonl");
-    let state: BTreeMap<String, CrystalStatus> = fold_ledger(&read_ledger(&ledger)?)
-        .into_iter()
-        .map(|r| (r.claim_key, r.status))
-        .collect();
-    let events: Vec<StoreEvent> = plan
+    let ours = format!("source_identity_regate:{run_id}");
+    let mut last: BTreeMap<String, StoreEvent> = BTreeMap::new();
+    for ev in read_ledger(&ledger)? {
+        last.insert(ev.record.claim_key.clone(), ev);
+    }
+    let owned: Vec<&RegateEntry> = plan
         .entries
         .iter()
-        .filter(|e| state.get(&e.claim_key) == Some(&CrystalStatus::Retracted))
+        .filter(|e| {
+            last.get(&e.claim_key).is_some_and(|ev| {
+                ev.op == StoreOp::Retract && ev.reason.as_deref() == Some(ours.as_str())
+            })
+        })
+        .collect();
+    let events: Vec<StoreEvent> = owned
+        .iter()
         .map(|e| StoreEvent {
             op: StoreOp::Write,
             record: DurableRecord {
@@ -265,8 +290,10 @@ pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
         append_events(&ledger, &events)?;
     }
 
-    let keys: BTreeSet<&str> = plan.entries.iter().map(|e| e.claim_key.as_str()).collect();
-    edit_review(&store_dir(vault).join("review.json"), &keys, &[])?;
+    let keys: BTreeSet<&str> = owned.iter().map(|e| e.claim_key.as_str()).collect();
+    if !keys.is_empty() {
+        edit_review(&store_dir(vault).join("review.json"), &keys, &[])?;
+    }
     Ok(events.len())
 }
 
@@ -324,6 +351,12 @@ pub fn run(args: CrystalRegateArgs) -> Result<(), CliError> {
     }
     if plan.entries.len() > args.limit {
         println!("  … {} more", plan.entries.len() - args.limit);
+    }
+    if !plan.skipped_stale.is_empty() {
+        println!(
+            "  left alone: {} claim(s) that also have citations that no longer ground — see crystal-recheck",
+            plan.skipped_stale.len()
+        );
     }
     if args.apply {
         println!(
@@ -564,5 +597,57 @@ mod tests {
         assert!(review.iter().any(|r| r.claim_id == "c-001"));
         // Rolling back twice is a no-op.
         assert_eq!(rollback(v, &plan.run_id).unwrap(), 0);
+    }
+
+    #[test]
+    fn rollback_never_undoes_a_later_retraction() {
+        let tmp = vault();
+        let v = tmp.path();
+        let plan = apply(v, TODAY).unwrap();
+        // Something else retracts the same claim afterwards.
+        let later = StoreEvent {
+            op: StoreOp::Retract,
+            record: plan.entries[0].record.clone(),
+            supersedes: None,
+            reason: Some("operator: wrong".into()),
+        };
+        append_events(&v.join(".ovp/crystal/ledger.jsonl"), &[later]).unwrap();
+        assert_eq!(rollback(v, &plan.run_id).unwrap(), 0, "not ours any more");
+        assert!(!active_keys(v).contains(&"ck-dup".to_string()));
+        let review = read_review_queue(&v.join(".ovp/crystal/review.json")).unwrap();
+        assert!(
+            review.iter().any(|r| r.claim_id == "ck-dup"),
+            "queue entry left alone"
+        );
+    }
+
+    #[test]
+    fn a_claim_with_stale_citations_is_left_to_recheck() {
+        let tmp = vault();
+        let v = tmp.path();
+        // ck-dup keeps both grounded duplicate packs (so recheck still lists
+        // it) and gains a third citation whose unit is gone. The gate would
+        // reject it now, so regate must not caveat it.
+        let ledger = v.join(".ovp/crystal/ledger.jsonl");
+        let mut events = read_ledger(&ledger).unwrap();
+        for ev in events.iter_mut().filter(|e| e.record.claim_key == "ck-dup") {
+            ev.record.citations.push(DurableCitation {
+                case_id: "2026-06-16_B-bbbb0000".into(),
+                unit_id: "u-gone".into(),
+                quote: "Beta".into(),
+                resolved_line: None,
+            });
+        }
+        std::fs::remove_file(&ledger).unwrap();
+        append_events(&ledger, &events).unwrap();
+        let report = ovp_domain::crystal::recheck::recheck_vault(v, None, None, TODAY).unwrap();
+        assert_eq!(
+            report.duplicate_identity.len(),
+            1,
+            "still listed by recheck"
+        );
+        let plan = build_plan(v, TODAY).unwrap();
+        assert!(plan.entries.is_empty(), "{plan:?}");
+        assert_eq!(plan.skipped_stale, vec!["ck-dup".to_string()]);
     }
 }
