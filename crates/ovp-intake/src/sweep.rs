@@ -437,10 +437,14 @@ pub fn sweep_intake(
 /// (INV-931). A re-share of one tweet (`?s=46&t=…`), a case change in the
 /// handle, `www.` or a trailing slash no longer read as a new source, while
 /// identity-bearing queries (`watch?v=`) still do. Anything that is not an
-/// http(s) URL is compared verbatim, as before.
+/// http(s) URL is compared verbatim, as before. The two kinds are tagged so a
+/// canonical form (`e.x/post`) can never collide with a non-URL string that
+/// happens to read the same.
 pub fn url_key(url: &str) -> String {
-    ovp_domain::crystal::source_identity::canonical_source_url(url)
-        .unwrap_or_else(|| url.to_string())
+    match ovp_domain::crystal::source_identity::canonical_source_url(url) {
+        Some(canon) => format!("url:{canon}"),
+        None => format!("raw:{url}"),
+    }
 }
 
 /// URLs of every source already living under the processed tree (including

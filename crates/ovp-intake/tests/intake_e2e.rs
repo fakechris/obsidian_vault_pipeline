@@ -669,7 +669,9 @@ fn park_legacy_groups_url_variants_and_records_the_kept_url() {
 }
 
 #[test]
-fn url_key_falls_back_to_the_raw_string_for_non_urls() {
-    assert_eq!(ovp_intake::url_key("not a url"), "not a url");
-    assert_eq!(ovp_intake::url_key("https://E.x/Post/"), "e.x/Post");
+fn url_key_compares_non_urls_verbatim_and_never_against_a_canonical_url() {
+    assert_eq!(ovp_intake::url_key("not a url"), "raw:not a url");
+    assert_eq!(ovp_intake::url_key("https://E.x/Post/"), "url:e.x/Post");
+    // A non-URL that reads like a canonical form is a different key.
+    assert_ne!(ovp_intake::url_key("e.x/Post"), ovp_intake::url_key("https://E.x/Post/"));
 }
