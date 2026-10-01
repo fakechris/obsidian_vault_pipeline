@@ -270,6 +270,22 @@ fn durable_source_counts(
     out
 }
 
+/// Packs to leave out of synthesis: all but one per source, the kept one
+/// chosen among packs actually IN the catalog. A preferred pack with no usable
+/// units (or outside `--reader-dir`) must not win and leave its source with
+/// nothing. Source counting keeps using the full identity map.
+fn shadowed_in_catalog(
+    catalog: &ovp_domain::crystal::synth::UnitsCatalog,
+    ids: &ovp_domain::crystal::SourceIdentities,
+) -> std::collections::BTreeSet<String> {
+    let in_catalog: ovp_domain::crystal::SourceIdentities = ids
+        .iter()
+        .filter(|(case, _)| catalog.cases.contains_key(*case))
+        .map(|(c, k)| (c.clone(), k.clone()))
+        .collect();
+    ovp_domain::crystal::source_identity::shadowed_cases(&in_catalog)
+}
+
 pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
     run_stats(args).map(|_| ())
 }
@@ -359,8 +375,7 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     // otherwise be synthesized twice and could be cited as two sources. The
     // left-out packs stay on disk — existing claims still cite them.
     let source_ids = crate::commands::crystal_write::source_identities_for_store(&paths.store)?;
-    let shadowed = ovp_domain::crystal::source_identity::shadowed_cases(&source_ids);
-    let left_out = catalog.remove_cases(&shadowed);
+    let left_out = catalog.remove_cases(&shadowed_in_catalog(&catalog, &source_ids));
     if !left_out.is_empty() {
         println!(
             "  one pack per source: {} duplicate pack(s) left out of synthesis (see shadowed-packs.json)",
@@ -1462,6 +1477,28 @@ mod tests {
         let ledger = std::fs::read_to_string(store.join("ledger.jsonl")).unwrap();
         assert_eq!(ledger.lines().filter(|l| !l.trim().is_empty()).count(), 1);
         assert!(!ledger.contains(legacy), "new claims never cite the left-out pack");
+    }
+
+    #[test]
+    fn a_source_never_loses_its_only_usable_pack() {
+        // The preferred (current-layout) pack has no accepted units, so it is
+        // not in the catalog; the legacy pack must stay in.
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("40-Resources/Reader");
+        let legacy = "1b16bbab-2026-06-11_Working_memory-1b16bbab_";
+        let current = "2026-06-15_Working memory-1b16bbab";
+        write_pack(&reader, legacy, "W", "Memory is scarce.", &["Memory is scarce."]);
+        write_pack(&reader, current, "W", "Memory is scarce.", &["not in the body"]);
+        let catalog = collect_catalog(&reader).unwrap();
+        assert!(!catalog.cases.contains_key(current), "fixture: preferred pack unusable");
+        let ids: ovp_domain::crystal::SourceIdentities =
+            [(legacy.to_string(), "sha:s1".to_string()), (current.to_string(), "sha:s1".to_string())]
+                .into_iter()
+                .collect();
+        // Over the whole map the current pack would win and the legacy one
+        // would be dropped; restricted to the catalog, nothing is dropped.
+        assert!(ovp_domain::crystal::source_identity::shadowed_cases(&ids).contains(legacy));
+        assert!(super::shadowed_in_catalog(&catalog, &ids).is_empty());
     }
 
     #[test]
