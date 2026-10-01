@@ -17,7 +17,7 @@
 //! know falls back to its own case_id and is reported as unresolved — the
 //! count can only stay where it was, never go up.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// `case_id` → source identity key (`url:<canonical>` or `sha:<sha256>`).
@@ -148,6 +148,46 @@ pub fn identities_from_index_json(text: &str) -> Result<SourceIdentities, String
     Ok(out)
 }
 
+/// Legacy corpus packs are named `<hash8>-<date>_<title>…`; packs written by
+/// the current reader are `<date>_<title>-<hash8>`.
+fn is_legacy_layout(case_id: &str) -> bool {
+    let b = case_id.as_bytes();
+    b.len() > 9 && b[8] == b'-' && b[..8].iter().all(u8::is_ascii_hexdigit)
+}
+
+/// Packs that duplicate another pack of the SAME source and should be left
+/// out of new synthesis (INV-930).
+///
+/// One per source is kept: a current-layout pack over a legacy one (the
+/// 2026-06-15 regeneration is the current extraction), then the
+/// lexicographically first name — date-first names make that the earliest
+/// capture, the same copy intake's legacy dedup keeps. Deterministic, and a
+/// pure projection: nothing on disk is marked, so dropping this rule restores
+/// the old behaviour.
+///
+/// The shadowed packs are NOT gone: existing claims cite them and citations
+/// keep resolving against them. Only the choice of what new claims may cite
+/// changes.
+pub fn shadowed_cases(ids: &SourceIdentities) -> BTreeSet<String> {
+    let mut by_source: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (case, key) in ids {
+        by_source
+            .entry(key.as_str())
+            .or_default()
+            .push(case.as_str());
+    }
+    let mut out = BTreeSet::new();
+    for cases in by_source.into_values().filter(|c| c.len() > 1) {
+        let keep = cases
+            .iter()
+            .copied()
+            .min_by_key(|c| (is_legacy_layout(c), *c))
+            .expect("non-empty group");
+        out.extend(cases.into_iter().filter(|c| *c != keep).map(String::from));
+    }
+    out
+}
+
 /// Load the identity map for a vault. A vault with no built index yet yields
 /// an empty map (every case unresolved → the gate counts case_ids exactly as
 /// before); an index that exists but cannot be read is an error.
@@ -232,6 +272,39 @@ mod tests {
         assert_eq!(ids["recapture"], ids["old-s1"]);
         assert_eq!(ids["clipping"], "sha:s3");
         assert!(!ids.contains_key("orphan"));
+    }
+
+    #[test]
+    fn one_pack_per_source_prefers_current_layout_then_earliest() {
+        let ids: SourceIdentities = [
+            // 06-15 regeneration: legacy + current layout of one capture.
+            (
+                "108a8866-2026-06-13_how_to_design_agent_UIs-108a8866_",
+                "sha:a",
+            ),
+            ("2026-06-15_how to design agent UIs-108a8866", "sha:a"),
+            // Two current-layout captures of one URL: earliest is kept.
+            ("2026-04-09_Better Harness-14b0759f", "url:x.com/i/status/1"),
+            ("2026-04-10_Better Harness-717e8484", "url:x.com/i/status/1"),
+            // Only legacy copies: earliest legacy is kept.
+            ("aaaa0000-2026-01-01_X_", "sha:c"),
+            ("bbbb0000-2026-01-02_X_", "sha:c"),
+            // A unique source is never shadowed.
+            ("2026-05-01_Unique-cccc1111", "sha:d"),
+        ]
+        .into_iter()
+        .map(|(c, k)| (c.to_string(), k.to_string()))
+        .collect();
+        let shadowed: Vec<String> = shadowed_cases(&ids).into_iter().collect();
+        assert_eq!(
+            shadowed,
+            vec![
+                "108a8866-2026-06-13_how_to_design_agent_UIs-108a8866_",
+                "2026-04-10_Better Harness-717e8484",
+                "bbbb0000-2026-01-02_X_",
+            ]
+        );
+        assert!(shadowed_cases(&SourceIdentities::new()).is_empty());
     }
 
     #[test]

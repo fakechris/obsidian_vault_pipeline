@@ -78,6 +78,19 @@ pub struct UnitsCatalog {
     pub cases: BTreeMap<String, CatalogCase>,
 }
 
+impl UnitsCatalog {
+    /// Drop `cases` from the catalog, returning the ids actually removed (in
+    /// order). Used to keep one pack per source out of new synthesis.
+    pub fn remove_cases(&mut self, cases: &std::collections::BTreeSet<String>) -> Vec<String> {
+        let removed: Vec<String> =
+            self.cases.keys().filter(|k| cases.contains(*k)).cloned().collect();
+        for k in &removed {
+            self.cases.remove(k);
+        }
+        removed
+    }
+}
+
 /// A keyword theme cluster over cases (bucket key + human theme + case ids).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cluster {
