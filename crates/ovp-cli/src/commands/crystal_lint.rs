@@ -7,11 +7,11 @@
 use std::path::PathBuf;
 
 use ovp_domain::crystal::{
-    final_routing, lint_candidate, score_candidate, strength_coverage, ClaimStrengthVerdict,
+    final_routing, lint_candidate_with_sources, score_candidate, strength_coverage, ClaimStrengthVerdict,
     CrystalCandidate, FinalClass, ProvenanceClass,
 };
 
-use crate::commands::crystal_write::build_grounding_index;
+use crate::commands::crystal_write::{build_grounding_index, source_identities_for_packs_dir};
 use crate::CliError;
 
 pub struct CrystalLintArgs {
@@ -45,7 +45,10 @@ pub fn run(args: CrystalLintArgs) -> Result<(), CliError> {
         .map_err(|e| CliError::Io(format!("parsing candidate {}: {e}", args.candidate.display())))?;
 
     let index = build_grounding_index(&args.packs_dir)?;
-    let report = lint_candidate(&candidate, &index);
+    // Same source identities crystal-write gates with, or this pre-write
+    // report would call durable what the writer then routes to review.
+    let sources = source_identities_for_packs_dir(&args.packs_dir)?;
+    let report = lint_candidate_with_sources(&candidate, &index, &sources);
     let scores = score_candidate(&report);
 
     let durable = scores.iter().filter(|s| s.class == ProvenanceClass::Durable).count();

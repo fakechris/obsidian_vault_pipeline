@@ -165,7 +165,26 @@ pub(crate) fn vault_of_crystal_store(store: &std::path::Path) -> Option<PathBuf>
 pub(crate) fn source_identities_for_store(
     store: &std::path::Path,
 ) -> Result<SourceIdentities, CliError> {
-    match vault_of_crystal_store(store) {
+    source_identities_for_vault(vault_of_crystal_store(store))
+}
+
+/// [`source_identities_for_store`] for callers that only know the packs dir
+/// (`crystal-lint`), so the pre-write report and the writer count alike.
+/// A standalone fixture dir is not `<vault>/40-Resources/Reader` and counts
+/// case_ids.
+pub(crate) fn source_identities_for_packs_dir(
+    packs_dir: &std::path::Path,
+) -> Result<SourceIdentities, CliError> {
+    let suffix = std::path::Path::new(ovp_domain::VaultLayout::new().reader_root());
+    let mut vault = Some(packs_dir.to_path_buf());
+    for _ in suffix.components() {
+        vault = vault.and_then(|v| v.parent().map(std::path::Path::to_path_buf));
+    }
+    source_identities_for_vault(vault.filter(|v| v.join(suffix) == packs_dir))
+}
+
+fn source_identities_for_vault(vault: Option<PathBuf>) -> Result<SourceIdentities, CliError> {
+    match vault {
         Some(vault) => ovp_domain::crystal::source_identity::load_source_identities(&vault)
             .map_err(CliError::Io),
         None => Ok(SourceIdentities::new()),
