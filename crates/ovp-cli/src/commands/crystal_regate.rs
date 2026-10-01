@@ -256,24 +256,40 @@ pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
     let plan: RegatePlan = serde_json::from_str(&text)
         .map_err(|e| CliError::Io(format!("parsing {}: {e}", path.display())))?;
 
-    // Only undo what THIS run did: a claim whose latest event is not this
-    // run's Retract has moved on (re-written, superseded, or retracted by
-    // something else) and is left alone, queue entry included.
+    // Only undo what THIS run did: the claim must still be retracted in the
+    // fold (a later Supersede flips it without touching its own key) AND its
+    // latest event must be this run's Retract. Anything that moved on —
+    // re-written, superseded, retracted by something else — is left alone,
+    // queue entry included.
     let ledger = store_dir(vault).join("ledger.jsonl");
     let ours = format!("source_identity_regate:{run_id}");
+    let events_now = read_ledger(&ledger)?;
+    let folded: BTreeMap<String, CrystalStatus> = fold_ledger(&events_now)
+        .into_iter()
+        .map(|r| (r.claim_key, r.status))
+        .collect();
     let mut last: BTreeMap<String, StoreEvent> = BTreeMap::new();
-    for ev in read_ledger(&ledger)? {
+    for ev in events_now {
         last.insert(ev.record.claim_key.clone(), ev);
     }
     let owned: Vec<&RegateEntry> = plan
         .entries
         .iter()
         .filter(|e| {
-            last.get(&e.claim_key).is_some_and(|ev| {
-                ev.op == StoreOp::Retract && ev.reason.as_deref() == Some(ours.as_str())
-            })
+            folded.get(&e.claim_key) == Some(&CrystalStatus::Retracted)
+                && last.get(&e.claim_key).is_some_and(|ev| {
+                    ev.op == StoreOp::Retract && ev.reason.as_deref() == Some(ours.as_str())
+                })
         })
         .collect();
+
+    // Queue first, ledger second: if the ledger append fails or the process
+    // dies in between, the claims are still this run's retractions, so a
+    // retry redoes both steps (unqueueing is idempotent).
+    let keys: BTreeSet<&str> = owned.iter().map(|e| e.claim_key.as_str()).collect();
+    if !keys.is_empty() {
+        edit_review(&store_dir(vault).join("review.json"), &keys, &[])?;
+    }
     let events: Vec<StoreEvent> = owned
         .iter()
         .map(|e| StoreEvent {
@@ -288,11 +304,6 @@ pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
         .collect();
     if !events.is_empty() {
         append_events(&ledger, &events)?;
-    }
-
-    let keys: BTreeSet<&str> = owned.iter().map(|e| e.claim_key.as_str()).collect();
-    if !keys.is_empty() {
-        edit_review(&store_dir(vault).join("review.json"), &keys, &[])?;
     }
     Ok(events.len())
 }
@@ -619,6 +630,41 @@ mod tests {
             review.iter().any(|r| r.claim_id == "ck-dup"),
             "queue entry left alone"
         );
+    }
+
+    #[test]
+    fn rollback_never_resurrects_a_superseded_claim() {
+        let tmp = vault();
+        let v = tmp.path();
+        let plan = apply(v, TODAY).unwrap();
+        let mut replacement = plan.entries[0].record.clone();
+        replacement.claim_key = "ck-new".into();
+        let sup = StoreEvent {
+            op: StoreOp::Supersede,
+            record: replacement,
+            supersedes: Some("ck-dup".into()),
+            reason: None,
+        };
+        append_events(&v.join(".ovp/crystal/ledger.jsonl"), &[sup]).unwrap();
+        assert_eq!(rollback(v, &plan.run_id).unwrap(), 0);
+        assert!(!active_keys(v).contains(&"ck-dup".to_string()));
+    }
+
+    #[test]
+    fn a_rollback_whose_ledger_append_failed_can_be_retried() {
+        let tmp = vault();
+        let v = tmp.path();
+        let plan = apply(v, TODAY).unwrap();
+        // Simulate dying between the two steps: queue already cleaned, no
+        // Write appended. The claims are still this run's retractions.
+        let keys: BTreeSet<&str> = ["ck-dup"].into_iter().collect();
+        edit_review(&v.join(".ovp/crystal/review.json"), &keys, &[]).unwrap();
+        assert_eq!(
+            rollback(v, &plan.run_id).unwrap(),
+            1,
+            "retry finishes the job"
+        );
+        assert!(active_keys(v).contains(&"ck-dup".to_string()));
     }
 
     #[test]
