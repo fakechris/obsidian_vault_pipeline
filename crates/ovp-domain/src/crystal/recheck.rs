@@ -23,8 +23,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::{
-    Citation, CitationDefect, CrystalCandidate, CrystalClaim, CrystalStatus, FinalClass,
-    GroundingIndex, StoreEvent, fold_ledger, lint_candidate,
+    Citation, CitationDefect, CrystalCandidate, CrystalClaim, CrystalStatus, DURABLE_MIN_SOURCES,
+    FinalClass, GroundingIndex, SourceIdentities, StoreEvent, fold_ledger,
+    lint_candidate_with_sources, source_identity::load_source_identities,
 };
 use crate::units::Unit;
 
@@ -72,6 +73,20 @@ impl ClaimRecheck {
     }
 }
 
+/// A durable claim that only reached the source minimum because one source sat
+/// behind several reader packs (INV-915). Listed, never demoted: re-routing it
+/// is a gated write like any other.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DuplicateIdentity {
+    pub claim_id: String,
+    /// Grounded case_ids the claim cites.
+    pub distinct_cases: usize,
+    /// Distinct sources once those cases are collapsed by identity.
+    pub distinct_sources: usize,
+    /// The case_id groups that turned out to be one source.
+    pub merged_cases: Vec<Vec<String>>,
+}
+
 /// The whole recheck.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RecheckReport {
@@ -88,6 +103,12 @@ pub struct RecheckReport {
     pub age_buckets: BTreeMap<String, usize>,
     /// Claims whose citations carried no parseable date at all.
     pub n_undated: usize,
+    /// Durable claims below the source minimum once case_ids are collapsed by
+    /// source identity. Reported, never gated.
+    pub duplicate_identity: Vec<DuplicateIdentity>,
+    /// Claims with at least one grounded case the identity map did not know
+    /// (counted as its own source). All of them when no index is built.
+    pub n_unresolved_identity: usize,
 }
 
 /// Days between the capture date embedded in `case_id` and `today`.
@@ -189,7 +210,35 @@ pub fn recheck(
     index: &GroundingIndex,
     today: (i32, u32, u32),
 ) -> RecheckReport {
-    let lint = lint_candidate(durable, index);
+    recheck_with_sources(durable, index, &SourceIdentities::new(), today)
+}
+
+/// [`recheck`], with sources counted through `sources` so durable claims that
+/// only cleared the minimum on duplicate packs are listed.
+pub fn recheck_with_sources(
+    durable: &CrystalCandidate,
+    index: &GroundingIndex,
+    sources: &SourceIdentities,
+    today: (i32, u32, u32),
+) -> RecheckReport {
+    let lint = lint_candidate_with_sources(durable, index, sources);
+    let duplicate_identity: Vec<DuplicateIdentity> = lint
+        .claims
+        .iter()
+        .filter(|c| !c.merged_cases.is_empty() && c.distinct_sources < DURABLE_MIN_SOURCES)
+        .map(|c| DuplicateIdentity {
+            claim_id: c.claim_id.clone(),
+            distinct_cases: c.distinct_sources
+                + c.merged_cases.iter().map(|g| g.len() - 1).sum::<usize>(),
+            distinct_sources: c.distinct_sources,
+            merged_cases: c.merged_cases.clone(),
+        })
+        .collect();
+    let n_unresolved_identity = if sources.is_empty() {
+        lint.claims.iter().filter(|c| c.n_grounded > 0).count()
+    } else {
+        lint.claims.iter().filter(|c| !c.unresolved_cases.is_empty()).count()
+    };
     let mut by_defect: BTreeMap<String, usize> = BTreeMap::new();
     let mut age_buckets: BTreeMap<String, usize> = BTreeMap::new();
     for (name, _) in AGE_BUCKETS {
@@ -256,6 +305,8 @@ pub fn recheck(
         stale,
         age_buckets,
         n_undated,
+        duplicate_identity,
+        n_unresolved_identity,
     }
 }
 
@@ -354,7 +405,8 @@ pub fn recheck_vault(
         .unwrap_or_else(|| vault_root.join(".ovp/crystal/ledger.jsonl"));
     let durable = durable_from_ledger(&ledger)?;
     let index = build_grounding_index(&packs_dir)?;
-    Ok(recheck(&durable, &index, today))
+    let sources = load_source_identities(vault_root)?;
+    Ok(recheck_with_sources(&durable, &index, &sources, today))
 }
 
 #[cfg(test)]
@@ -397,6 +449,56 @@ mod tests {
             }],
             caveat: None,
         }
+    }
+
+    #[test]
+    fn duplicate_packs_of_one_source_are_listed_not_demoted() {
+        let mut index = GroundingIndex::new();
+        index.insert("old-a".into(), vec![unit("u1", "alpha beta")]);
+        index.insert("new-a".into(), vec![unit("u2", "gamma delta")]);
+        index.insert("other".into(), vec![unit("u3", "epsilon")]);
+        let mut one_source = claim("dup", "old-a", "u1", "alpha");
+        one_source.citations.push(Citation {
+            case_id: "new-a".into(),
+            unit_id: "u2".into(),
+            quote: "gamma".into(),
+            claimed_line: None,
+        });
+        // Three packs, two of them one source: still 2 sources, not listed.
+        let mut two_sources = one_source.clone();
+        two_sources.id = "ok".into();
+        two_sources.citations.push(Citation {
+            case_id: "other".into(),
+            unit_id: "u3".into(),
+            quote: "epsilon".into(),
+            claimed_line: None,
+        });
+        let durable = CrystalCandidate { items: vec![one_source, two_sources] };
+        let sources: SourceIdentities = [
+            ("old-a".to_string(), "sha:a".to_string()),
+            ("new-a".to_string(), "sha:a".to_string()),
+            ("other".to_string(), "sha:b".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let r = recheck_with_sources(&durable, &index, &sources, TODAY);
+        assert_eq!(r.n_stale, 0, "both claims still ground");
+        assert_eq!(
+            r.duplicate_identity,
+            vec![DuplicateIdentity {
+                claim_id: "dup".into(),
+                distinct_cases: 2,
+                distinct_sources: 1,
+                merged_cases: vec![vec!["new-a".into(), "old-a".into()]],
+            }]
+        );
+        assert_eq!(r.n_unresolved_identity, 0);
+
+        // Without an identity map nothing is listed and every claim is unresolved.
+        let legacy = recheck(&durable, &index, TODAY);
+        assert!(legacy.duplicate_identity.is_empty());
+        assert_eq!(legacy.n_unresolved_identity, 2);
     }
 
     #[test]

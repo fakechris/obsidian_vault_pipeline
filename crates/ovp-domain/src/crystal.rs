@@ -58,6 +58,11 @@ pub mod alias;
 /// repair — a stale claim is not a wrong claim.
 pub mod recheck;
 
+/// Which SOURCE each reader pack was read from (sha256 → canonical URL), so
+/// the durable gate counts sources rather than pack directories (INV-915).
+pub mod source_identity;
+pub use source_identity::SourceIdentities;
+
 /// M37 — Human Patch Ledger: append-only chunk/claim level human adjustments
 /// with revision history, diffs, and rollback.
 pub mod patch;
@@ -148,11 +153,21 @@ pub struct ClaimLint {
     pub claim_id: String,
     pub n_citations: usize,
     pub n_grounded: usize,
+    /// Distinct SOURCES among grounded citations: case_ids collapsed by
+    /// [`SourceIdentities`] when supplied, otherwise one per case_id.
     pub distinct_sources: usize,
     pub has_caveat: bool,
     /// True iff there is ≥1 citation and EVERY citation grounded cleanly.
     pub fully_grounded: bool,
     pub citations: Vec<CitationVerdict>,
+    /// Groups of ≥2 grounded case_ids that are the same source and were
+    /// counted once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merged_cases: Vec<Vec<String>>,
+    /// Grounded case_ids the identity map did not know, each counted as its
+    /// own source. Empty when no identity map was supplied at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unresolved_cases: Vec<String>,
 }
 
 impl CitationDefect {
@@ -251,26 +266,57 @@ fn lint_citation(c: &Citation, index: &GroundingIndex) -> CitationVerdict {
     v
 }
 
-/// Lint a whole Crystal candidate. Pure + deterministic.
+/// Lint a whole Crystal candidate, one source per case_id. Pure + deterministic.
+/// Gate paths that can see the vault use [`lint_candidate_with_sources`].
 pub fn lint_candidate(candidate: &CrystalCandidate, index: &GroundingIndex) -> CrystalLintReport {
+    lint_candidate_with_sources(candidate, index, &SourceIdentities::new())
+}
+
+/// Lint a whole Crystal candidate, counting distinct sources through
+/// `sources` (case_id → source identity). A case the map does not know counts
+/// as its own source, so a partial map can only lower the count toward the
+/// truth, never raise it. An empty map is exactly [`lint_candidate`].
+pub fn lint_candidate_with_sources(
+    candidate: &CrystalCandidate,
+    index: &GroundingIndex,
+    sources_of: &SourceIdentities,
+) -> CrystalLintReport {
     let mut claims = Vec::with_capacity(candidate.items.len());
     for item in &candidate.items {
         let citations: Vec<CitationVerdict> =
             item.citations.iter().map(|c| lint_citation(c, index)).collect();
         let n_grounded = citations.iter().filter(|c| c.grounded).count();
-        let mut sources: Vec<&str> =
+        let mut cases: Vec<&str> =
             citations.iter().filter(|c| c.grounded).map(|c| c.case_id.as_str()).collect();
-        sources.sort_unstable();
-        sources.dedup();
+        cases.sort_unstable();
+        cases.dedup();
+        let mut by_source: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut unresolved_cases = Vec::new();
+        for case in &cases {
+            let key = match sources_of.get(*case) {
+                Some(id) => id.clone(),
+                None => {
+                    if !sources_of.is_empty() {
+                        unresolved_cases.push(case.to_string());
+                    }
+                    format!("case:{case}")
+                }
+            };
+            by_source.entry(key).or_default().push(case.to_string());
+        }
+        let merged_cases: Vec<Vec<String>> =
+            by_source.values().filter(|g| g.len() > 1).cloned().collect();
         let fully_grounded = !citations.is_empty() && n_grounded == citations.len();
         claims.push(ClaimLint {
             claim_id: item.id.clone(),
             n_citations: citations.len(),
             n_grounded,
-            distinct_sources: sources.len(),
+            distinct_sources: by_source.len(),
             has_caveat: item.caveat.as_ref().is_some_and(|s| !s.trim().is_empty()),
             fully_grounded,
             citations,
+            merged_cases,
+            unresolved_cases,
         });
     }
     let n_fully_grounded = claims.iter().filter(|c| c.fully_grounded).count();
@@ -302,7 +348,7 @@ pub enum ProvenanceClass {
 /// Durable only if it is fully grounded, draws on ≥2 distinct sources, and clears
 /// the score bar; anything grounded-but-weak is Caveated; ungrounded is Quarantine.
 const DURABLE_MIN_SCORE: f64 = 0.70;
-const DURABLE_MIN_SOURCES: usize = 2;
+pub(crate) const DURABLE_MIN_SOURCES: usize = 2;
 
 /// Deterministic provenance signals + score for one claim.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -320,7 +366,9 @@ pub struct ProvenanceScore {
     pub class: ProvenanceClass,
 }
 
-fn concentration(citations: &[CitationVerdict]) -> f64 {
+/// `distinct_sources` is the lint's identity-aware count, so two packs of one
+/// article read as "one source", not as spread.
+fn concentration(citations: &[CitationVerdict], distinct_sources: usize) -> f64 {
     let grounded: Vec<&CitationVerdict> = citations.iter().filter(|c| c.grounded).collect();
     if grounded.len() <= 1 {
         return 1.0;
@@ -331,10 +379,7 @@ fn concentration(citations: &[CitationVerdict]) -> f64 {
     if units.len() == 1 {
         return 1.0; // all from one Unit
     }
-    let mut cases: Vec<&str> = grounded.iter().map(|c| c.case_id.as_str()).collect();
-    cases.sort_unstable();
-    cases.dedup();
-    if cases.len() == 1 {
+    if distinct_sources <= 1 {
         0.5 // multiple units but one source
     } else {
         0.0
@@ -346,7 +391,7 @@ fn concentration(citations: &[CitationVerdict]) -> f64 {
 pub fn score_claim(lint: &ClaimLint) -> ProvenanceScore {
     let grounded_fraction =
         if lint.n_citations == 0 { 0.0 } else { lint.n_grounded as f64 / lint.n_citations as f64 };
-    let conc = concentration(&lint.citations);
+    let conc = concentration(&lint.citations, lint.distinct_sources);
     let diversity = (lint.distinct_sources.min(3) as f64) / 3.0;
     let score = 0.5 * grounded_fraction + 0.3 * diversity + 0.2 * (1.0 - conc);
     let class = if !lint.fully_grounded {
@@ -1204,6 +1249,107 @@ mod tests {
         let s = &score_candidate(&rep)[0];
         assert!(s.cross_article);
         assert_eq!(s.class, ProvenanceClass::Durable, "score={}", s.score);
+    }
+
+    /// The `cross_source_grounded_claim_is_durable` claim, citing two packs.
+    fn two_pack_claim() -> (CrystalCandidate, GroundingIndex) {
+        let mut idx = index_for("pack-a", "A chunk is a structurally neutral container.",
+            &["A chunk is a structurally neutral container."]);
+        idx.extend(index_for("pack-b", "Memory is scarce working memory in agents.",
+            &["Memory is scarce working memory in agents."]));
+        let u1 = unit_id(&idx, "pack-a", 0);
+        let u2 = unit_id(&idx, "pack-b", 0);
+        let cand = CrystalCandidate { items: vec![CrystalClaim {
+            id: "c1".into(), claim: "grounded cross-source".into(), theme: "x".into(),
+            citations: vec![
+                Citation { case_id: "pack-a".into(), unit_id: u1, quote: "structurally neutral container".into(), claimed_line: None },
+                Citation { case_id: "pack-b".into(), unit_id: u2, quote: "scarce working memory".into(), claimed_line: None },
+            ],
+            caveat: Some("benchmark-dependent".into()),
+        }]};
+        (cand, idx)
+    }
+
+    fn ids_from(index_json: serde_json::Value) -> SourceIdentities {
+        source_identity::identities_from_index_json(&index_json.to_string()).unwrap()
+    }
+
+    #[test]
+    fn two_packs_of_one_sha_are_one_source_and_not_durable() {
+        // The 2026-06-15 rename left old- and new-layout packs of one capture.
+        let (cand, idx) = two_pack_claim();
+        let ids = ids_from(serde_json::json!({
+            "sources": [{"sha256": "s1"}],
+            "packs": [
+                {"pack_dir": "40-Resources/Reader/pack-a", "source_sha256": "s1"},
+                {"pack_dir": "40-Resources/Reader/pack-b", "source_sha256": "s1"}
+            ]
+        }));
+        let rep = lint_candidate_with_sources(&cand, &idx, &ids);
+        let c = &rep.claims[0];
+        assert_eq!(c.distinct_sources, 1);
+        assert_eq!(c.merged_cases, vec![vec!["pack-a".to_string(), "pack-b".to_string()]]);
+        assert!(c.unresolved_cases.is_empty());
+        let s = &score_candidate(&rep)[0];
+        assert!(!s.cross_article);
+        assert_eq!(s.concentration, 0.5, "one source is concentration, not spread");
+        assert_eq!(s.class, ProvenanceClass::Caveated);
+    }
+
+    #[test]
+    fn a_recapture_differing_only_in_share_params_is_one_source() {
+        let (cand, idx) = two_pack_claim();
+        let ids = ids_from(serde_json::json!({
+            "sources": [
+                {"sha256": "s1", "url": "https://x.com/Vtrivedy10/status/2041927488918413589"},
+                {"sha256": "s2", "url": "https://x.com/vtrivedy10/status/2041927488918413589?s=46&t=x"}
+            ],
+            "packs": [
+                {"pack_dir": "40-Resources/Reader/pack-a", "source_sha256": "s1"},
+                {"pack_dir": "40-Resources/Reader/pack-b", "source_sha256": "s2"}
+            ]
+        }));
+        let rep = lint_candidate_with_sources(&cand, &idx, &ids);
+        assert_eq!(rep.claims[0].distinct_sources, 1);
+        assert_eq!(score_candidate(&rep)[0].class, ProvenanceClass::Caveated);
+    }
+
+    #[test]
+    fn same_title_different_urls_stay_two_sources() {
+        // Verbatim live-vault false positive of a title rule: two authors, one
+        // title. Titles are not an identity, so this stays durable.
+        let (cand, idx) = two_pack_claim();
+        let ids = ids_from(serde_json::json!({
+            "sources": [
+                {"sha256": "s1", "url": "https://x.com/akshay_pachaar/status/2041146899319971922", "title": "Anatomy of an Agent Harness"},
+                {"sha256": "s2", "url": "https://x.com/vtrivedy10/status/2031408954517971368", "title": "Anatomy of an Agent Harness"}
+            ],
+            "packs": [
+                {"pack_dir": "40-Resources/Reader/pack-a", "source_sha256": "s1"},
+                {"pack_dir": "40-Resources/Reader/pack-b", "source_sha256": "s2"}
+            ]
+        }));
+        let rep = lint_candidate_with_sources(&cand, &idx, &ids);
+        assert_eq!(rep.claims[0].distinct_sources, 2);
+        assert!(rep.claims[0].merged_cases.is_empty());
+        assert_eq!(score_candidate(&rep)[0].class, ProvenanceClass::Durable);
+    }
+
+    #[test]
+    fn an_unknown_pack_counts_alone_and_is_flagged() {
+        let (cand, idx) = two_pack_claim();
+        let ids = ids_from(serde_json::json!({
+            "sources": [{"sha256": "s1"}],
+            "packs": [{"pack_dir": "40-Resources/Reader/pack-a", "source_sha256": "s1"}]
+        }));
+        let rep = lint_candidate_with_sources(&cand, &idx, &ids);
+        assert_eq!(rep.claims[0].distinct_sources, 2);
+        assert_eq!(rep.claims[0].unresolved_cases, vec!["pack-b".to_string()]);
+        // No map at all is the legacy count, and nothing is flagged.
+        let legacy = lint_candidate(&cand, &idx);
+        assert_eq!(legacy.claims[0].distinct_sources, 2);
+        assert!(legacy.claims[0].unresolved_cases.is_empty());
+        assert_eq!(score_candidate(&legacy), score_candidate(&rep));
     }
 
     #[test]

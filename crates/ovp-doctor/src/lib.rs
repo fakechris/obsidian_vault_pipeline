@@ -681,6 +681,27 @@ fn check_crystal_staleness(vault_root: &Path, findings: &mut Vec<Finding>) {
         });
         return;
     }
+    // Independent of staleness: a claim can ground perfectly and still have
+    // reached "≥2 sources" on two packs of one article (INV-915).
+    if !report.duplicate_identity.is_empty() {
+        findings.push(
+            Finding {
+                check: "crystal-source-identity".into(),
+                severity: Severity::Warn,
+                message: format!(
+                    "{} of {} durable claims rest on one source behind several reader packs",
+                    report.duplicate_identity.len(),
+                    report.n_claims
+                ),
+                hint: None,
+                fixed: false,
+            }
+            .attach_hint(
+                "run `ovp2 crystal-recheck --vault-root <vault> --out <report>` for the \
+                 per-claim pack groups; re-routing is a gated write, never automatic",
+            ),
+        );
+    }
     let aged = report.age_buckets.get("181-365d").copied().unwrap_or(0)
         + report.age_buckets.get("365d+").copied().unwrap_or(0);
     let age_note = format!(

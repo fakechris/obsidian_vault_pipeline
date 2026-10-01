@@ -41,7 +41,8 @@ use ovp_domain::crystal::synth::{
 use ovp_domain::crystal::themes::ThemesFile;
 use ovp_domain::crystal::{
     ClaimStrengthVerdict, CrystalCandidate, CrystalClaim, CrystalStatus, FinalClass,
-    GroundingIndex, final_routing, lint_candidate, score_candidate, strength_coverage,
+    GroundingIndex, SourceIdentities, final_routing, lint_candidate_with_sources, score_candidate,
+    strength_coverage,
 };
 use ovp_embed::cache as embed_cache;
 use ovp_embed::knn::cosine;
@@ -327,6 +328,7 @@ fn flush_strength_wave(
     client: &mut dyn ModelClient,
     catalog: &UnitsCatalog,
     index: &GroundingIndex,
+    sources: &SourceIdentities,
     pending: &mut Vec<CrystalClaim>,
     drain_all: bool,
     covered: &mut BTreeSet<String>,
@@ -406,7 +408,7 @@ fn flush_strength_wave(
     // write uses): cases cited by durable-routed claims join the covered set
     // so later seeds drop out of the sweep.
     let wave_candidate = CrystalCandidate { items: wave_claims };
-    let lint = lint_candidate(&wave_candidate, index);
+    let lint = lint_candidate_with_sources(&wave_candidate, index, sources);
     let scores = score_candidate(&lint);
     let mut durable_routed = 0usize;
     let mut newly_covered: Vec<String> = Vec::new();
@@ -466,6 +468,10 @@ pub(crate) fn run_sweep(
     client: &mut dyn ModelClient,
     cfg: &SweepConfig,
 ) -> Result<SweepOutcome, CliError> {
+    // The wave preview must route exactly like write_durable, or a claim on
+    // two packs of one source marks its seeds covered and then never lands.
+    let sources = crate::commands::crystal_write::source_identities_for_store(store)?;
+
     // ---- Coverage state from the ledger (read-only). ----
     let events = read_ledger(&store.join("ledger.jsonl"))?;
     let active: Vec<_> = ovp_domain::crystal::fold_ledger(&events)
@@ -540,6 +546,7 @@ pub(crate) fn run_sweep(
                     client,
                     catalog,
                     index,
+                    &sources,
                     &mut pending,
                     true,
                     &mut covered,
@@ -747,6 +754,7 @@ pub(crate) fn run_sweep(
             client,
             catalog,
             index,
+            &sources,
             &mut pending,
             false,
             &mut covered,
@@ -763,6 +771,7 @@ pub(crate) fn run_sweep(
         client,
         catalog,
         index,
+        &sources,
         &mut pending,
         true,
         &mut covered,
