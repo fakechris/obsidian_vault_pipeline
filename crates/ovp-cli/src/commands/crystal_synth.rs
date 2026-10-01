@@ -270,6 +270,22 @@ fn durable_source_counts(
     out
 }
 
+/// Packs to leave out of synthesis: all but one per source, the kept one
+/// chosen among packs actually IN the catalog. A preferred pack with no usable
+/// units (or outside `--reader-dir`) must not win and leave its source with
+/// nothing. Source counting keeps using the full identity map.
+fn shadowed_in_catalog(
+    catalog: &ovp_domain::crystal::synth::UnitsCatalog,
+    ids: &ovp_domain::crystal::SourceIdentities,
+) -> std::collections::BTreeSet<String> {
+    let in_catalog: ovp_domain::crystal::SourceIdentities = ids
+        .iter()
+        .filter(|(case, _)| catalog.cases.contains_key(*case))
+        .map(|(c, k)| (c.clone(), k.clone()))
+        .collect();
+    ovp_domain::crystal::source_identity::shadowed_cases(&in_catalog)
+}
+
 pub fn run(args: CrystalSynthArgs) -> Result<(), CliError> {
     run_stats(args).map(|_| ())
 }
@@ -353,7 +369,24 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     })?;
 
     // (a) Collect the units catalog + canonical packs dir. ------------------
-    let catalog = collect_catalog(&paths.reader_dir).map_err(synth_err)?;
+    let mut catalog = collect_catalog(&paths.reader_dir).map_err(synth_err)?;
+    // One pack per source (INV-930): a source read twice (the 2026-06-15
+    // regeneration left legacy + current packs; re-captures of one URL) would
+    // otherwise be synthesized twice and could be cited as two sources. The
+    // left-out packs stay on disk — existing claims still cite them.
+    // Selection follows the INPUT vault (reader dir), so redirecting output
+    // to a diagnostic --store does not change what is synthesized. Counting
+    // below follows the store, exactly as write_durable gates.
+    let input_ids = crate::commands::crystal_write::source_identities_for_packs_dir(&paths.reader_dir)?;
+    let source_ids = crate::commands::crystal_write::source_identities_for_store(&paths.store)?;
+    let left_out = catalog.remove_cases(&shadowed_in_catalog(&catalog, &input_ids));
+    if !left_out.is_empty() {
+        println!(
+            "  one pack per source: {} duplicate pack(s) left out of synthesis (see shadowed-packs.json)",
+            left_out.len()
+        );
+    }
+    write_json(&args.work_dir.join("shadowed-packs.json"), &left_out)?;
     let packs_dir = args.work_dir.join("packs");
     write_packs(&packs_dir, &paths.reader_dir, &catalog).map_err(synth_err)?;
     write_json(&args.work_dir.join("units-catalog.json"), &catalog)?;
@@ -683,11 +716,12 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     };
     stats.synthesized = n_synthesized;
     stats.grounded = grounded.items.len();
-    // Same identity map write_durable will use, so the summary and the gate agree.
-    let sources = crate::commands::crystal_write::source_identities_for_store(&paths.store)?;
-    stats.durable_distinct_sources = durable_source_counts(&grounded, &index, &sources, &verdicts);
+    // `source_ids` is the same map write_durable gates with, so the summary
+    // and the gate agree.
+    stats.durable_distinct_sources =
+        durable_source_counts(&grounded, &index, &source_ids, &verdicts);
 
-    let durable_provenance = count_durable_provenance(&grounded, &index, &sources);
+    let durable_provenance = count_durable_provenance(&grounded, &index, &source_ids);
 
     // Independent, off-by-default typed judgment. Never feeds admission or the ledger.
     let observer_vault = args.vault_root.clone().or_else(|| {
@@ -1334,6 +1368,141 @@ mod tests {
             lines2, 1,
             "re-run appends nothing (idempotent by claim_key)"
         );
+    }
+
+    #[test]
+    fn e2e_one_pack_per_source_is_synthesized() {
+        // INV-930: a vault where one source has a legacy AND a current pack.
+        // Only the current one may enter synthesis; the legacy pack stays on
+        // disk (existing claims cite it) but is out of the catalog.
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let reader = vault.join("40-Resources/Reader");
+        let legacy = "1b16bbab-2026-06-11_Working_memory-1b16bbab_";
+        let current = "2026-06-15_Working memory-1b16bbab";
+        let body = "Memory is scarce working memory in systems. It must be curated.";
+        let quotes = ["Memory is scarce working memory in systems.", "It must be curated."];
+        write_pack(&reader, legacy, "Working memory systems", body, &quotes);
+        write_pack(&reader, current, "Working memory systems", body, &quotes);
+        write_pack(
+            &reader,
+            "2026-06-20_Context-2c2c2c2c",
+            "Context and retrieval",
+            "Context windows are a scarce budget for retrieval.",
+            &["Context windows are a scarce budget for retrieval."],
+        );
+        std::fs::create_dir_all(vault.join(".ovp/index")).unwrap();
+        std::fs::write(
+            vault.join(".ovp/index/index.json"),
+            serde_json::json!({
+                "sources": [{"sha256": "s1"}, {"sha256": "s2"}],
+                "packs": [
+                    {"pack_dir": format!("40-Resources/Reader/{legacy}"), "source_sha256": "s1"},
+                    {"pack_dir": format!("40-Resources/Reader/{current}"), "source_sha256": "s1"},
+                    {"pack_dir": "40-Resources/Reader/2026-06-20_Context-2c2c2c2c", "source_sha256": "s2"}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let work = tmp.path().join("work");
+        let cache = work.join("cassettes");
+        std::fs::create_dir_all(&cache).unwrap();
+        // Key cassettes on the catalog run() must build: WITHOUT the legacy
+        // pack. Were it still in, the request would differ and replay miss.
+        let mut catalog = collect_catalog(&reader).unwrap();
+        catalog.remove_cases(&[legacy.to_string()].into_iter().collect());
+        let clusters = clusters_date_ordered(&catalog, 16);
+        assert_eq!(clusters.len(), 1);
+        let u_cur = catalog.cases[current].units[0].unit_id.clone();
+        let u_ctx = catalog.cases["2026-06-20_Context-2c2c2c2c"].units[0].unit_id.clone();
+        let synth_req = crystal_synth_request(&catalog, &clusters[0], 16, 22);
+        let synth_reply = format!(
+            r#"{{"claims":[{{"id":"1","claim":"Memory and context are a scarce budget.","theme":"memory","citations":[
+                {{"case_id":"{current}","unit_id":"{u_cur}","quote":"scarce working memory in systems"}},
+                {{"case_id":"2026-06-20_Context-2c2c2c2c","unit_id":"{u_ctx}","quote":"scarce budget for retrieval"}}
+            ]}}]}}"#
+        );
+        write_cassette(&cache, &synth_req, &synth_reply);
+        let candidate = CrystalCandidate {
+            items: parse_synth_claims(&synth_reply, "batch-001").unwrap(),
+        };
+        let idx = synth_build_index(&{
+            let p = work.join("packs-probe");
+            write_packs(&p, &reader, &catalog).unwrap();
+            p
+        })
+        .unwrap();
+        let (grounded, _) = filter_grounded(&candidate, &idx);
+        let strength_reply = format!(
+            r#"[{{"claim_id":"{}","strength":"supported","evidence_sufficient":true,"rationale":"both state a scarce budget"}}]"#,
+            grounded.items[0].id
+        );
+        write_cassette(&cache, &strength_request(&grounded, &catalog), &strength_reply);
+
+        let store = vault.join(".ovp/crystal");
+        run(CrystalSynthArgs {
+            reader_dir: Some(reader.clone()),
+            vault_root: None,
+            work_dir: work.clone(),
+            store: Some(store.clone()),
+            themes_file: None,
+            client_kind: ClientKind::Replay,
+            cache_dir: Some(cache.clone()),
+            max_cases_per_cluster: 16,
+            max_units_per_case: 22,
+            run_id: None,
+            title: Some("Test Crystal".into()),
+            scope: None,
+            not_claiming: None,
+            refresh: false,
+            date: None,
+            strict: false,
+            strict_cluster_cap: false,
+            cluster_mode: ClusterMode::Batch,
+            max_seeds: 25,
+            neighborhood: 12,
+            embed_cache_dir: None,
+        })
+        .expect("run ok");
+
+        let left_out: Vec<String> = serde_json::from_str(
+            &std::fs::read_to_string(work.join("shadowed-packs.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(left_out, vec![legacy.to_string()]);
+        let cat: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(work.join("units-catalog.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(cat["cases"].get(legacy).is_none(), "legacy pack out of the catalog");
+        assert!(reader.join(legacy).exists(), "but still on disk for existing citations");
+        let ledger = std::fs::read_to_string(store.join("ledger.jsonl")).unwrap();
+        assert_eq!(ledger.lines().filter(|l| !l.trim().is_empty()).count(), 1);
+        assert!(!ledger.contains(legacy), "new claims never cite the left-out pack");
+    }
+
+    #[test]
+    fn a_source_never_loses_its_only_usable_pack() {
+        // The preferred (current-layout) pack has no accepted units, so it is
+        // not in the catalog; the legacy pack must stay in.
+        let tmp = tempfile::tempdir().unwrap();
+        let reader = tmp.path().join("40-Resources/Reader");
+        let legacy = "1b16bbab-2026-06-11_Working_memory-1b16bbab_";
+        let current = "2026-06-15_Working memory-1b16bbab";
+        write_pack(&reader, legacy, "W", "Memory is scarce.", &["Memory is scarce."]);
+        write_pack(&reader, current, "W", "Memory is scarce.", &["not in the body"]);
+        let catalog = collect_catalog(&reader).unwrap();
+        assert!(!catalog.cases.contains_key(current), "fixture: preferred pack unusable");
+        let ids: ovp_domain::crystal::SourceIdentities =
+            [(legacy.to_string(), "sha:s1".to_string()), (current.to_string(), "sha:s1".to_string())]
+                .into_iter()
+                .collect();
+        // Over the whole map the current pack would win and the legacy one
+        // would be dropped; restricted to the catalog, nothing is dropped.
+        assert!(ovp_domain::crystal::source_identity::shadowed_cases(&ids).contains(legacy));
+        assert!(super::shadowed_in_catalog(&catalog, &ids).is_empty());
     }
 
     #[test]
