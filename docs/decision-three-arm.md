@@ -9,11 +9,6 @@ Use one frozen plan per development or holdout run. Freeze it before running any
 arm, including the exact input SHA-256, source revision, case IDs, split, labels,
 and arm specifications. A minimal anonymous plan has this shape:
 
-The legacy strength sample calls its 30-item development partition `gold`; that
-is a historical split name, not a claim of human ground truth. The observation
-example explicitly maps `gold` to `development`, records each original split,
-and never selects `holdout`. This mapping does not upgrade label provenance.
-
 ```json
 {
   "experiment_id": "anonymous-strength-holdout-v1",
@@ -31,6 +26,11 @@ and never selects `holdout`. This mapping does not upgrade label provenance.
   }]
 }
 ```
+
+The legacy strength sample calls its 30-item development partition `gold`; that
+is a historical split name, not a claim of human ground truth. The observation
+example explicitly maps `gold` to `development`, records each original split,
+and never selects `holdout`. This mapping does not upgrade label provenance.
 
 The digest binds the exact common source input, not each arm's different prompt.
 A result repeats `arm`, `case_id`, `input_digest`, `source_revision`, `split`, and

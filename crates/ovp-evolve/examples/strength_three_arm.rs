@@ -240,6 +240,7 @@ fn run(
     let profiles: Profiles = serde_json::from_slice(&fs::read(profiles_path)?)?;
     profiles.incumbent.validate()?;
     profiles.candidate.validate()?;
+    ovp_llm::decision::chat::validate_profile(&profiles.incumbent)?;
     if profiles.incumbent.provider != "chat"
         || profiles.candidate.provider != "typesafe"
         || limit == 0
@@ -419,6 +420,28 @@ mod tests {
                 )]),
             },
         )
+    }
+    #[test]
+    #[cfg(feature = "decision-live")]
+    fn unsafe_incumbent_endpoint_fails_before_creating_run() {
+        let (item, catalog) = fixture();
+        let bundle = Bundle {
+            schema: "strength-three-arm-input/v1".into(),
+            items_digest: hash(&vec![item.clone()]).unwrap(),
+            items: vec![freeze_item(item, &catalog).unwrap()],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("bundle.json");
+        let profiles_path = dir.path().join("profiles.json");
+        save(&bundle_path, &bundle).unwrap();
+        save(&profiles_path, &json!({
+            "incumbent": {"id":"control", "provider":"chat", "endpoint":"http://remote.example/v1/messages", "model":"test", "credential_ref":"TEST_KEY"},
+            "candidate": {"id":"candidate", "provider":"typesafe", "endpoint":"https://api.typesafe.ai/v1/systemone", "model":"jev-1.13.0", "credential_ref":"TEST_KEY"}
+        })).unwrap();
+        let output = dir.path().join("run");
+        let error = run(&bundle_path, dir.path(), &profiles_path, &output, 1).unwrap_err();
+        assert!(error.to_string().contains("endpoint"), "{error}");
+        assert!(!output.exists());
     }
     #[test]
     fn freeze_requires_unique_accepted_quote_and_binds_inputs() {
