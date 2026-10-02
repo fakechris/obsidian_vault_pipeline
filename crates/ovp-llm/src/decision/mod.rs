@@ -5,6 +5,7 @@
 //! Probabilities describe the provider's judgment, never authorization or truth.
 
 mod cache;
+pub mod chat;
 #[cfg(feature = "decision-live")]
 mod live;
 mod types;

@@ -11,3 +11,4 @@ pub mod decision_paired;
 mod paired_io;
 mod paired_report;
 mod paired_process;
+pub mod decision_three_arm;

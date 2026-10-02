@@ -1,0 +1,20 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "decision-chat-runtime-v1",
+  "base_version": "decision-boundary/v1",
+  "target_version": "decision-chat/v1",
+  "surface": "runtime",
+  "component": "runtime.decision_client",
+  "hypothesis": "Adding an opt-in ModelClient-backed decision adapter permits a same-model typed-answer control arm with three supported question kinds, zero fabricated probability fields, zero invalid-reply accepts and zero default production calls. This adapter protocol does not change existing domain prompts or admission policy; no model-quality gain is claimed.",
+  "predicted_delta": {
+    "generative_decision_adapters": {"baseline": 0, "target": 1},
+    "supported_typed_question_kinds": {"target": 3},
+    "invalid_reply_false_accepts": {"target": 0},
+    "fabricated_probability_fields": {"target": 0},
+    "default_production_calls": {"target": 0}
+  },
+  "guardrails": {"accepted_without_quote": 0},
+  "eval_plan": {"replay_set": "crates/ovp-llm/tests/decision_chat.rs", "soak": false},
+  "rollback": "Revert the INV-891 adapter and supplier registration commit; keep capability modes off. Private samples and live results remain local. Adapter contract fixtures are not evidence of Jev quality or admission-gate acceptance.",
+  "ablation_required": false
+}

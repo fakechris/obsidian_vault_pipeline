@@ -29,7 +29,10 @@ pub fn decision_key(
             v => v,
         }
     }
-    let value = serde_json::json!({"schema":"ovp.decision/v1", "provider": profile.identity(), "request": request});
+    let mut value = serde_json::json!({"schema":"ovp.decision/v1", "provider": profile.identity(), "request": request});
+    if profile.provider == "chat" {
+        value["adapter_protocol"] = Value::String(super::chat::NAMESPACE.into());
+    }
     let bytes = serde_json::to_vec(&canonical(value))
         .map_err(|_| DecisionError::InvalidRequest("serialization failed"))?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
