@@ -1,14 +1,14 @@
 //! Explicit local freeze / live observation tool. Never writes the operator vault.
 use ovp_domain::crystal::{
-    synth::{self, CatalogCase, UnitsCatalog},
     Citation, CrystalCandidate, CrystalClaim,
+    synth::{self, CatalogCase, UnitsCatalog},
 };
 #[cfg(feature = "decision-live")]
 use ovp_llm::decision::DecisionProfile;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 #[cfg(feature = "decision-live")]
 use serde_json::Value;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
@@ -232,8 +232,8 @@ fn run(
 ) -> Result<()> {
     use ovp_app::decisions::{BuiltinDecisionFactory, ProvidersDecisionFactory};
     use ovp_llm::{
-        decision::runtime::{DecisionClientFactory, ExecutionMode},
         ModelClient,
+        decision::runtime::{DecisionClientFactory, ExecutionMode},
     };
     let bundle: Bundle = serde_json::from_slice(&fs::read(bundle_path)?)?;
     validate_bundle(&bundle)?;
@@ -261,7 +261,7 @@ fn run(
     }
     save(
         &output.join("plan.json"),
-        &json!({"schema":"strength-three-arm-observation/v1","bundle_digest":hash(&bundle)?,"profiles":profiles,"split":"development","selected":selected.iter().map(|i|json!({"case_id":i.original.id,"input_digest":i.input_digest})).collect::<Vec<_>>(),"max_tokens_ab":8192,"temperature_ab":null,"labels":"unknown","quality_acceptance":false}),
+        &json!({"schema":"strength-three-arm-observation/v1","bundle_digest":hash(&bundle)?,"profiles":profiles,"split":"development","split_mapping":{"gold":"development","development":"development","holdout":"excluded"},"adapter_protocol":ovp_llm::decision::chat::NAMESPACE,"selected":selected.iter().map(|i|json!({"case_id":i.original.id,"original_split":i.original.split,"input_digest":i.input_digest})).collect::<Vec<_>>(),"max_tokens_ab":8192,"temperature_ab":null,"labels":"unknown","quality_acceptance":false}),
     )?;
     let file = ovp_domain::providers::read_providers_file(vault)?;
     let lookup = |name: &str| {
@@ -458,16 +458,20 @@ mod tests {
     }
     #[test]
     fn incumbent_requires_exact_model_and_end_turn() {
-        assert!(incumbent_reply_failure(
-            &json!({"model":"expected","stop_reason":"end_turn"}),
-            "expected"
-        )
-        .is_none());
-        assert!(incumbent_reply_failure(
-            &json!({"model":"other","stop_reason":"end_turn"}),
-            "expected"
-        )
-        .is_some());
+        assert!(
+            incumbent_reply_failure(
+                &json!({"model":"expected","stop_reason":"end_turn"}),
+                "expected"
+            )
+            .is_none()
+        );
+        assert!(
+            incumbent_reply_failure(
+                &json!({"model":"other","stop_reason":"end_turn"}),
+                "expected"
+            )
+            .is_some()
+        );
         for reason in [
             "max_tokens",
             "stop_sequence",
@@ -475,12 +479,33 @@ mod tests {
             "refusal",
             "unknown",
         ] {
-            assert!(incumbent_reply_failure(
-                &json!({"model":"expected","stop_reason":reason}),
-                "expected"
-            )
-            .is_some());
+            assert!(
+                incumbent_reply_failure(
+                    &json!({"model":"expected","stop_reason":reason}),
+                    "expected"
+                )
+                .is_some()
+            );
         }
+    }
+    #[test]
+    fn incumbent_and_typed_control_share_generation_parameters() {
+        let (item, catalog) = fixture();
+        let frozen = freeze_item(item, &catalog).unwrap();
+        let incumbent = synth::strength_request(&frozen.candidate, &frozen.catalog);
+        let typed =
+            ovp_domain::decision_strength::request(&frozen.candidate, &frozen.catalog).unwrap();
+        let profile = ovp_llm::decision::DecisionProfile {
+            id: "matched-test".into(),
+            provider: "chat".into(),
+            endpoint: "https://example.invalid/v1/messages".into(),
+            model: incumbent.model.clone(),
+            credential_ref: "NO_KEY".into(),
+        };
+        let control = ovp_llm::decision::chat::encode_request(&profile, &typed).unwrap();
+        assert_eq!(incumbent.max_tokens, control.max_tokens);
+        assert_eq!(incumbent.temperature, control.temperature);
+        assert_eq!(incumbent.model, control.model);
     }
     #[test]
     fn private_writes_refuse_overwrite() {

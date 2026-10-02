@@ -49,6 +49,8 @@ impl ModelClient for Fake {
         assert_eq!(req.model, "pinned-1");
         assert_eq!(req.messages.len(), 1);
         assert!(req.tools.is_none());
+        assert_eq!(req.max_tokens, 8192);
+        assert_eq!(req.temperature, None);
         self.reply.clone()
     }
 }

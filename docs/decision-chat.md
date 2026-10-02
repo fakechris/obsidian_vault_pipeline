@@ -6,12 +6,15 @@ request. Explicit abstention is supported. It neither generates reasons nor
 manufactures probabilities, confidence or calibration. Malformed, duplicate,
 missing, extra, truncated and wrong-model answers fail the entire batch.
 
-`decision_chat/v1` fixes the adapter protocol, 8192 maximum output tokens and
+`decision_chat/v2` fixes the adapter protocol, 8192 maximum output tokens and
 the provider-default temperature, matching the existing strength judge's
 request settings. The domain question namespace remains separate. Both versions
 enter the decision cassette key; rotating credentials does not change that key.
 Changing adapter instructions or generation parameters requires a new protocol
 version and a separate evolution candidate.
+
+The initial local v1 trial used a different generation budget/temperature and
+must not be pooled with v2 or treated as a matched A/B comparison.
 
 An experiment profile contains the actual Anthropic-compatible Messages endpoint
 and model, for example (not a production recommendation):

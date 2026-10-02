@@ -9,8 +9,8 @@ use serde::Deserialize;
 use serde_json::json;
 use std::{collections::BTreeMap, time::Instant};
 
-pub const NAMESPACE: &str = "decision_chat/v1";
-pub const MAX_TOKENS: u32 = 4096;
+pub const NAMESPACE: &str = "decision_chat/v2";
+pub const MAX_TOKENS: u32 = 8192;
 pub const CAPABILITIES: DecisionCapabilities = DecisionCapabilities {
     boolean: true,
     choice: true,
@@ -98,7 +98,7 @@ pub fn encode_request(
         ).into()),
         messages: vec![ModelMessage::User { content: json!({"state":request.state,"questions":request.questions}).to_string() }],
         max_tokens: MAX_TOKENS,
-        temperature: Some(0.0),
+        temperature: None,
         tools: None,
         cache_namespace: Some(NAMESPACE.into()),
     })
