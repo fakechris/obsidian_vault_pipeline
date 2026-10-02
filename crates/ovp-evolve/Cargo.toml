@@ -11,6 +11,7 @@ description = "Evolution Kernel — attributable prompt/pipeline change governan
 decision-live = ["ovp-app/decision-live"]
 
 [dependencies]
+ovp-domain = { path = "../ovp-domain" }
 ovp-app = { path = "../ovp-app" }
 ovp-llm = { path = "../ovp-llm" }
 serde = { workspace = true }

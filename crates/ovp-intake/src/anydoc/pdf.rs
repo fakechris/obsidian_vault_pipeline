@@ -519,7 +519,9 @@ fn decode_pdf_string(bytes: &[u8]) -> String {
     if bytes.starts_with(&[0xFE, 0xFF]) {
         // UTF-16BE
         let u16s: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| ((chunk[0] as u16) << 8) | (chunk[1] as u16))
             .collect();
         String::from_utf16_lossy(&u16s)
@@ -673,4 +675,3 @@ trailer
         assert!(parsed.markdown.contains("Compressed PDF text stream decoded successfully"));
     }
 }
-

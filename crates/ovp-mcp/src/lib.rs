@@ -1039,7 +1039,7 @@ fn hex_decode(s: &str) -> Option<String> {
     }
     let bytes_in = s.as_bytes();
     let mut bytes = Vec::with_capacity(bytes_in.len() / 2);
-    for chunk in bytes_in.chunks_exact(2) {
+    for chunk in bytes_in.as_chunks::<2>().0 {
         let high = (chunk[0] as char).to_digit(16)? as u8;
         let low = (chunk[1] as char).to_digit(16)? as u8;
         bytes.push((high << 4) | low);

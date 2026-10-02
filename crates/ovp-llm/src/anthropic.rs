@@ -476,6 +476,29 @@ mod live {
             self
         }
 
+        /// Opt-in single-endpoint transport for decision experiments. Call last:
+        /// this is fallible and never falls back to an unbounded/default client.
+        /// Redirects cannot forward private evidence to a different supplier.
+        pub fn with_decision_transport(
+            mut self,
+            timeout: std::time::Duration,
+            no_proxy: bool,
+        ) -> Result<Self, CallError> {
+            if timeout.is_zero() {
+                return Err(CallError::Protocol { detail: "decision timeout must be positive".into() });
+            }
+            let mut builder = reqwest::blocking::Client::builder()
+                .timeout(timeout)
+                .redirect(reqwest::redirect::Policy::none());
+            if no_proxy {
+                builder = builder.no_proxy();
+            }
+            self.http = builder.build().map_err(|_| CallError::Transport {
+                detail: "cannot construct decision transport".into(),
+            })?;
+            Ok(self)
+        }
+
         /// Meter one real HTTP exchange into the usage ledger (when wired via
         /// [`Self::with_usage_ledger`]). `body` is the raw response body when
         /// one arrived; tokens are read from it HERE (`parse_anthropic_reply`

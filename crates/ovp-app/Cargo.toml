@@ -8,7 +8,7 @@ authors.workspace = true
 description = "OVP Next application/assembly layer: builds a GraphRunner from a declarative manifest + app wiring"
 
 [features]
-decision-live = ["ovp-llm/decision-live"]
+decision-live = ["ovp-llm/decision-live", "ovp-llm/anthropic"]
 
 [dependencies]
 ovp-core = { path = "../ovp-core" }

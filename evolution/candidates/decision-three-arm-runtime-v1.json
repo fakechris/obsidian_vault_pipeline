@@ -1,0 +1,18 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "decision-three-arm-runtime-v1",
+  "base_version": "decision-paired/v1",
+  "target_version": "decision-three-arm/v1",
+  "surface": "runtime",
+  "component": "runtime.evolve_ab",
+  "hypothesis": "A fail-closed three-arm experiment manifest validates identical frozen input and complete A/B/C coverage before reporting comparison, reducing accepted missing-arm and mismatched-input runs to zero. Silver labels are reported as agreement rather than accuracy. This adds experiment bookkeeping only, with no production changes or quality promotion.",
+  "predicted_delta": {
+    "required_arms": {"baseline": 2, "target": 3},
+    "accepted_incomplete_runs": {"target": 0},
+    "accepted_mismatched_inputs": {"target": 0}
+  },
+  "guardrails": {"accepted_without_quote": 0},
+  "eval_plan": {"replay_set": "crates/ovp-evolve/tests/decision_three_arm.rs", "soak": false},
+  "rollback": "Revert the additive three-arm manifest validator; keep existing paired runner and production paths unchanged. No admission-gate or quality acceptance is asserted.",
+  "ablation_required": false
+}
