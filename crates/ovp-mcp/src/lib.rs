@@ -576,7 +576,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         let trail = store.tool_trail_for_turn(&done.turn_id);
         if !trail.is_empty() {
             text.push_str("\nagent trail:");
-            for (_id, tool, is_error, _summary, arguments, note, hits) in trail {
+            for (tool, _id, is_error, _summary, arguments, note, hits) in trail {
                 let mark = if is_error { "✗" } else { "✓" };
                 let args = match ovp_memory::receipts::args_brief(&arguments) {
                     Value::String(s) => format!(" {s}"),
@@ -2802,6 +2802,7 @@ mod tests {
         assert_eq!(live_hits.len(), 2);
         assert_eq!(live_hits, assessments(&replay));
         assert!(replay["content"][0]["text"].as_str().unwrap().contains("idempotent replay"));
+        assert!(replay["content"][0]["text"].as_str().unwrap().contains("search_sources✓"));
         for hit in live_hits {
             for key in ["relevance_statistics", "relation_statistics"] {
                 assert_eq!(hit["semantic_evidence"][key]["confidence"], 0.17);
