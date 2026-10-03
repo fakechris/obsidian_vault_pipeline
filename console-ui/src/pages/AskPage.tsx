@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import AskProcessGraph from '../components/AskProcessGraph';
+import SemanticAssessments from '../components/SemanticAssessments';
 import { EmptyState, PageHelp, conceptTipKey } from '../components/ui';
 import { useI18n, type MsgKey } from '../i18n';
 import {
@@ -1606,6 +1607,9 @@ export default function AskPage() {
                   lookup={citeTitleLookup}
                 />
               </div>
+              <SemanticAssessments hits={pending
+                ? (processEvents ?? []).flatMap(e => e.hits ?? [])
+                : (processTrace ?? []).flatMap(e => e.hits ?? [])} />
             </div>
           )}
         </aside>

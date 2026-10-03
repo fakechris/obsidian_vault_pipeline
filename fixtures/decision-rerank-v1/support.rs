@@ -42,9 +42,16 @@ impl DecisionClientFactory for RecordFactory {
         cache: &Path,
     ) -> Result<Box<dyn DecisionClient>, DecisionError> {
         Ok(Box::new(CachedDecisionClient::record(
-            Box::new(Synthetic(p.clone())),
+            Box::new(Synthetic(p.clone(), false)),
             cache,
         )?))
+    }
+}
+pub struct NumericRecordFactory;
+impl DecisionClientFactory for NumericRecordFactory {
+    fn supports(&self, _: &DecisionProfile, _: ExecutionMode) -> bool { true }
+    fn build(&self, p: &DecisionProfile, _: ExecutionMode, cache: &Path) -> Result<Box<dyn DecisionClient>, DecisionError> {
+        Ok(Box::new(CachedDecisionClient::record(Box::new(Synthetic(p.clone(), true)), cache)?))
     }
 }
 pub struct ReplayFactory;
@@ -74,13 +81,13 @@ fn capabilities() -> DecisionCapabilities {
         probabilities: false,
     }
 }
-struct Synthetic(DecisionProfile);
+struct Synthetic(DecisionProfile, bool);
 impl DecisionClient for Synthetic {
     fn profile(&self) -> &DecisionProfile {
         &self.0
     }
     fn capabilities(&self) -> DecisionCapabilities {
-        capabilities()
+        DecisionCapabilities { probabilities: self.1, ..capabilities() }
     }
     fn decide(&mut self, q: &DecisionRequest) -> Result<DecisionReply, DecisionError> {
         let answers = q
@@ -99,12 +106,16 @@ impl DecisionClient for Synthetic {
                 } else {
                     "contextual"
                 };
+                let probabilities = if self.1 {
+                    let QuestionKind::Choice { options } = &q.questions[id].kind else { panic!("fixture expects Choice") };
+                    Some(options.keys().map(|option| (option.clone(), if option.0 == choice { 0.6 } else { 0.4 / (options.len()-1) as f64 })).collect())
+                } else { None };
                 (
                     id.clone(),
                     DecisionAnswer::Choice {
                         selected: choice.into(),
-                        probabilities: None,
-                        confidence: None,
+                        probabilities,
+                        confidence: self.1.then_some(0.17),
                     },
                 )
             })
@@ -117,7 +128,7 @@ impl DecisionClient for Synthetic {
                 question_namespace: q.namespace.clone(),
                 evidence: q.evidence.clone(),
                 calibration: Calibration::Unknown,
-                confidence_semantics: None,
+                confidence_semantics: self.1.then(|| "synthetic/raw-test-value".into()),
                 evaluation_usage: None,
                 evaluation_ms: 0,
                 origin: DecisionOrigin::Fixture,

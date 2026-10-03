@@ -1,0 +1,14 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "decision-relevance-observability-v1",
+  "surface": "runtime",
+  "component": "runtime.ask_vault_tools",
+  "base_version": "evidence-relevance/v1",
+  "target_version": "evidence-relevance-observability/v1",
+  "hypothesis": "Passing the existing provider-returned confidence and selected-option probability through annotations and Portal progress preserves all baseline/candidate ordering and citations, with zero invented numeric values when a supplier omits distributions.",
+  "predicted_delta": {"ordering_changes": {"target": 0}, "candidate_loss": {"target": 0}, "invented_numeric_values": {"target": 0}, "annotated_choices_missing_supplied_probability": {"target": 0}},
+  "guardrails": {"accepted_without_quote": 0},
+  "eval_plan": {"replay_set": "crates/ovp-memory/tests/decision_rerank.rs", "soak": false},
+  "ablation_required": false,
+  "rollback": "Revert the INV-969 observability change. Keep evidence_relevance off unless its independent quality evaluation is accepted. No prompt, threshold, routing, or admission change."
+}
