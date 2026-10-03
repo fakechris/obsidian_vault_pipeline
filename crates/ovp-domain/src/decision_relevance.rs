@@ -15,11 +15,20 @@ pub struct RelevanceCandidate {
     /// content-hashed in revision. This is not a physical-file line claim.
     pub evidence: EvidenceRef,
 }
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChoiceStatistics {
+    pub confidence: Option<f64>,
+    pub selected_probability: Option<f64>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelevanceJudgment {
     pub candidate_id: String,
     pub relevance: String,
     pub relation: String,
+    #[serde(default)]
+    pub relevance_statistics: ChoiceStatistics,
+    #[serde(default)]
+    pub relation_statistics: ChoiceStatistics,
 }
 fn options(values: &[(&str, &str)]) -> BTreeMap<OptionId, String> {
     values
@@ -84,13 +93,30 @@ pub fn judgments(
                 .answers
                 .get(&QuestionId(format!("candidate_{i:04}_{suffix}")))
             {
-                Some(DecisionAnswer::Choice { selected, .. }) => Ok(selected.0.clone()),
+                Some(DecisionAnswer::Choice {
+                    selected,
+                    probabilities,
+                    confidence,
+                }) => Ok((
+                    selected.0.clone(),
+                    ChoiceStatistics {
+                        confidence: *confidence,
+                        selected_probability: probabilities
+                            .as_ref()
+                            .and_then(|p| p.get(selected))
+                            .copied(),
+                    },
+                )),
                 _ => Err(DecisionError::InvalidReply("missing relevance choice")),
             };
+            let (relevance, relevance_statistics) = selected("relevance")?;
+            let (relation, relation_statistics) = selected("relation")?;
             Ok(RelevanceJudgment {
                 candidate_id: c.id.clone(),
-                relevance: selected("relevance")?,
-                relation: selected("relation")?,
+                relevance,
+                relation,
+                relevance_statistics,
+                relation_statistics,
             })
         })
         .collect()

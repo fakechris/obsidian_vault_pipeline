@@ -574,6 +574,12 @@ export const en = {
   'ask.chatParseEmpty':
     'This saved transcript has no readable Q/A turns — the file may be corrupt or empty.',
   'ask.citationsTitle': 'Citations',
+  'ask.semanticTitle': 'Rerank judgments',
+  'ask.semanticHelp': 'Raw provider judgments; numbers are not correctness scores. unknown means not supplied.',
+  'ask.semanticRelevance': 'Relevance',
+  'ask.semanticRelation': 'Relation to the premise',
+  'ask.semanticConfidence': 'Confidence',
+  'ask.semanticProbability': 'Selected option probability',
   'ask.citationsEmpty':
     'Citations for the latest answer land here — hover a [1] marker in the answer to highlight its evidence.',
   'ask.processTitle': 'Process',

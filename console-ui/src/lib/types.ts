@@ -342,6 +342,16 @@ export interface AskProgressHit {
   id: string;
   label: string;
   source_id?: string | null;
+  semantic_evidence?: {
+    relevance: string;
+    relation: string;
+    relevance_statistics?: { confidence?: number | null; selected_probability?: number | null };
+    relation_statistics?: { confidence?: number | null; selected_probability?: number | null };
+    provider?: string;
+    model?: string;
+    question_namespace?: string;
+    confidence_semantics?: string | null;
+  } | null;
 }
 
 /** One executed tool call in an agent turn's caller-facing trail. */

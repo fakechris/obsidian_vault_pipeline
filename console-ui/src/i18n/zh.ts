@@ -547,6 +547,12 @@ export const zh: Record<keyof typeof en, string> = {
   'ask.chatLoadError': '无法加载该会话——服务是否在运行？',
   'ask.chatParseEmpty': '该会话没有可解析的问答内容——文件可能损坏或为空。',
   'ask.citationsTitle': '引用',
+  'ask.semanticTitle': '重排判断',
+  'ask.semanticHelp': '供应商原始判断，数值不是正确率；unknown 表示未提供。',
+  'ask.semanticRelevance': '相关性',
+  'ask.semanticRelation': '与问题前提的关系',
+  'ask.semanticConfidence': 'Confidence',
+  'ask.semanticProbability': '选中选项概率',
   'ask.processTitle': '过程图',
   'ask.processHelp':
     '检索过程中涉及的结论、来源与记忆卡片会实时汇入此图，便于解释答案从何而来。',

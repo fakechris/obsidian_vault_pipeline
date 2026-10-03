@@ -30,6 +30,13 @@ fn off_shadow_and_replay_preserve_candidates_quotes_and_private_annotation() {
         enabled["hits"][0]["semantic_evidence"]["relation"],
         "contradicts"
     );
+    assert!(
+        enabled["hits"][0]["semantic_evidence"]["relevance_statistics"]["confidence"].is_null()
+    );
+    assert!(
+        enabled["hits"][0]["semantic_evidence"]["relevance_statistics"]["selected_probability"]
+            .is_null()
+    );
     for (i, j) in [(0, 1), (1, 0)] {
         let mut hit = enabled["hits"][i].clone();
         hit.as_object_mut().unwrap().remove("semantic_evidence");
@@ -41,6 +48,68 @@ fn off_shadow_and_replay_preserve_candidates_quotes_and_private_annotation() {
             .iter()
             .any(|r| r["observation"]["candidate"]["receipt"]["origin"] == "replay")
     );
+}
+#[test]
+fn supplied_choice_numbers_and_lineage_survive_sorting_cli_and_portal_progress() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fixture::vault(root);
+    let model = ovp_index::read_index(root).unwrap();
+    let mut value = fixture::search(root, DecisionMode::Off, true);
+    let reranker = ovp_memory::decision_rerank::DecisionReranker::new(
+        root,
+        fixture::settings(DecisionMode::Enabled),
+        Arc::new(fixture::NumericRecordFactory),
+        "numeric".into(),
+    )
+    .unwrap();
+    reranker.rerank_tool(
+        &model,
+        "retrieval",
+        &mut value,
+        "search_sources",
+        Duration::from_secs(2),
+        usize::MAX,
+    );
+    assert_eq!(value["hits"][0]["source_id"], "bbbb2222");
+    let annotation = &value["hits"][0]["semantic_evidence"];
+    for key in ["relevance_statistics", "relation_statistics"] {
+        assert_eq!(annotation[key]["confidence"], 0.17);
+        assert_eq!(annotation[key]["selected_probability"], 0.6);
+    }
+    assert_eq!(annotation["provider"], "fixture");
+    assert_eq!(annotation["model"], "synthetic-v1");
+    assert_eq!(
+        annotation["question_namespace"],
+        ovp_domain::decision_relevance::NAMESPACE
+    );
+    let hits = ovp_memory::agent::tool_result_hits(&value.to_string());
+    let progress = ovp_memory::agent::progress_hits_json(&hits);
+    assert_eq!(
+        progress[0]["semantic_evidence"]["relevance_statistics"]["confidence"],
+        0.17
+    );
+    assert!(progress[0]["semantic_evidence"].get("quote").is_none());
+    assert!(progress[0]["semantic_evidence"].get("evidence").is_none());
+    assert!(
+        !serde_json::to_string(&progress)
+            .unwrap()
+            .contains("fixture://")
+    );
+    let many = json!({"hits":(0..20).map(|i|json!({"source_id":format!("s{i}"),"title":format!("Source {i}"),"semantic_evidence":annotation})).collect::<Vec<_>>()});
+    assert_eq!(ovp_memory::agent::tool_result_hits(&many.to_string()).len(), 20);
+    let mut items = vec![ovp_memory::ask::EvidenceItem {
+        id: "aaaa1111".into(),
+        kind: ovp_memory::ask::EvidenceKind::Source,
+        title: "A".into(),
+        body: "body".into(),
+        quote: Some("original".into()),
+        path: None,
+    }];
+    reranker.rerank_ask(&model, None, "retrieval", &mut items);
+    assert!(items[0].body.contains("selected_probability"));
+    assert!(items[0].body.contains("0.17"));
+    assert_eq!(items[0].quote.as_deref(), Some("original"));
 }
 #[test]
 fn missing_cassette_budget_cap_and_trace_failure_retain_baseline() {

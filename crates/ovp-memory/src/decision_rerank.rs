@@ -186,7 +186,14 @@ impl DecisionReranker {
             if start.elapsed() > Duration::from_secs(1) {
                 return Err("rerank exceeded one-second budget; baseline retained".into());
             }
-            let annotations: Vec<Value>=candidates.iter().zip(&judgments).map(|(c,j)|json!({"relevance":j.relevance,"relation":j.relation,"source_view":"annotation-redacted/v1","evidence":c.evidence,"quote":c.quote})).collect();
+            let annotations: Vec<Value>=candidates.iter().zip(&judgments).map(|(c,j)|json!({
+                "relevance":j.relevance,"relation":j.relation,
+                "relevance_statistics":j.relevance_statistics,"relation_statistics":j.relation_statistics,
+                "provider":reply.receipt.provider.provider,"model":reply.receipt.provider.model,
+                "question_namespace":reply.receipt.question_namespace,
+                "confidence_semantics":reply.receipt.confidence_semantics,
+                "source_view":"annotation-redacted/v1","evidence":c.evidence,"quote":c.quote
+            })).collect();
             if !accept(&order, &annotations) {
                 return Err("reranked result exceeds delivery cap".into());
             }

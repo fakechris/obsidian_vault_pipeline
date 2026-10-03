@@ -169,6 +169,8 @@ pub struct ProgressHit {
     pub id: String,
     pub label: String,
     pub source_id: Option<String>,
+    /// Supplier statistics only; no body, endpoint, or reader annotation.
+    pub semantic_evidence: Option<serde_json::Value>,
 }
 
 /// Compact involved-entity list from a tool result — drives the live ask
@@ -186,8 +188,11 @@ pub fn tool_result_hits(content: &str) -> Vec<ProgressHit> {
         return single_entity_hit(&v).into_iter().collect();
     };
     let mut out = Vec::new();
+    let max_hits = if hits.iter().any(|h| h.get("semantic_evidence").is_some()) {
+        ovp_domain::decision_relevance::MAX_CANDIDATES
+    } else { MAX_PROGRESS_HITS };
     for hit in hits {
-        if out.len() >= MAX_PROGRESS_HITS {
+        if out.len() >= max_hits {
             break;
         }
         if let Some(n) = hit_to_progress(hit) {
@@ -211,6 +216,10 @@ fn clip_label(s: &str, max: usize) -> String {
 }
 
 fn hit_to_progress(hit: &serde_json::Value) -> Option<ProgressHit> {
+    let semantic_evidence = hit.get("semantic_evidence").and_then(|v|v.as_object()).map(|v| {
+        let fields = ["relevance", "relation", "relevance_statistics", "relation_statistics", "provider", "model", "question_namespace", "confidence_semantics"];
+        serde_json::Value::Object(fields.into_iter().filter_map(|key|v.get(key).map(|value|(key.into(),value.clone()))).collect())
+    });
     // Claims (search_claims / get_claim)
     if let Some(key) = hit
         .get("claim_key")
@@ -232,6 +241,7 @@ fn hit_to_progress(hit: &serde_json::Value) -> Option<ProgressHit> {
             id: key.to_string(),
             label: clip_label(claim, 80),
             source_id,
+            semantic_evidence,
         });
     }
     // Sources (search_sources / fulltext / chunks)
@@ -254,6 +264,7 @@ fn hit_to_progress(hit: &serde_json::Value) -> Option<ProgressHit> {
                 id: format!("card:{sid}:{}", clip_label(label, 40)),
                 label: clip_label(label, 80),
                 source_id: Some(sid.to_string()),
+                semantic_evidence,
             });
         }
         let title = hit
@@ -267,6 +278,7 @@ fn hit_to_progress(hit: &serde_json::Value) -> Option<ProgressHit> {
             id: sid.to_string(),
             label: clip_label(title, 80),
             source_id: Some(sid.to_string()),
+            semantic_evidence,
         });
     }
     // Cards without source_id (rare)
@@ -278,6 +290,7 @@ fn hit_to_progress(hit: &serde_json::Value) -> Option<ProgressHit> {
             id: format!("card:{}", clip_label(title, 40)),
             label: clip_label(title, 80),
             source_id: None,
+            semantic_evidence,
         });
     }
     None
@@ -938,6 +951,7 @@ pub fn progress_hits_json(hits: &[ProgressHit]) -> Vec<serde_json::Value> {
                 "id": h.id,
                 "label": h.label,
                 "source_id": h.source_id,
+                "semantic_evidence": h.semantic_evidence,
             })
         })
         .collect()
