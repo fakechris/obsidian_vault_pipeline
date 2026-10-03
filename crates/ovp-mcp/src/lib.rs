@@ -441,6 +441,17 @@ fn handle_tools_call(state: &McpState, params: &Value) -> Result<Value, RpcError
 /// is the answer plus server-verified receipts, per-layer coverage, and the
 /// session id for continuation. Deliverable turns also land on the saved-chat
 /// History surface, so portal and MCP conversations share one product record.
+/// Live and replay replies expose the same compact supplier statistics.
+/// Progress hits have already removed excerpts and private reader annotations.
+fn append_semantic_assessments(text: &mut String, hits: &[ovp_memory::agent::ProgressHit]) {
+    for hit in ovp_memory::agent::progress_hits_json(hits) {
+        if hit.get("semantic_evidence").is_some_and(|v| !v.is_null()) {
+            text.push_str("\n    semantic assessment: ");
+            text.push_str(&hit.to_string());
+        }
+    }
+}
+
 fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
     use ovp_memory::agent::{AgentConfig, AgentError, StoppedReason, run_agent_turn};
     use ovp_memory::agent_transcript::{SessionStore, valid_session_id};
@@ -565,7 +576,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         let trail = store.tool_trail_for_turn(&done.turn_id);
         if !trail.is_empty() {
             text.push_str("\nagent trail:");
-            for (tool, _id, is_error, _summary, arguments, note, _hits) in trail {
+            for (_id, tool, is_error, _summary, arguments, note, hits) in trail {
                 let mark = if is_error { "✗" } else { "✓" };
                 let args = match ovp_memory::receipts::args_brief(&arguments) {
                     Value::String(s) => format!(" {s}"),
@@ -573,6 +584,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
                 };
                 let note = note.map(|n| format!(" → {n}")).unwrap_or_default();
                 text.push_str(&format!("\n  {tool}{mark}{args}{note}"));
+                append_semantic_assessments(&mut text, &hits);
             }
         }
         text.push_str(&format!(
@@ -721,6 +733,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
                     .map(|n| format!(" → {n}"))
                     .unwrap_or_default();
                 text.push_str(&format!("\n  {}{mark}{args}{note}", t2.tool));
+                append_semantic_assessments(&mut text, &t2.hits);
             }
         }
         text.push_str(&format!(
@@ -771,6 +784,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
                 .map(|n| format!(" → {n}"))
                 .unwrap_or_default();
             text.push_str(&format!("\n  {}{mark}{args}{note}", t.tool));
+            append_semantic_assessments(&mut text, &t.hits);
         }
     }
     if outcome.stopped_reason != StoppedReason::Final {
@@ -2759,6 +2773,43 @@ mod tests {
             state.ask_client = Some(std::sync::Arc::new(move || Ok(Box::new(fixture::AgentClient(enabled)) as Box<dyn ovp_llm::ModelClient>)));
             let value = call(&state, "ask", serde_json::json!({"question":"retrieval","chat":"relevance-test"})).unwrap();
             assert!(value["content"][0]["text"].as_str().unwrap().contains("verified order"), "{value}");
+        }
+    }
+
+    #[test]
+    fn ask_supplier_statistics_survive_live_and_idempotent_replay() {
+        #[allow(dead_code)]
+        mod fixture { include!("../../../fixtures/decision-rerank-v1/support.rs"); }
+        use ovp_llm::decision::runtime::DecisionMode;
+        let (tmp, mut state) = fixture_vault();
+        let root = tmp.path();
+        let model = fixture::vault(root);
+        let mut hits = fixture::search(root, DecisionMode::Off, true);
+        let settings = fixture::settings(DecisionMode::Enabled);
+        let reranker = ovp_memory::decision_rerank::DecisionReranker::new(
+            root, settings.clone(), std::sync::Arc::new(fixture::NumericRecordFactory), "mcp-numeric".into(),
+        ).unwrap();
+        reranker.rerank_tool(&model, "retrieval", &mut hits, "search_sources", std::time::Duration::from_secs(2), usize::MAX);
+        std::fs::write(root.join(".ovp/decisions.json"), serde_json::to_vec(&settings).unwrap()).unwrap();
+        state.ask_client = Some(std::sync::Arc::new(|| Ok(Box::new(fixture::AgentClient(true)) as Box<dyn ovp_llm::ModelClient>)));
+        let args = serde_json::json!({"question":"retrieval", "chat":"numeric-replay"});
+        let live = call(&state, "ask", args.clone()).unwrap();
+        let replay = call(&state, "ask", args).unwrap();
+        let assessments = |v: &Value| v["content"][0]["text"].as_str().unwrap().lines()
+            .filter_map(|s| s.trim().strip_prefix("semantic assessment: "))
+            .map(|s| serde_json::from_str::<Value>(s).unwrap()).collect::<Vec<_>>();
+        let live_hits = assessments(&live);
+        assert_eq!(live_hits.len(), 2);
+        assert_eq!(live_hits, assessments(&replay));
+        assert!(replay["content"][0]["text"].as_str().unwrap().contains("idempotent replay"));
+        for hit in live_hits {
+            for key in ["relevance_statistics", "relation_statistics"] {
+                assert_eq!(hit["semantic_evidence"][key]["confidence"], 0.17);
+                assert_eq!(hit["semantic_evidence"][key]["selected_probability"], 0.6);
+            }
+            assert_eq!(hit["semantic_evidence"]["model"], "synthetic-v1");
+            assert!(hit["semantic_evidence"].get("quote").is_none());
+            assert!(!hit.to_string().contains("PRIVATE_READER_NOTE"));
         }
     }
 
