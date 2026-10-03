@@ -99,16 +99,16 @@ This repository is bound to the **Involute Work-Graph Kernel** for task tracking
 - **Team Key**: `INV`
 - **Root Project Identifier**: `INV-44`
 - **Root Project UUID**: `80a49a7a-8c38-4760-b563-d804fb07cd30`
-- **Web UI**: [http://100.114.30.43:4201/](http://100.114.30.43:4201/)
-- **Candidate Review Queue**: [http://100.114.30.43:4201/candidates?project=fakechris/obsidian_vault_pipeline](http://100.114.30.43:4201/candidates?project=fakechris/obsidian_vault_pipeline)
-- **Work Graph Observation**: [http://100.114.30.43:4201/graph](http://100.114.30.43:4201/graph)
+- **Web UI**: [https://involute.lumenopen.com/](https://involute.lumenopen.com/)
+- **Candidate Review Queue**: [https://involute.lumenopen.com/candidates?project=fakechris/obsidian_vault_pipeline](https://involute.lumenopen.com/candidates?project=fakechris/obsidian_vault_pipeline)
+- **Work Graph Observation**: [https://involute.lumenopen.com/graph](https://involute.lumenopen.com/graph)
 
 ### 2. MCP Connection Configuration
 
 | Agent Environment | MCP Endpoint URL | Notes |
 |---|---|---|
-| **Remote / Developer Machine** (Mac, Cursor, Codex, Claude Code) | `http://100.114.30.43:4200/mcp` (or `/mcp/readonly`) | Connect via Tailscale network |
-| **Local on Box** (executing inside VPS host) | `http://127.0.0.1:4200/mcp` (or `/mcp/readonly`) | Loopback connection on host |
+| **Remote / Developer Machine** (Mac, Cursor, Codex, Claude Code) | `https://involute.lumenopen.com/mcp` (or `/mcp/readonly`) | Production HTTPS entry on oracle_5 |
+| **Local on Box** (executing inside VPS host) | `http://127.0.0.1:4200/mcp` (or `/mcp/readonly`) | Only where the container port is mapped to host loopback |
 
 - **Auth Header**: `Authorization: Bearer <AGENT_TOKEN>` (`inv_agent_...` minted via Settings → Agents).
 - **Security Rule**: Tokens stay in agent secret store; **NEVER commit tokens or write them to repository files**.
