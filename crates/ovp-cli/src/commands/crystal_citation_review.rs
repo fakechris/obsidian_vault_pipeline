@@ -338,6 +338,22 @@ pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
     for ev in events_now {
         last.insert(ev.record.claim_key.clone(), ev);
     }
+    // A person acting on a queued claim (review-session rewrite, reject,
+    // defer …) changes or removes its queue entry without touching the old
+    // claim's ledger key, so the ledger alone cannot tell. The queue can: the
+    // claim is still this run's only while its entry is exactly what we queued.
+    let queue_path = store_dir(vault).join("review.json");
+    let queued: BTreeMap<String, serde_json::Value> = match std::fs::read_to_string(&queue_path) {
+        Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+            .map_err(|e| CliError::Io(format!("parsing {}: {e}", queue_path.display())))?
+            .get("review")
+            .and_then(|r| r.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|e| Some((e.get("claim_id")?.as_str()?.to_string(), e.clone())))
+            .collect(),
+        Err(_) => BTreeMap::new(),
+    };
     let owned: Vec<&ReviewPlanEntry> = plan
         .entries
         .iter()
@@ -346,6 +362,8 @@ pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
                 && last.get(&e.claim_key).is_some_and(|ev| {
                     ev.op == StoreOp::Retract && ev.reason.as_deref() == Some(ours.as_str())
                 })
+                && serde_json::to_value(&e.review)
+                    .is_ok_and(|ours| queued.get(&e.claim_key) == Some(&ours))
         })
         .collect();
     let keys: BTreeSet<&str> = owned.iter().map(|e| e.claim_key.as_str()).collect();
@@ -705,6 +723,34 @@ mod tests {
         );
         assert_eq!(active_keys(v), vec!["ck-strong".to_string()]);
         assert_eq!(rollback(v, &second.run_id).unwrap(), 1);
+    }
+
+    /// Once a person has acted on the queued entry (rewritten, rejected,
+    /// deferred — the queue entry changes or goes), rollback must leave that
+    /// claim alone rather than resurrect it over their decision.
+    #[test]
+    fn rollback_leaves_claims_a_person_already_reviewed() {
+        let (tmp, verdicts) = vault();
+        let v = tmp.path();
+        let plan = build_plan(v, &verdicts).unwrap();
+        let run = apply(v, &verdicts, &plan.plan_id).unwrap();
+        let path = v.join(".ovp/crystal/review.json");
+        let mut q: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for e in q["review"].as_array_mut().unwrap() {
+            if e["claim_id"] == "ck-weak" {
+                e["claim"] = "narrowed by a person".into();
+            }
+        }
+        std::fs::write(&path, q.to_string()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(rollback(v, &run.run_id).unwrap(), 0);
+        assert_eq!(active_keys(v), vec!["ck-strong".to_string()]);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "their entry is untouched"
+        );
     }
 
     #[test]
