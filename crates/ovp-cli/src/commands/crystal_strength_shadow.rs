@@ -96,7 +96,11 @@ fn observe_with(
             if config.question_namespace.as_deref() != Some(decision_strength::NAMESPACE) {
                 return Err("strength namespace mismatch".to_string());
             }
-            let request = decision_strength::request(&sub, catalog).map_err(|e| e.to_string())?;
+            let prepared = decision_strength::prepare(&sub, catalog).map_err(|e| e.to_string())?;
+            if !prepared.excluded.is_empty() {
+                record["excluded"] = json!(prepared.excluded);
+            }
+            let request = prepared.request;
             record["request"] = json!(request);
             let observation = evaluate(
                 settings,
@@ -121,7 +125,8 @@ fn observe_with(
             }
             if let Some(reply) = observation.candidate.as_ref() {
                 let judged: Vec<ShadowJudgment> =
-                    decision_strength::judgments(&sub, reply).map_err(|e| e.to_string())?;
+                    decision_strength::judgments(&sub, &request, reply)
+                        .map_err(|e| e.to_string())?;
                 let comparisons: Vec<Value> = judged.iter().map(|j| {
                     let base = baseline.iter().find(|v| v.claim_id == j.claim_id);
                     json!({"claim_id":j.claim_id,"existing_strength":base.map(|b|b.strength),"existing_sufficient":base.map(|b|b.evidence_sufficient),"candidate_strength":j.strength,"candidate_sufficient":j.evidence_sufficient,"disagrees":base.is_some_and(|b|b.strength!=j.strength || b.evidence_sufficient!=j.evidence_sufficient),"requires_review":true})
