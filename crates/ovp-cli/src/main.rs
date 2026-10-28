@@ -652,6 +652,28 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Send durable claims back to review when fewer than two sources still
+    /// support them once the citations a per-citation support verdict judged
+    /// unsupported (at confidence 0.8 or more) are set aside. Dry-run by
+    /// default and prints a plan id; `--apply <plan-id>` runs that exact plan
+    /// or refuses; `--rollback <plan-id>` undoes one applied run.
+    CrystalCitationReview {
+        #[arg(long)]
+        vault_root: PathBuf,
+        /// JSONL, one verdict per line: claim_key, citation_index, case_id,
+        /// unit_id, quote, choice (supports|contradicts|says_nothing), confidence.
+        #[arg(long, required_unless_present = "rollback")]
+        verdicts: Option<PathBuf>,
+        /// Plan id printed by the dry-run; anything else is refused.
+        #[arg(long, conflicts_with = "rollback")]
+        apply: Option<String>,
+        /// Plan id of an applied run (plan in `.ovp/crystal/citation-review/<id>.json`).
+        #[arg(long)]
+        rollback: Option<String>,
+        /// Cap the per-claim listing in the printed plan.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// PRODUCT — reader/crystal trunk (the blessed path).
     /// M22 Crystal pre-write gate: lint a structured-citation synthesis candidate
     /// against the grounded units and score provenance. Mechanical, fail-loud, no
@@ -2151,6 +2173,21 @@ fn main() -> ExitCode {
                 limit,
             })
         }
+        Cmd::CrystalCitationReview {
+            vault_root,
+            verdicts,
+            apply,
+            rollback,
+            limit,
+        } => commands::crystal_citation_review::run(
+            commands::crystal_citation_review::CrystalCitationReviewArgs {
+                vault_root,
+                verdicts,
+                apply,
+                rollback,
+                limit,
+            },
+        ),
         Cmd::CrystalRegateSources {
             vault_root,
             apply,

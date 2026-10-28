@@ -348,7 +348,7 @@ pub enum ProvenanceClass {
 /// Durable only if it is fully grounded, draws on ≥2 distinct sources, and clears
 /// the score bar; anything grounded-but-weak is Caveated; ungrounded is Quarantine.
 const DURABLE_MIN_SCORE: f64 = 0.70;
-pub(crate) const DURABLE_MIN_SOURCES: usize = 2;
+pub const DURABLE_MIN_SOURCES: usize = 2;
 
 /// Deterministic provenance signals + score for one claim.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -325,6 +325,28 @@ ovp2 console --vault-root "$VAULT"     # claims appear under Crystal · 结晶�
 `40-Resources/Reader/`. Daily packs already write `units.accepted.json` in
 exactly the layout the gates expect.
 
+### Citations that do not support their claim
+
+The gate checks that a cited quote exists in the source, not that it backs the
+claim. Given per-citation support verdicts (JSONL: `claim_key`,
+`citation_index`, `case_id`, `unit_id`, `quote`, `choice` =
+supports|contradicts|says_nothing, `confidence`), `crystal-citation-review`
+sends back to review every durable claim that falls below two supporting
+sources once the citations judged unsupported at confidence ≥ 0.8 are set
+aside. Sources are counted by the gate's own source identity.
+
+```bash
+ovp2 crystal-citation-review --vault-root "$VAULT" --verdicts verdicts.jsonl    # plan + id, writes nothing
+ovp2 crystal-citation-review --vault-root "$VAULT" --verdicts verdicts.jsonl --apply cr-…
+ovp2 crystal-citation-review --vault-root "$VAULT" --rollback cr-…
+```
+
+`--apply` rebuilds the plan and runs it only if its id is the one you
+reviewed; if the ledger or the verdicts changed, it refuses and writes nothing.
+An applied claim is retracted (append-only) and queued in the review lane with
+the verdicts in its rationale, so it stays readable as caveated. The verdicts
+are a model's judgment: they decide what a person looks at, never durability.
+
 ### Semantic themes (display projection)
 
 ```bash
