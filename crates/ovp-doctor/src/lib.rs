@@ -129,7 +129,7 @@ pub fn run_checks(vault_root: &Path, opts: &DoctorOptions) -> Vec<Finding> {
     check_pack_provenance(vault_root, &layout, &mut findings);
     check_decision_credentials(
         vault_root,
-        &|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()),
+        &|name| std::env::var(name).ok(),
         &mut findings,
     );
     findings
@@ -416,7 +416,7 @@ fn scheduled_env_file(vault_root: &Path) -> std::path::PathBuf {
 /// `replay` execution never read a credential.
 fn check_decision_credentials(
     vault_root: &Path,
-    in_process_env: &dyn Fn(&str) -> bool,
+    process_env: &dyn Fn(&str) -> Option<String>,
     findings: &mut Vec<Finding>,
 ) {
     let check = "decision-credentials".to_string();
@@ -490,14 +490,16 @@ fn check_decision_credentials(
         if has(&providers, var) || has(&legacy, var) {
             continue;
         }
-        if in_process_env(var) {
+        if process_env(var).is_some_and(|v| !v.trim().is_empty()) {
             findings.push(
                 Finding {
                     check: check.clone(),
                     severity: Severity::Warn,
                     message: format!(
-                        "capability `{name}` needs {var}: set in this shell only, so scheduled \
-                         runs will fail with MissingCredential"
+                        "capability `{name}` needs {var}: set only in this process's \
+                         environment — scheduled runs get it only if the scheduler's own \
+                         environment has it (launchd and the Finder-launched app usually do \
+                         not), otherwise they fail with MissingCredential"
                     ),
                     hint: None,
                     fixed: false,
@@ -2274,9 +2276,21 @@ mod tests {
     }
 
     fn credential_findings(vault: &Path, in_env: bool) -> Vec<Finding> {
+        with_process_value(vault, in_env.then_some("x"))
+    }
+
+    fn with_process_value(vault: &Path, value: Option<&str>) -> Vec<Finding> {
         let mut findings = Vec::new();
-        check_decision_credentials(vault, &|_| in_env, &mut findings);
+        check_decision_credentials(vault, &|_| value.map(str::to_string), &mut findings);
         findings
+    }
+
+    /// A whitespace-only value is rejected at call time, so it is not "set".
+    #[test]
+    fn blank_process_value_is_not_a_credential() {
+        let tmp = decision_vault(Some(DECISIONS));
+        assert_eq!(with_process_value(tmp.path(), Some("  "))[0].severity, Severity::Fail);
+        assert_eq!(with_process_value(tmp.path(), Some("tok"))[0].severity, Severity::Warn);
     }
 
     #[test]
