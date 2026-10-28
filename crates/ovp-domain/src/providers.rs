@@ -124,11 +124,15 @@ pub fn read_budget(vault_root: &Path) -> Result<BudgetSection, String> {
 /// sourcing daily.env, so its credentials MUST be carried over or scheduled
 /// runs silently lose them.
 pub fn read_legacy_daily_env(vault_root: &Path) -> std::collections::BTreeMap<String, String> {
-    let path = vault_root.join(".ovp/daily.env");
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return Default::default();
-    };
-    parse_env_lines(&raw)
+    read_env_file(&vault_root.join(".ovp/daily.env"))
+}
+
+/// Parse any env file (same rules as [`read_legacy_daily_env`]); missing or
+/// unreadable → empty.
+pub fn read_env_file(path: &Path) -> std::collections::BTreeMap<String, String> {
+    std::fs::read_to_string(path)
+        .map(|raw| parse_env_lines(&raw))
+        .unwrap_or_default()
 }
 
 /// Names an env file defines that the scheduled jobs will NOT get (INV-1411).

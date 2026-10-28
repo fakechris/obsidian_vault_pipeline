@@ -388,6 +388,23 @@ fn check_content_unavailable(vault_root: &Path, layout: &VaultLayout, findings: 
     );
 }
 
+/// The env file scheduled jobs source: `env_file` from `.ovp/schedule.json`
+/// with `{vault}` resolved, else the default `.ovp/daily.env` — the same rule
+/// as the scheduler's `resolved_env_file`.
+fn scheduled_env_file(vault_root: &Path) -> std::path::PathBuf {
+    let configured = std::fs::read_to_string(vault_root.join(".ovp/schedule.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|reg| reg["env_file"].as_str().map(str::to_string));
+    match configured {
+        Some(raw) => match raw.strip_prefix("{vault}") {
+            Some(rest) => vault_root.join(rest.trim_start_matches(['/', '\\'])),
+            None => std::path::PathBuf::from(raw),
+        },
+        None => vault_root.join(".ovp/daily.env"),
+    }
+}
+
 /// Every typed-decision capability that will call a provider must be able to
 /// find its credential where SCHEDULED runs look (INV-1411).
 ///
@@ -435,18 +452,28 @@ fn check_decision_credentials(
             return;
         }
     };
-    // daily.env is only sourced while providers.toml does not exist.
-    let legacy = if providers_exists {
+    // The env file the scheduler sources: the registry's configured one
+    // (default daily.env), only while providers.toml does not exist, and never
+    // on Windows (no /bin/sh to source it).
+    let env_file = scheduled_env_file(vault_root);
+    let legacy = if providers_exists || cfg!(windows) {
         Default::default()
     } else {
-        ovp_domain::providers::read_legacy_daily_env(vault_root)
+        ovp_domain::providers::read_env_file(&env_file)
+    };
+    // An empty value fails at call time exactly like a missing one.
+    let has = |map: &std::collections::BTreeMap<String, String>, var: &str| {
+        map.get(var).is_some_and(|v| !v.trim().is_empty())
     };
     let move_hint = "add it to the [env] table of .ovp/providers.toml — scheduled jobs and the \
                      Finder-launched app read credentials only from there";
     let mut checked = 0;
     let caps = settings["capabilities"].as_object().cloned().unwrap_or_default();
     for (name, cap) in &caps {
-        if cap["mode"].as_str() == Some("off") || cap["execution"].as_str() == Some("replay") {
+        // Runtime defaults: an omitted mode is off, an omitted execution replay.
+        let mode = cap["mode"].as_str().unwrap_or("off");
+        let execution = cap["execution"].as_str().unwrap_or("replay");
+        if mode == "off" || execution == "replay" {
             continue;
         }
         let profile = cap["profile"].as_str().unwrap_or("");
@@ -458,7 +485,7 @@ fn check_decision_credentials(
             continue;
         };
         checked += 1;
-        if providers.contains_key(var) || legacy.contains_key(var) {
+        if has(&providers, var) || has(&legacy, var) {
             continue;
         }
         if in_process_env(var) {
@@ -476,15 +503,15 @@ fn check_decision_credentials(
                 .attach_hint(move_hint),
             );
         } else {
-            let shadowed = ovp_domain::providers::shadowed_env_names(
-                vault_root,
-                &vault_root.join(".ovp/daily.env"),
-            )
-            .unwrap_or_default();
+            let shadowed = ovp_domain::providers::shadowed_env_names(vault_root, &env_file)
+                .unwrap_or_default();
             let where_lost = if shadowed.iter().any(|n| n == var) {
-                " (it is in daily.env, which is not sourced while providers.toml exists)"
+                format!(
+                    " (it is in {}, which is not sourced while providers.toml exists)",
+                    env_file.display()
+                )
             } else {
-                ""
+                String::new()
             };
             findings.push(fail(
                 format!("capability `{name}` needs {var}, which no scheduled run can resolve{where_lost}"),
@@ -2299,6 +2326,36 @@ mod tests {
         let replay = DECISIONS.replace("\"execution\":\"record\"", "\"execution\":\"replay\"");
         let tmp = decision_vault(Some(&replay));
         assert!(credential_findings(tmp.path(), false).is_empty());
+    }
+
+    /// Omitted fields take the runtime defaults (mode off, execution replay),
+    /// neither of which ever builds a live client.
+    #[test]
+    fn omitted_mode_or_execution_need_no_credential() {
+        let tmp = decision_vault(Some(
+            r#"{"profiles":{"ts":{"credential_ref":"TYPESAFE_TOKEN"}},
+                "capabilities":{"a":{"profile":"ts"},"b":{"mode":"shadow","profile":"ts"}}}"#,
+        ));
+        assert!(credential_findings(tmp.path(), false).is_empty());
+    }
+
+    /// An empty value resolves to MissingCredential at call time.
+    #[test]
+    fn empty_credential_value_is_not_resolvable() {
+        let tmp = decision_vault(Some(DECISIONS));
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nTYPESAFE_TOKEN = \"  \"\n").unwrap();
+        assert_eq!(credential_findings(tmp.path(), false)[0].severity, Severity::Fail);
+    }
+
+    /// The legacy source is the env file the scheduler actually sources: the
+    /// registry's configured one, not always daily.env (and none on Windows).
+    #[test]
+    fn legacy_credential_follows_the_registry_env_file() {
+        let tmp = decision_vault(Some(DECISIONS));
+        std::fs::write(tmp.path().join(".ovp/creds.env"), "TYPESAFE_TOKEN=x\n").unwrap();
+        std::fs::write(tmp.path().join(".ovp/schedule.json"), r#"{"env_file":"{vault}/.ovp/creds.env"}"#).unwrap();
+        let want = if cfg!(windows) { Severity::Fail } else { Severity::Pass };
+        assert_eq!(credential_findings(tmp.path(), false)[0].severity, want);
     }
 
     #[test]
