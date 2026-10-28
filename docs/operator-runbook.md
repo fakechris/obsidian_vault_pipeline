@@ -342,7 +342,11 @@ ovp2 crystal-citation-review --vault-root "$VAULT" --rollback cr-…   # the run
 ```
 
 `--apply` rebuilds the plan and runs it only if its id is the one you
-reviewed; if the ledger or the verdicts changed, it refuses and writes nothing.
+reviewed. The id covers the verdicts file and the current record of every
+selected claim, so it refuses (writing nothing) when the verdicts change or a
+selected claim is rewritten, retracted or superseded — not when unrelated
+claims change. It also refuses while review.json already holds an entry for a
+selected claim.
 An applied claim is retracted (append-only) and queued in the review lane with
 the verdicts in its rationale, so it stays readable as caveated. The verdicts
 are a model's judgment: they decide what a person looks at, never durability.

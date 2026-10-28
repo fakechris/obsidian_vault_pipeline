@@ -288,6 +288,21 @@ pub fn apply(vault: &Path, verdicts_path: &Path, plan_id: &str) -> Result<Review
     if plan.entries.is_empty() {
         return Ok(plan);
     }
+    // Queueing replaces any entry with the same claim_id. One already keyed by
+    // a selected claim (another command's, or a person's) must not be lost.
+    let queued = queued_entries(&store_dir(vault).join("review.json"))?;
+    let taken: Vec<&str> = plan
+        .entries
+        .iter()
+        .map(|e| e.claim_key.as_str())
+        .filter(|k| queued.contains_key(*k))
+        .collect();
+    if !taken.is_empty() {
+        return Err(CliError::Io(format!(
+            "CONFLICT: review.json already has entries for {} — resolve them first; nothing was written",
+            taken.join(", ")
+        )));
+    }
     // apply → rollback → apply on the same inputs is the same plan; it must
     // not share the first run's file or retraction reason, or rolling back one
     // would undo the other.
@@ -327,6 +342,26 @@ pub fn apply(vault: &Path, verdicts_path: &Path, plan_id: &str) -> Result<Review
     Ok(plan)
 }
 
+/// review.json entries by claim_id, as raw JSON. A missing file is an empty
+/// queue; an unreadable one is an error (guessing "empty" would misjudge
+/// ownership).
+fn queued_entries(path: &Path) -> Result<BTreeMap<String, serde_json::Value>, CliError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(e) => return Err(CliError::Io(format!("reading {}: {e}", path.display()))),
+    };
+    let body: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| CliError::Io(format!("parsing {}: {e}", path.display())))?;
+    Ok(body
+        .get("review")
+        .and_then(|r| r.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|e| Some((e.get("claim_id")?.as_str()?.to_string(), e.clone())))
+        .collect())
+}
+
 /// Undo one applied run: re-activate what it retracted, unqueue what it
 /// queued. A claim that has moved on since (re-written, superseded, retracted
 /// by something else) is left alone, so a second rollback is a no-op. Returns
@@ -353,17 +388,7 @@ pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
     // claim's ledger key, so the ledger alone cannot tell. The queue can: the
     // claim is still this run's only while its entry is exactly what we queued.
     let queue_path = store_dir(vault).join("review.json");
-    let queued: BTreeMap<String, serde_json::Value> = match std::fs::read_to_string(&queue_path) {
-        Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
-            .map_err(|e| CliError::Io(format!("parsing {}: {e}", queue_path.display())))?
-            .get("review")
-            .and_then(|r| r.as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|e| Some((e.get("claim_id")?.as_str()?.to_string(), e.clone())))
-            .collect(),
-        Err(_) => BTreeMap::new(),
-    };
+    let queued = queued_entries(&queue_path)?;
     let undo = format!("citation_support_review_rollback:{run_id}");
     let still_queued = |e: &ReviewPlanEntry| {
         serde_json::to_value(&e.review).is_ok_and(|q| queued.get(&e.claim_key) == Some(&q))
@@ -729,6 +754,28 @@ mod tests {
             .replace("\"supports\"", "\"suports\"");
         std::fs::write(&verdicts, text).unwrap();
         assert!(build_plan(tmp.path(), &verdicts).is_err());
+    }
+
+    /// A queue entry already keyed by a selected claim (e.g. queued by
+    /// crystal-regate-sources) would be replaced by the apply — refuse instead.
+    #[test]
+    fn apply_refuses_when_the_queue_already_holds_a_selected_claim() {
+        let (tmp, verdicts) = vault();
+        let v = tmp.path();
+        let path = v.join(".ovp/crystal/review.json");
+        let mut q: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        q["review"].as_array_mut().unwrap().push(serde_json::json!({
+            "claim_id": "ck-weak", "claim": "queued earlier", "theme": "t",
+            "final_class": "caveated", "strength": "supported",
+            "evidence_sufficient": true, "rationale": "someone else's"
+        }));
+        std::fs::write(&path, q.to_string()).unwrap();
+        let before = snapshot(v);
+        let plan = build_plan(v, &verdicts).unwrap();
+        let err = apply(v, &verdicts, &plan.plan_id).unwrap_err();
+        assert!(format!("{err:?}").contains("ck-weak"), "{err:?}");
+        assert_eq!(snapshot(v), before);
     }
 
     #[test]
