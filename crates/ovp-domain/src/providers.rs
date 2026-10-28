@@ -166,7 +166,9 @@ pub fn shadowed_env_names(vault_root: &Path, env_file: &Path) -> Result<Vec<Stri
     let providers = read_providers_file(vault_root)?;
     Ok(parse_env_lines(&raw)
         .into_keys()
-        .filter(|name| !providers.contains_key(name))
+        // A blank providers value still shadows the env file, and is rejected
+        // at call time — so the env-file value is just as lost.
+        .filter(|name| providers.get(name).is_none_or(|v| v.trim().is_empty()))
         .collect())
 }
 
@@ -515,6 +517,9 @@ mod tests {
         assert!(shadowed_env_names(tmp.path(), &env_file).unwrap().is_empty());
         // A missing env file shadows nothing.
         assert!(shadowed_env_names(tmp.path(), &tmp.path().join("nope.env")).unwrap().is_empty());
+        // A blank placeholder in providers.toml still hides the real value.
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nTYPESAFE_TOKEN = \" \"\n").unwrap();
+        assert_eq!(shadowed_env_names(tmp.path(), &env_file).unwrap(), vec!["TYPESAFE_TOKEN".to_string()]);
     }
 
     #[test]
