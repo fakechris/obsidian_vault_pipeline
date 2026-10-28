@@ -338,7 +338,7 @@ aside. Sources are counted by the gate's own source identity.
 ```bash
 ovp2 crystal-citation-review --vault-root "$VAULT" --verdicts verdicts.jsonl    # plan + id, writes nothing
 ovp2 crystal-citation-review --vault-root "$VAULT" --verdicts verdicts.jsonl --apply cr-…
-ovp2 crystal-citation-review --vault-root "$VAULT" --rollback cr-…
+ovp2 crystal-citation-review --vault-root "$VAULT" --rollback cr-…   # the run id --apply printed
 ```
 
 `--apply` rebuilds the plan and runs it only if its id is the one you

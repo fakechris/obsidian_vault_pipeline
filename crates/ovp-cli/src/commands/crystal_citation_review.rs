@@ -15,7 +15,9 @@
 //!   otherwise refuse with nothing written. Then append a `Retract` per claim
 //!   (reason `citation_support_review:<plan-id>`) and queue the claim in the
 //!   review lane with the verdicts in its rationale. Nothing is deleted;
-//! - `--rollback <plan-id>`: re-activate what that run retracted and unqueue it.
+//! - `--rollback <run-id>`: re-activate what that run retracted and unqueue it
+//!   (each apply gets its own run id, so re-applying after a rollback is a
+//!   separate run).
 //!
 //! Whether a passage supports a claim is a judgment, not a decidable check, so
 //! the verdicts only send claims to a person; they never decide durability.
@@ -45,6 +47,26 @@ pub struct CrystalCitationReviewArgs {
     pub limit: usize,
 }
 
+/// The three documented answers. Anything else fails the parse: a typo must
+/// never read as "unsupported" and retract a claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Choice {
+    Supports,
+    Contradicts,
+    SaysNothing,
+}
+
+impl Choice {
+    fn as_str(self) -> &'static str {
+        match self {
+            Choice::Supports => "supports",
+            Choice::Contradicts => "contradicts",
+            Choice::SaysNothing => "says_nothing",
+        }
+    }
+}
+
 /// One per-citation support verdict (one JSON object per line).
 #[derive(Debug, Clone, Deserialize)]
 struct Verdict {
@@ -53,7 +75,7 @@ struct Verdict {
     case_id: String,
     unit_id: String,
     quote: String,
-    choice: String,
+    choice: Choice,
     confidence: f64,
 }
 
@@ -78,7 +100,12 @@ pub struct ReviewPlanEntry {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewPlan {
+    /// Hash of what the plan would do; what `--apply` must be given.
     pub plan_id: String,
+    /// Set by apply: identifies ONE applied run for rollback. A re-apply of
+    /// the same plan (after a rollback) gets its own run id. Not hashed.
+    #[serde(default)]
+    pub run_id: String,
     pub verdicts_sha256: String,
     pub entries: Vec<ReviewPlanEntry>,
     /// Claims whose verdicts no longer match the ledger's citations.
@@ -124,7 +151,7 @@ pub fn build_plan(vault: &Path, verdicts_path: &Path) -> Result<ReviewPlan, CliE
     let (verdicts, verdicts_sha256) = read_verdicts(verdicts_path)?;
     let mut flagged: BTreeMap<&str, Vec<&Verdict>> = BTreeMap::new();
     for v in &verdicts {
-        if v.choice != "supports" && v.confidence >= MIN_CONFIDENCE {
+        if v.choice != Choice::Supports && v.confidence >= MIN_CONFIDENCE {
             flagged.entry(v.claim_key.as_str()).or_default().push(v);
         }
     }
@@ -178,7 +205,7 @@ pub fn build_plan(vault: &Path, verdicts_path: &Path) -> Result<ReviewPlan, CliE
             .map(|f| Unsupported {
                 citation_index: f.citation_index,
                 case_id: f.case_id.clone(),
-                choice: f.choice.clone(),
+                choice: f.choice.as_str().to_string(),
                 confidence: f.confidence,
             })
             .collect();
@@ -231,6 +258,7 @@ pub fn build_plan(vault: &Path, verdicts_path: &Path) -> Result<ReviewPlan, CliE
         .map_err(|e| CliError::Io(format!("serializing plan: {e}")))?;
     Ok(ReviewPlan {
         plan_id: format!("cr-{}", &hex(fingerprint)[..12]),
+        run_id: String::new(),
         verdicts_sha256,
         entries,
         skipped_stale,
@@ -239,7 +267,7 @@ pub fn build_plan(vault: &Path, verdicts_path: &Path) -> Result<ReviewPlan, CliE
 
 /// Run the plan with id `plan_id` — and only that plan. Returns the plan.
 pub fn apply(vault: &Path, verdicts_path: &Path, plan_id: &str) -> Result<ReviewPlan, CliError> {
-    let plan = build_plan(vault, verdicts_path)?;
+    let mut plan = build_plan(vault, verdicts_path)?;
     if plan.plan_id != plan_id {
         return Err(CliError::Io(format!(
             "CONFLICT: the plan is now {} (reviewed: {plan_id}) — the ledger or the verdicts \
@@ -250,9 +278,18 @@ pub fn apply(vault: &Path, verdicts_path: &Path, plan_id: &str) -> Result<Review
     if plan.entries.is_empty() {
         return Ok(plan);
     }
+    // apply → rollback → apply on the same inputs is the same plan; it must
+    // not share the first run's file or retraction reason, or rolling back one
+    // would undo the other.
+    plan.run_id = plan.plan_id.clone();
+    let mut n = 1;
+    while plan_path(vault, &plan.run_id).exists() {
+        n += 1;
+        plan.run_id = format!("{}-{n}", plan.plan_id);
+    }
     // The plan goes to disk BEFORE anything moves, so the run can always be
     // rolled back.
-    let path = plan_path(vault, &plan.plan_id);
+    let path = plan_path(vault, &plan.run_id);
     std::fs::create_dir_all(path.parent().expect("plan path has a parent"))
         .map_err(|e| CliError::Io(format!("creating {}: {e}", path.display())))?;
     let text = serde_json::to_string_pretty(&plan)
@@ -265,7 +302,7 @@ pub fn apply(vault: &Path, verdicts_path: &Path, plan_id: &str) -> Result<Review
     let keys: BTreeSet<&str> = plan.entries.iter().map(|e| e.claim_key.as_str()).collect();
     let add: Vec<ReviewEntry> = plan.entries.iter().map(|e| e.review.clone()).collect();
     edit_review(&store_dir(vault).join("review.json"), &keys, &add)?;
-    let reason = format!("citation_support_review:{}", plan.plan_id);
+    let reason = format!("citation_support_review:{}", plan.run_id);
     let events: Vec<StoreEvent> = plan
         .entries
         .iter()
@@ -284,14 +321,14 @@ pub fn apply(vault: &Path, verdicts_path: &Path, plan_id: &str) -> Result<Review
 /// queued. A claim that has moved on since (re-written, superseded, retracted
 /// by something else) is left alone, so a second rollback is a no-op. Returns
 /// how many claims were re-activated.
-pub fn rollback(vault: &Path, plan_id: &str) -> Result<usize, CliError> {
-    let path = plan_path(vault, plan_id);
+pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
+    let path = plan_path(vault, run_id);
     let text = std::fs::read_to_string(&path)
         .map_err(|e| CliError::Io(format!("reading plan {}: {e}", path.display())))?;
     let plan: ReviewPlan = serde_json::from_str(&text)
         .map_err(|e| CliError::Io(format!("parsing {}: {e}", path.display())))?;
     let ledger = store_dir(vault).join("ledger.jsonl");
-    let ours = format!("citation_support_review:{plan_id}");
+    let ours = format!("citation_support_review:{run_id}");
     let events_now = read_ledger(&ledger)?;
     let folded: BTreeMap<String, CrystalStatus> = fold_ledger(&events_now)
         .into_iter()
@@ -324,7 +361,7 @@ pub fn rollback(vault: &Path, plan_id: &str) -> Result<usize, CliError> {
                 ..e.record.clone()
             },
             supersedes: None,
-            reason: Some(format!("citation_support_review_rollback:{plan_id}")),
+            reason: Some(format!("citation_support_review_rollback:{run_id}")),
         })
         .collect();
     if !events.is_empty() {
@@ -335,10 +372,10 @@ pub fn rollback(vault: &Path, plan_id: &str) -> Result<usize, CliError> {
 
 pub fn run(args: CrystalCitationReviewArgs) -> Result<(), CliError> {
     let vault = &args.vault_root;
-    if let Some(plan_id) = &args.rollback {
+    if let Some(run_id) = &args.rollback {
         let _lock = ovp_intake::RunLock::acquire(vault).map_err(CliError::Io)?;
-        let n = rollback(vault, plan_id)?;
-        println!("crystal-citation-review: rolled back {plan_id} — {n} claim(s) re-activated");
+        let n = rollback(vault, run_id)?;
+        println!("crystal-citation-review: rolled back {run_id} — {n} claim(s) re-activated");
         println!(
             "  run `ovp2 index --vault-root <vault>` (or wait for daily) to refresh the portal"
         );
@@ -400,14 +437,14 @@ pub fn run(args: CrystalCitationReviewArgs) -> Result<(), CliError> {
     if args.apply.is_some() {
         if !plan.entries.is_empty() {
             println!(
-                "  APPLIED {}: {} retract event(s) appended, queued in review.json; plan saved to {}",
-                plan.plan_id,
+                "  APPLIED run {}: {} retract event(s) appended, queued in review.json; plan saved to {}",
+                plan.run_id,
                 plan.entries.len(),
-                plan_path(vault, &plan.plan_id).display()
+                plan_path(vault, &plan.run_id).display()
             );
             println!(
                 "  undo: ovp2 crystal-citation-review --vault-root <vault> --rollback {}",
-                plan.plan_id
+                plan.run_id
             );
             println!(
                 "  run `ovp2 index --vault-root <vault>` (or wait for daily) to refresh the portal"
@@ -639,6 +676,37 @@ mod tests {
         assert_eq!(snapshot(v), moved_state);
     }
 
+    /// A misspelled or unknown choice is an error, never "unsupported".
+    #[test]
+    fn unknown_verdict_choice_fails_loud() {
+        let (tmp, verdicts) = vault();
+        let text = std::fs::read_to_string(&verdicts)
+            .unwrap()
+            .replace("\"supports\"", "\"suports\"");
+        std::fs::write(&verdicts, text).unwrap();
+        assert!(build_plan(tmp.path(), &verdicts).is_err());
+    }
+
+    /// apply → rollback → apply on the same inputs: each apply is its own run,
+    /// so undoing the first again must not touch the second.
+    #[test]
+    fn each_apply_is_its_own_run_for_rollback() {
+        let (tmp, verdicts) = vault();
+        let v = tmp.path();
+        let plan = build_plan(v, &verdicts).unwrap();
+        let first = apply(v, &verdicts, &plan.plan_id).unwrap();
+        assert_eq!(rollback(v, &first.run_id).unwrap(), 1);
+        let second = apply(v, &verdicts, &plan.plan_id).unwrap();
+        assert_ne!(second.run_id, first.run_id);
+        assert_eq!(
+            rollback(v, &first.run_id).unwrap(),
+            0,
+            "first run is already undone"
+        );
+        assert_eq!(active_keys(v), vec!["ck-strong".to_string()]);
+        assert_eq!(rollback(v, &second.run_id).unwrap(), 1);
+    }
+
     #[test]
     fn apply_appends_only_queues_for_review_and_rollback_restores() {
         let (tmp, verdicts) = vault();
@@ -667,7 +735,7 @@ mod tests {
         // A second apply of the same id finds a different plan (claim retracted).
         assert!(apply(v, &verdicts, &plan.plan_id).is_err());
 
-        assert_eq!(rollback(v, &plan.plan_id).unwrap(), 1);
+        assert_eq!(rollback(v, &applied.run_id).unwrap(), 1);
         let fold_after = fold_ledger(&read_ledger(&v.join(".ovp/crystal/ledger.jsonl")).unwrap());
         assert_eq!(fold_after, fold_before);
         // Rollback rewrites review.json (pretty-printed), so compare parsed.
@@ -677,6 +745,6 @@ mod tests {
         let q0: serde_json::Value = serde_json::from_slice(&review_before).unwrap();
         assert_eq!(q, q0);
         // A second rollback is a no-op.
-        assert_eq!(rollback(v, &plan.plan_id).unwrap(), 0);
+        assert_eq!(rollback(v, &applied.run_id).unwrap(), 0);
     }
 }

@@ -656,7 +656,7 @@ enum Cmd {
     /// support them once the citations a per-citation support verdict judged
     /// unsupported (at confidence 0.8 or more) are set aside. Dry-run by
     /// default and prints a plan id; `--apply <plan-id>` runs that exact plan
-    /// or refuses; `--rollback <plan-id>` undoes one applied run.
+    /// or refuses; `--rollback <run-id>` undoes one applied run.
     CrystalCitationReview {
         #[arg(long)]
         vault_root: PathBuf,
@@ -667,7 +667,7 @@ enum Cmd {
         /// Plan id printed by the dry-run; anything else is refused.
         #[arg(long, conflicts_with = "rollback")]
         apply: Option<String>,
-        /// Plan id of an applied run (plan in `.ovp/crystal/citation-review/<id>.json`).
+        /// Run id printed by `--apply` (plan in `.ovp/crystal/citation-review/<run>.json`).
         #[arg(long)]
         rollback: Option<String>,
         /// Cap the per-claim listing in the printed plan.
