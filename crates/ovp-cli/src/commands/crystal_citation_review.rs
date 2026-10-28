@@ -137,9 +137,19 @@ fn read_verdicts(path: &Path) -> Result<(Vec<Verdict>, String), CliError> {
         if line.trim().is_empty() {
             continue;
         }
-        out.push(serde_json::from_str(line).map_err(|e| {
+        let v: Verdict = serde_json::from_str(line).map_err(|e| {
             CliError::Io(format!("verdicts {} line {}: {e}", path.display(), n + 1))
-        })?);
+        })?;
+        // A probability: anything else is malformed input, not "very sure".
+        if !(0.0..=1.0).contains(&v.confidence) {
+            return Err(CliError::Io(format!(
+                "verdicts {} line {}: confidence {} is not in [0, 1]",
+                path.display(),
+                n + 1,
+                v.confidence
+            )));
+        }
+        out.push(v);
     }
     Ok((out, hex(&raw)))
 }
@@ -354,22 +364,33 @@ pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
             .collect(),
         Err(_) => BTreeMap::new(),
     };
+    let undo = format!("citation_support_review_rollback:{run_id}");
+    let still_queued = |e: &ReviewPlanEntry| {
+        serde_json::to_value(&e.review).is_ok_and(|q| queued.get(&e.claim_key) == Some(&q))
+    };
+    let last_reason_is = |e: &ReviewPlanEntry, op: StoreOp, reason: &str| {
+        last.get(&e.claim_key)
+            .is_some_and(|ev| ev.op == op && ev.reason.as_deref() == Some(reason))
+    };
+    // Re-activate: still retracted by this run, and nobody has acted on it.
     let owned: Vec<&ReviewPlanEntry> = plan
         .entries
         .iter()
         .filter(|e| {
             folded.get(&e.claim_key) == Some(&CrystalStatus::Retracted)
-                && last.get(&e.claim_key).is_some_and(|ev| {
-                    ev.op == StoreOp::Retract && ev.reason.as_deref() == Some(ours.as_str())
-                })
-                && serde_json::to_value(&e.review)
-                    .is_ok_and(|ours| queued.get(&e.claim_key) == Some(&ours))
+                && last_reason_is(e, StoreOp::Retract, &ours)
+                && still_queued(e)
         })
         .collect();
-    let keys: BTreeSet<&str> = owned.iter().map(|e| e.claim_key.as_str()).collect();
-    if !keys.is_empty() {
-        edit_review(&store_dir(vault).join("review.json"), &keys, &[])?;
-    }
+    // Unqueue: the claims re-activated now, plus any a previous attempt
+    // re-activated before it was interrupted (ledger first, queue second).
+    let unqueue: BTreeSet<&str> = plan
+        .entries
+        .iter()
+        .filter(|e| still_queued(e) && last_reason_is(e, StoreOp::Write, &undo))
+        .chain(owned.iter().copied())
+        .map(|e| e.claim_key.as_str())
+        .collect();
     let events: Vec<StoreEvent> = owned
         .iter()
         .map(|e| StoreEvent {
@@ -379,11 +400,16 @@ pub fn rollback(vault: &Path, run_id: &str) -> Result<usize, CliError> {
                 ..e.record.clone()
             },
             supersedes: None,
-            reason: Some(format!("citation_support_review_rollback:{run_id}")),
+            reason: Some(undo.clone()),
         })
         .collect();
+    // Ledger first: if the queue edit then fails, a retry sees this run's
+    // rollback event and finishes the unqueue instead of stranding the claim.
     if !events.is_empty() {
         append_events(&ledger, &events)?;
+    }
+    if !unqueue.is_empty() {
+        edit_review(&queue_path, &unqueue, &[])?;
     }
     Ok(events.len())
 }
@@ -703,6 +729,52 @@ mod tests {
             .replace("\"supports\"", "\"suports\"");
         std::fs::write(&verdicts, text).unwrap();
         assert!(build_plan(tmp.path(), &verdicts).is_err());
+    }
+
+    #[test]
+    fn confidence_outside_zero_to_one_fails_loud() {
+        let (tmp, verdicts) = vault();
+        let text = std::fs::read_to_string(&verdicts)
+            .unwrap()
+            .replace("0.97", "97");
+        std::fs::write(&verdicts, text).unwrap();
+        assert!(build_plan(tmp.path(), &verdicts).is_err());
+    }
+
+    /// A rollback interrupted after re-activating (ledger) but before
+    /// unqueueing must finish on retry, not strand the queue entry.
+    #[test]
+    fn interrupted_rollback_finishes_on_retry() {
+        let (tmp, verdicts) = vault();
+        let v = tmp.path();
+        let plan = build_plan(v, &verdicts).unwrap();
+        let run = apply(v, &verdicts, &plan.plan_id).unwrap();
+        // Simulate the crash: only the ledger half of a rollback happened.
+        let rec = run.entries[0].record.clone();
+        append_events(
+            &v.join(".ovp/crystal/ledger.jsonl"),
+            &[StoreEvent {
+                op: StoreOp::Write,
+                record: DurableRecord {
+                    status: CrystalStatus::Active,
+                    ..rec
+                },
+                supersedes: None,
+                reason: Some(format!("citation_support_review_rollback:{}", run.run_id)),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            rollback(v, &run.run_id).unwrap(),
+            0,
+            "nothing left to re-activate"
+        );
+        let queue = read_review_queue(&v.join(".ovp/crystal/review.json")).unwrap();
+        assert!(
+            !queue.iter().any(|e| e.claim_id == "ck-weak"),
+            "entry finished unqueueing"
+        );
+        assert!(active_keys(v).contains(&"ck-weak".to_string()));
     }
 
     /// apply → rollback → apply on the same inputs: each apply is its own run,
