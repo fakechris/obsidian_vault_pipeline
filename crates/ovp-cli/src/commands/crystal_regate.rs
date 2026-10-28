@@ -150,7 +150,7 @@ pub fn build_plan(vault: &Path, today: (i32, u32, u32)) -> Result<RegatePlan, Cl
     })
 }
 
-fn append_events(ledger: &Path, events: &[StoreEvent]) -> Result<(), CliError> {
+pub(crate) fn append_events(ledger: &Path, events: &[StoreEvent]) -> Result<(), CliError> {
     let mut lines = String::new();
     for ev in events {
         let line = serde_json::to_string(ev)
@@ -172,7 +172,11 @@ fn append_events(ledger: &Path, events: &[StoreEvent]) -> Result<(), CliError> {
 /// re-serialized (no defaults filled in) and every other key (e.g. the
 /// `collapsed` audit record) is kept, so apply-then-rollback restores the
 /// queue exactly.
-fn edit_review(path: &Path, drop: &BTreeSet<&str>, add: &[ReviewEntry]) -> Result<(), CliError> {
+pub(crate) fn edit_review(
+    path: &Path,
+    drop: &BTreeSet<&str>,
+    add: &[ReviewEntry],
+) -> Result<(), CliError> {
     if !path.exists() && add.is_empty() {
         return Ok(());
     }
