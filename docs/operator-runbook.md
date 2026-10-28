@@ -176,16 +176,25 @@ What `install` does:
   `%LOCALAPPDATA%\OVP2\ovp2-scheduler-tick.cmd`.
 - **Windows does not source the env file.** There is no `/bin/sh`, so each job
   is spawned directly and credentials MUST live in `.ovp/providers.toml`.
-  macOS/Linux keep the `daily.env` path described below — `providers.toml` just
-  takes precedence over it when both exist. A Windows vault carrying only
-  `daily.env` gets a printed warning naming the file; read
-  `docs/windows-port.md` before assuming the provider is at fault.
+  A Windows vault carrying only `daily.env` gets a printed warning naming the
+  file; read `docs/windows-port.md` before assuming the provider is at fault.
+- **Put credentials in `.ovp/providers.toml` on every platform.** Once that
+  file exists the scheduler stops sourcing `daily.env` entirely — it does not
+  merely take precedence — so a variable left only in `daily.env` (e.g.
+  `TYPESAFE_TOKEN` for typed decisions) is absent from every scheduled run,
+  which then fails with a provider error such as `MissingCredential`. Each tick
+  prints the names of such variables, and `ovp2 doctor` (`decision-credentials`)
+  fails any live decision capability whose credential scheduled runs cannot
+  resolve. A value exported only in a shell rc file (`~/.zshrc`) works from a
+  terminal and nowhere else: neither launchd nor the Finder-launched app reads
+  it, so doctor reports that case as a warning.
 - On macOS/Linux the job runs via `/bin/sh -c` and sources an **env file** first
   (`--env-file`, default `<vault>/.ovp/daily.env`): if the file is missing,
   `install` creates a chmod-600 template with commented
   `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `OVP_LLM_MODEL` /
   `GITHUB_TOKEN` lines (and `OVP_LLM_TIMEOUT_SECS=480` set) and prints what
-  to fill in. Credentials live only there — never in the unit file.
+  to fill in. This env file is the legacy path, used only while
+  `.ovp/providers.toml` does not exist. Credentials never go in the unit file.
 - The invocation is `ovp2 daily --vault-root <vault> --client live
   --date "$(date +%F)"` (the local-date trap from §1 is handled) plus
   `--web-fetch-live --github-live` enrichment by default (`--no-enrich` to

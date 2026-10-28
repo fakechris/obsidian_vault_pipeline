@@ -128,6 +128,34 @@ pub fn read_legacy_daily_env(vault_root: &Path) -> std::collections::BTreeMap<St
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return Default::default();
     };
+    parse_env_lines(&raw)
+}
+
+/// Names an env file defines that the scheduled jobs will NOT get (INV-1411).
+///
+/// While `.ovp/providers.toml` exists the scheduler stops sourcing the env
+/// file (see `ovp_scheduler::job_shell_command`), so any variable defined only
+/// there silently disappears from every scheduled run — the symptom is a
+/// provider error (e.g. `MissingCredential`) far from the cause. Without
+/// providers.toml the env file IS sourced, so nothing is lost. Names only:
+/// callers print this, and it must never carry a credential value.
+pub fn shadowed_env_names(vault_root: &Path, env_file: &Path) -> Result<Vec<String>, String> {
+    if !vault_root.join(".ovp/providers.toml").is_file() {
+        return Ok(Vec::new());
+    }
+    let Ok(raw) = std::fs::read_to_string(env_file) else {
+        return Ok(Vec::new());
+    };
+    let providers = read_providers_file(vault_root)?;
+    Ok(parse_env_lines(&raw)
+        .into_keys()
+        .filter(|name| !providers.contains_key(name))
+        .collect())
+}
+
+/// KEY=VALUE lines, optional `export `, optional quotes; comments, blanks and
+/// non-UPPER_SNAKE names are skipped.
+fn parse_env_lines(raw: &str) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
     for line in raw.lines() {
         let line = line.trim();
@@ -436,5 +464,46 @@ mod tests {
             read_providers_file(tmp.path()).unwrap().get("NEW_KEY"),
             Some(&"v".to_string())
         );
+    }
+
+    fn vault_with(providers: Option<&str>, env: &str) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".ovp")).unwrap();
+        if let Some(p) = providers {
+            std::fs::write(tmp.path().join(".ovp/providers.toml"), p).unwrap();
+        }
+        std::fs::write(tmp.path().join(".ovp/daily.env"), env).unwrap();
+        tmp
+    }
+
+    /// INV-1411: with providers.toml present the scheduler stops sourcing the
+    /// env file, so every name only the env file defines is lost — by NAME,
+    /// never by value.
+    #[test]
+    fn shadowed_env_names_lists_only_names_missing_from_providers() {
+        let env = "# comment\nexport PINBOARD_TOKEN=\"secret-pin\"\nTYPESAFE_TOKEN='secret-ts'\n\nlower=ignored\n";
+        let tmp = vault_with(Some("[env]\nPINBOARD_TOKEN = \"p\"\n"), env);
+        let env_file = tmp.path().join(".ovp/daily.env");
+        let names = shadowed_env_names(tmp.path(), &env_file).unwrap();
+        assert_eq!(names, vec!["TYPESAFE_TOKEN".to_string()]);
+        assert!(!format!("{names:?}").contains("secret"));
+    }
+
+    #[test]
+    fn nothing_is_shadowed_without_providers_or_when_both_agree() {
+        let tmp = vault_with(None, "TYPESAFE_TOKEN=x\n");
+        let env_file = tmp.path().join(".ovp/daily.env");
+        assert!(shadowed_env_names(tmp.path(), &env_file).unwrap().is_empty());
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nTYPESAFE_TOKEN = \"y\"\n").unwrap();
+        assert!(shadowed_env_names(tmp.path(), &env_file).unwrap().is_empty());
+        // A missing env file shadows nothing.
+        assert!(shadowed_env_names(tmp.path(), &tmp.path().join("nope.env")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn shadow_check_fails_loud_on_malformed_providers() {
+        let tmp = vault_with(Some("[env\n"), "A=1\n");
+        let env_file = tmp.path().join(".ovp/daily.env");
+        assert!(shadowed_env_names(tmp.path(), &env_file).is_err());
     }
 }
