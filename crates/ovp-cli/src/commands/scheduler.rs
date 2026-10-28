@@ -213,11 +213,39 @@ fn shell_runner(vault_root: &Path, reg: &Registry) -> Result<ShellRunner, CliErr
             vault_root.display()
         );
     }
+    if let Some(msg) = env_file
+        .as_deref()
+        .and_then(|env| env_shadow_warning(vault_root, env))
+    {
+        // Both streams, like `report_rejected`: the desktop forwards only
+        // stderr, and Finder swallows that.
+        println!("{msg}");
+        eprintln!("{msg}");
+    }
     Ok(ShellRunner {
         ovp2_path,
         env_file,
         vault_root: vault_root.to_path_buf(),
     })
+}
+
+/// The warning for variables the env file defines but scheduled jobs will not
+/// get because providers.toml stops it being sourced (INV-1411). Names only.
+fn env_shadow_warning(vault_root: &Path, env_file: &Path) -> Option<String> {
+    match ovp_domain::providers::shadowed_env_names(vault_root, env_file) {
+        Ok(names) if names.is_empty() => None,
+        Ok(names) => Some(format!(
+            "scheduler: {} is NOT sourced because .ovp/providers.toml exists — scheduled jobs \
+             will not see: {}. Move them into the [env] table of {}",
+            env_file.display(),
+            names.join(", "),
+            vault_root.join(".ovp/providers.toml").display()
+        )),
+        Err(e) => Some(format!(
+            "scheduler: cannot check {} against providers.toml: {e}",
+            env_file.display()
+        )),
+    }
 }
 
 fn missing_registry_err(vault_root: &Path) -> CliError {
@@ -521,6 +549,31 @@ mod tests {
         let default_env = vault.join(".ovp/daily.env");
         std::fs::write(&default_env, "K=v\n").unwrap();
         assert_eq!(resolved_env_file(vault, &reg), Some(default_env));
+    }
+
+    /// INV-1411: a variable only in the (custom) env file is named on every
+    /// tick once providers.toml stops it being sourced; its value never is.
+    #[test]
+    fn shadowed_env_file_variables_are_named_not_leaked() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        std::fs::create_dir_all(vault.join(".ovp")).unwrap();
+        let creds = vault.join(".ovp/creds.env");
+        std::fs::write(&creds, "TYPESAFE_TOKEN=s3cret\nPINBOARD_TOKEN=p\n").unwrap();
+        // No providers.toml: the env file is sourced, nothing is lost.
+        assert_eq!(env_shadow_warning(vault, &creds), None);
+        std::fs::write(vault.join(".ovp/providers.toml"), "[env]\nPINBOARD_TOKEN = \"p\"\n").unwrap();
+        let msg = env_shadow_warning(vault, &creds).expect("TYPESAFE_TOKEN is shadowed");
+        assert!(msg.contains("TYPESAFE_TOKEN"), "{msg}");
+        assert!(!msg.contains("PINBOARD_TOKEN"), "{msg}");
+        assert!(!msg.contains("s3cret"), "{msg}");
+        assert!(msg.contains("providers.toml"), "{msg}");
+        std::fs::write(
+            vault.join(".ovp/providers.toml"),
+            "[env]\nPINBOARD_TOKEN = \"p\"\nTYPESAFE_TOKEN = \"t\"\n",
+        )
+        .unwrap();
+        assert_eq!(env_shadow_warning(vault, &creds), None);
     }
 
     #[test]

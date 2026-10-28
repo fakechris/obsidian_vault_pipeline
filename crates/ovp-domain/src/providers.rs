@@ -67,8 +67,21 @@ fn parse_providers_file(vault_root: &Path) -> Result<Option<ProvidersFile>, Stri
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("reading {}: {e}", path.display())),
     };
-    let file: ProvidersFile =
-        toml::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+    // NOT `{e}`: toml's Display quotes the offending source line, which on a
+    // credential line is the secret — and this error reaches stderr (scheduler
+    // logs), the portal and doctor. Location + reason only.
+    let file: ProvidersFile = toml::from_str(&raw).map_err(|e| {
+        let at = e
+            .span()
+            .map(|s| {
+                let before = &raw[..s.start.min(raw.len())];
+                let line = before.matches('\n').count() + 1;
+                let col = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+                format!(" at line {line}, column {col}")
+            })
+            .unwrap_or_default();
+        format!("parsing {}{at}: {}", path.display(), e.message())
+    })?;
     Ok(Some(file))
 }
 
@@ -124,10 +137,44 @@ pub fn read_budget(vault_root: &Path) -> Result<BudgetSection, String> {
 /// sourcing daily.env, so its credentials MUST be carried over or scheduled
 /// runs silently lose them.
 pub fn read_legacy_daily_env(vault_root: &Path) -> std::collections::BTreeMap<String, String> {
-    let path = vault_root.join(".ovp/daily.env");
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return Default::default();
+    read_env_file(&vault_root.join(".ovp/daily.env"))
+}
+
+/// Parse any env file (same rules as [`read_legacy_daily_env`]); missing or
+/// unreadable → empty.
+pub fn read_env_file(path: &Path) -> std::collections::BTreeMap<String, String> {
+    std::fs::read_to_string(path)
+        .map(|raw| parse_env_lines(&raw))
+        .unwrap_or_default()
+}
+
+/// Names an env file defines that the scheduled jobs will NOT get (INV-1411).
+///
+/// While `.ovp/providers.toml` exists the scheduler stops sourcing the env
+/// file (see `ovp_scheduler::job_shell_command`), so any variable defined only
+/// there silently disappears from every scheduled run — the symptom is a
+/// provider error (e.g. `MissingCredential`) far from the cause. Without
+/// providers.toml the env file IS sourced, so nothing is lost. Names only:
+/// callers print this, and it must never carry a credential value.
+pub fn shadowed_env_names(vault_root: &Path, env_file: &Path) -> Result<Vec<String>, String> {
+    if !vault_root.join(".ovp/providers.toml").is_file() {
+        return Ok(Vec::new());
+    }
+    let Ok(raw) = std::fs::read_to_string(env_file) else {
+        return Ok(Vec::new());
     };
+    let providers = read_providers_file(vault_root)?;
+    Ok(parse_env_lines(&raw)
+        .into_keys()
+        // A blank providers value still shadows the env file, and is rejected
+        // at call time — so the env-file value is just as lost.
+        .filter(|name| providers.get(name).is_none_or(|v| v.trim().is_empty()))
+        .collect())
+}
+
+/// KEY=VALUE lines, optional `export `, optional quotes; comments, blanks and
+/// non-UPPER_SNAKE names are skipped.
+fn parse_env_lines(raw: &str) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
     for line in raw.lines() {
         let line = line.trim();
@@ -436,5 +483,65 @@ mod tests {
             read_providers_file(tmp.path()).unwrap().get("NEW_KEY"),
             Some(&"v".to_string())
         );
+    }
+
+    fn vault_with(providers: Option<&str>, env: &str) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".ovp")).unwrap();
+        if let Some(p) = providers {
+            std::fs::write(tmp.path().join(".ovp/providers.toml"), p).unwrap();
+        }
+        std::fs::write(tmp.path().join(".ovp/daily.env"), env).unwrap();
+        tmp
+    }
+
+    /// INV-1411: with providers.toml present the scheduler stops sourcing the
+    /// env file, so every name only the env file defines is lost — by NAME,
+    /// never by value.
+    #[test]
+    fn shadowed_env_names_lists_only_names_missing_from_providers() {
+        let env = "# comment\nexport PINBOARD_TOKEN=\"secret-pin\"\nTYPESAFE_TOKEN='secret-ts'\n\nlower=ignored\n";
+        let tmp = vault_with(Some("[env]\nPINBOARD_TOKEN = \"p\"\n"), env);
+        let env_file = tmp.path().join(".ovp/daily.env");
+        let names = shadowed_env_names(tmp.path(), &env_file).unwrap();
+        assert_eq!(names, vec!["TYPESAFE_TOKEN".to_string()]);
+        assert!(!format!("{names:?}").contains("secret"));
+    }
+
+    #[test]
+    fn nothing_is_shadowed_without_providers_or_when_both_agree() {
+        let tmp = vault_with(None, "TYPESAFE_TOKEN=x\n");
+        let env_file = tmp.path().join(".ovp/daily.env");
+        assert!(shadowed_env_names(tmp.path(), &env_file).unwrap().is_empty());
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nTYPESAFE_TOKEN = \"y\"\n").unwrap();
+        assert!(shadowed_env_names(tmp.path(), &env_file).unwrap().is_empty());
+        // A missing env file shadows nothing.
+        assert!(shadowed_env_names(tmp.path(), &tmp.path().join("nope.env")).unwrap().is_empty());
+        // A blank placeholder in providers.toml still hides the real value.
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nTYPESAFE_TOKEN = \" \"\n").unwrap();
+        assert_eq!(shadowed_env_names(tmp.path(), &env_file).unwrap(), vec!["TYPESAFE_TOKEN".to_string()]);
+    }
+
+    #[test]
+    fn shadow_check_fails_loud_on_malformed_providers() {
+        let tmp = vault_with(Some("[env\n"), "A=1\n");
+        let env_file = tmp.path().join(".ovp/daily.env");
+        assert!(shadowed_env_names(tmp.path(), &env_file).is_err());
+    }
+
+    /// The toml error's Display quotes the offending source line — on a
+    /// credential line that is the secret, and these errors reach stderr
+    /// (scheduler logs), the portal and doctor. Location + reason only.
+    #[test]
+    fn parse_errors_never_quote_the_file() {
+        let tmp = vault_with(Some("[env]\nOK = \"fine\"\nTYPESAFE_TOKEN = \"sk-leak\n"), "");
+        for err in [
+            read_providers_file(tmp.path()).unwrap_err(),
+            apply_providers_env(tmp.path()).unwrap_err(),
+            read_budget(tmp.path()).unwrap_err(),
+        ] {
+            assert!(!err.contains("sk-leak"), "{err}");
+            assert!(err.contains("line 3"), "{err}");
+        }
     }
 }

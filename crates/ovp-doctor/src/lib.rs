@@ -127,6 +127,11 @@ pub fn run_checks(vault_root: &Path, opts: &DoctorOptions) -> Vec<Finding> {
     check_inbox_orphans(vault_root, &layout, &mut findings);
     check_content_unavailable(vault_root, &layout, &mut findings);
     check_pack_provenance(vault_root, &layout, &mut findings);
+    check_decision_credentials(
+        vault_root,
+        &|name| std::env::var(name).ok(),
+        &mut findings,
+    );
     findings
 }
 
@@ -381,6 +386,152 @@ fn check_content_unavailable(vault_root: &Path, layout: &VaultLayout, findings: 
              to drop it, or `ovp2 daily --retry-unavailable` to re-fetch the whole set",
         ),
     );
+}
+
+/// The env file scheduled jobs source: `env_file` from `.ovp/schedule.json`
+/// with `{vault}` resolved, else the default `.ovp/daily.env` — the same rule
+/// as the scheduler's `resolved_env_file`.
+fn scheduled_env_file(vault_root: &Path) -> std::path::PathBuf {
+    let configured = std::fs::read_to_string(vault_root.join(".ovp/schedule.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|reg| reg["env_file"].as_str().map(str::to_string));
+    match configured {
+        Some(raw) => match raw.strip_prefix("{vault}") {
+            Some(rest) => vault_root.join(rest.trim_start_matches(['/', '\\'])),
+            None => std::path::PathBuf::from(raw),
+        },
+        None => vault_root.join(".ovp/daily.env"),
+    }
+}
+
+/// Every typed-decision capability that will call a provider must be able to
+/// find its credential where SCHEDULED runs look (INV-1411).
+///
+/// Scheduled jobs get `.ovp/providers.toml`; they get `daily.env` only while
+/// providers.toml does not exist. A credential the current process can see
+/// only through the shell (an rc file) is the trap this check exists for: a
+/// terminal run works, the scheduled one fails with `MissingCredential`, and
+/// nothing says why — so that is a Warn, not a Pass. `off` capabilities and
+/// `replay` execution never read a credential.
+fn check_decision_credentials(
+    vault_root: &Path,
+    process_env: &dyn Fn(&str) -> Option<String>,
+    findings: &mut Vec<Finding>,
+) {
+    let check = "decision-credentials".to_string();
+    let path = vault_root.join(".ovp/decisions.json");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return; // no typed decisions configured
+    };
+    let fail = |message: String, hint: &str| {
+        Finding {
+            check: check.clone(),
+            severity: Severity::Fail,
+            message,
+            hint: None,
+            fixed: false,
+        }
+        .attach_hint(hint)
+    };
+    let settings: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            findings.push(fail(
+                format!("{} unreadable: {e}", path.display()),
+                "fix the JSON — every capability falls back to its incumbent while it is unreadable",
+            ));
+            return;
+        }
+    };
+    let providers_exists = vault_root.join(".ovp/providers.toml").is_file();
+    let providers = match ovp_domain::providers::read_providers_file(vault_root) {
+        Ok(p) => p,
+        // The error carries location + reason only (never the source line,
+        // which can be a credential) — doctor output reaches reports and MCP.
+        Err(e) => {
+            findings.push(fail(e, "fix .ovp/providers.toml — scheduled runs fail on it too"));
+            return;
+        }
+    };
+    // The env file the scheduler sources: the registry's configured one
+    // (default daily.env), only while providers.toml does not exist, and never
+    // on Windows (no /bin/sh to source it).
+    let env_file = scheduled_env_file(vault_root);
+    let legacy = if providers_exists || cfg!(windows) {
+        Default::default()
+    } else {
+        ovp_domain::providers::read_env_file(&env_file)
+    };
+    // An empty value fails at call time exactly like a missing one.
+    let has = |map: &std::collections::BTreeMap<String, String>, var: &str| {
+        map.get(var).is_some_and(|v| !v.trim().is_empty())
+    };
+    let move_hint = "add it to the [env] table of .ovp/providers.toml — scheduled jobs and the \
+                     Finder-launched app read credentials only from there";
+    let mut checked = 0;
+    let caps = settings["capabilities"].as_object().cloned().unwrap_or_default();
+    for (name, cap) in &caps {
+        // Runtime defaults: an omitted mode is off, an omitted execution replay.
+        let mode = cap["mode"].as_str().unwrap_or("off");
+        let execution = cap["execution"].as_str().unwrap_or("replay");
+        if mode == "off" || execution == "replay" {
+            continue;
+        }
+        let profile = cap["profile"].as_str().unwrap_or("");
+        let Some(var) = settings["profiles"][profile]["credential_ref"].as_str() else {
+            findings.push(fail(
+                format!("capability `{name}` uses profile `{profile}`, which has no credential_ref in decisions.json"),
+                "point the capability at a defined profile, or set its mode to off",
+            ));
+            continue;
+        };
+        checked += 1;
+        if has(&providers, var) || has(&legacy, var) {
+            continue;
+        }
+        if process_env(var).is_some_and(|v| !v.trim().is_empty()) {
+            findings.push(
+                Finding {
+                    check: check.clone(),
+                    severity: Severity::Warn,
+                    message: format!(
+                        "capability `{name}` needs {var}: set only in this process's \
+                         environment — scheduled runs get it only if the scheduler's own \
+                         environment has it (launchd and the Finder-launched app usually do \
+                         not), otherwise they fail with MissingCredential"
+                    ),
+                    hint: None,
+                    fixed: false,
+                }
+                .attach_hint(move_hint),
+            );
+        } else {
+            let shadowed = ovp_domain::providers::shadowed_env_names(vault_root, &env_file)
+                .unwrap_or_default();
+            let where_lost = if shadowed.iter().any(|n| n == var) {
+                format!(
+                    " (it is in {}, which is not sourced while providers.toml exists)",
+                    env_file.display()
+                )
+            } else {
+                String::new()
+            };
+            findings.push(fail(
+                format!("capability `{name}` needs {var}, which no scheduled run can resolve{where_lost}"),
+                move_hint,
+            ));
+        }
+    }
+    if checked > 0 && !findings.iter().any(|f| f.check == check) {
+        findings.push(Finding {
+            check,
+            severity: Severity::Pass,
+            message: format!("{checked} live decision capability credential(s) resolvable for scheduled runs"),
+            hint: None,
+            fixed: false,
+        });
+    }
 }
 
 /// Today as a civil date in LOCAL time — the same wall clock the scheduler and
@@ -2103,5 +2254,146 @@ mod tests {
             .expect("finding");
         assert_eq!(got.severity, Severity::Fail, "{}", got.message);
         assert!(got.message.contains("unreadable"), "{}", got.message);
+    }
+
+    // -- decision credentials (INV-1411) -------------------------------------
+
+    const DECISIONS: &str = r#"{
+      "profiles": {"ts": {"id":"ts","provider":"typesafe","endpoint":"https://api.typesafe.ai/v1/systemone","model":"jev-1.13.0","credential_ref":"TYPESAFE_TOKEN"}},
+      "capabilities": {
+        "strength_check": {"mode":"shadow","execution":"record","profile":"ts"},
+        "evidence_relevance": {"mode":"off","execution":"replay","profile":"ts"}
+      }
+    }"#;
+
+    fn decision_vault(decisions: Option<&str>) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".ovp")).unwrap();
+        if let Some(d) = decisions {
+            std::fs::write(tmp.path().join(".ovp/decisions.json"), d).unwrap();
+        }
+        tmp
+    }
+
+    fn credential_findings(vault: &Path, in_env: bool) -> Vec<Finding> {
+        with_process_value(vault, in_env.then_some("x"))
+    }
+
+    fn with_process_value(vault: &Path, value: Option<&str>) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        check_decision_credentials(vault, &|_| value.map(str::to_string), &mut findings);
+        findings
+    }
+
+    /// A whitespace-only value is rejected at call time, so it is not "set".
+    #[test]
+    fn blank_process_value_is_not_a_credential() {
+        let tmp = decision_vault(Some(DECISIONS));
+        assert_eq!(with_process_value(tmp.path(), Some("  "))[0].severity, Severity::Fail);
+        assert_eq!(with_process_value(tmp.path(), Some("tok"))[0].severity, Severity::Warn);
+    }
+
+    #[test]
+    fn no_decisions_file_says_nothing() {
+        let tmp = decision_vault(None);
+        assert!(credential_findings(tmp.path(), false).is_empty());
+    }
+
+    /// The reproduced incident: token only in daily.env while providers.toml
+    /// exists → FAIL; moving it into providers.toml → PASS.
+    #[test]
+    fn credential_shadowed_by_providers_fails_until_moved() {
+        let tmp = decision_vault(Some(DECISIONS));
+        std::fs::write(tmp.path().join(".ovp/daily.env"), "TYPESAFE_TOKEN=secret\n").unwrap();
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nOTHER = \"x\"\n").unwrap();
+        let f = credential_findings(tmp.path(), false);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, Severity::Fail);
+        assert!(f[0].message.contains("strength_check") && f[0].message.contains("TYPESAFE_TOKEN"));
+        assert!(!f[0].message.contains("secret"));
+        assert!(f[0].hint.as_deref().unwrap_or("").contains("providers.toml"));
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nTYPESAFE_TOKEN = \"t\"\n").unwrap();
+        let f = credential_findings(tmp.path(), false);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].severity, Severity::Pass);
+    }
+
+    /// Resolvable only from THIS process (an interactive shell's rc file) is
+    /// exactly the trap: a terminal run works, the scheduled run does not.
+    #[test]
+    fn credential_only_in_this_shell_warns() {
+        let tmp = decision_vault(Some(DECISIONS));
+        let f = credential_findings(tmp.path(), true);
+        assert_eq!(f[0].severity, Severity::Warn, "{f:?}");
+    }
+
+    #[test]
+    fn legacy_daily_env_counts_when_it_is_still_sourced() {
+        let tmp = decision_vault(Some(DECISIONS));
+        std::fs::write(tmp.path().join(".ovp/daily.env"), "export TYPESAFE_TOKEN=x\n").unwrap();
+        // Windows never sources an env file.
+        let want = if cfg!(windows) { Severity::Fail } else { Severity::Pass };
+        assert_eq!(credential_findings(tmp.path(), false)[0].severity, want);
+    }
+
+    /// A TOML error quotes the source line; on a credential line that is the
+    /// secret itself, and doctor output reaches reports and MCP.
+    #[test]
+    fn malformed_providers_never_echoes_its_content() {
+        let tmp = decision_vault(Some(DECISIONS));
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nTYPESAFE_TOKEN = \"sk-leak\n").unwrap();
+        let f = credential_findings(tmp.path(), false);
+        assert_eq!(f[0].severity, Severity::Fail);
+        assert!(!format!("{f:?}").contains("sk-leak"), "{f:?}");
+    }
+
+    #[test]
+    fn off_and_replay_capabilities_need_no_credential() {
+        let all_off = DECISIONS.replace("\"mode\":\"shadow\"", "\"mode\":\"off\"");
+        let tmp = decision_vault(Some(&all_off));
+        assert!(credential_findings(tmp.path(), false).is_empty());
+        let replay = DECISIONS.replace("\"execution\":\"record\"", "\"execution\":\"replay\"");
+        let tmp = decision_vault(Some(&replay));
+        assert!(credential_findings(tmp.path(), false).is_empty());
+    }
+
+    /// Omitted fields take the runtime defaults (mode off, execution replay),
+    /// neither of which ever builds a live client.
+    #[test]
+    fn omitted_mode_or_execution_need_no_credential() {
+        let tmp = decision_vault(Some(
+            r#"{"profiles":{"ts":{"credential_ref":"TYPESAFE_TOKEN"}},
+                "capabilities":{"a":{"profile":"ts"},"b":{"mode":"shadow","profile":"ts"}}}"#,
+        ));
+        assert!(credential_findings(tmp.path(), false).is_empty());
+    }
+
+    /// An empty value resolves to MissingCredential at call time.
+    #[test]
+    fn empty_credential_value_is_not_resolvable() {
+        let tmp = decision_vault(Some(DECISIONS));
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nTYPESAFE_TOKEN = \"  \"\n").unwrap();
+        assert_eq!(credential_findings(tmp.path(), false)[0].severity, Severity::Fail);
+    }
+
+    /// The legacy source is the env file the scheduler actually sources: the
+    /// registry's configured one, not always daily.env (and none on Windows).
+    #[test]
+    fn legacy_credential_follows_the_registry_env_file() {
+        let tmp = decision_vault(Some(DECISIONS));
+        std::fs::write(tmp.path().join(".ovp/creds.env"), "TYPESAFE_TOKEN=x\n").unwrap();
+        std::fs::write(tmp.path().join(".ovp/schedule.json"), r#"{"env_file":"{vault}/.ovp/creds.env"}"#).unwrap();
+        let want = if cfg!(windows) { Severity::Fail } else { Severity::Pass };
+        assert_eq!(credential_findings(tmp.path(), false)[0].severity, want);
+    }
+
+    #[test]
+    fn unknown_profile_and_unreadable_file_are_reported() {
+        let tmp = decision_vault(Some(&DECISIONS.replace("\"profile\":\"ts\"}", "\"profile\":\"nope\"}")));
+        let f = credential_findings(tmp.path(), true);
+        assert!(f.iter().any(|x| x.severity == Severity::Fail && x.message.contains("nope")), "{f:?}");
+        let tmp = decision_vault(Some("{not json"));
+        let f = credential_findings(tmp.path(), true);
+        assert_eq!(f[0].severity, Severity::Fail);
     }
 }
