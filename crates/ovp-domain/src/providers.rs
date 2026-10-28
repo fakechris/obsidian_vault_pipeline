@@ -67,8 +67,21 @@ fn parse_providers_file(vault_root: &Path) -> Result<Option<ProvidersFile>, Stri
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("reading {}: {e}", path.display())),
     };
-    let file: ProvidersFile =
-        toml::from_str(&raw).map_err(|e| format!("parsing {}: {e}", path.display()))?;
+    // NOT `{e}`: toml's Display quotes the offending source line, which on a
+    // credential line is the secret — and this error reaches stderr (scheduler
+    // logs), the portal and doctor. Location + reason only.
+    let file: ProvidersFile = toml::from_str(&raw).map_err(|e| {
+        let at = e
+            .span()
+            .map(|s| {
+                let before = &raw[..s.start.min(raw.len())];
+                let line = before.matches('\n').count() + 1;
+                let col = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+                format!(" at line {line}, column {col}")
+            })
+            .unwrap_or_default();
+        format!("parsing {}{at}: {}", path.display(), e.message())
+    })?;
     Ok(Some(file))
 }
 
@@ -509,5 +522,21 @@ mod tests {
         let tmp = vault_with(Some("[env\n"), "A=1\n");
         let env_file = tmp.path().join(".ovp/daily.env");
         assert!(shadowed_env_names(tmp.path(), &env_file).is_err());
+    }
+
+    /// The toml error's Display quotes the offending source line — on a
+    /// credential line that is the secret, and these errors reach stderr
+    /// (scheduler logs), the portal and doctor. Location + reason only.
+    #[test]
+    fn parse_errors_never_quote_the_file() {
+        let tmp = vault_with(Some("[env]\nOK = \"fine\"\nTYPESAFE_TOKEN = \"sk-leak\n"), "");
+        for err in [
+            read_providers_file(tmp.path()).unwrap_err(),
+            apply_providers_env(tmp.path()).unwrap_err(),
+            read_budget(tmp.path()).unwrap_err(),
+        ] {
+            assert!(!err.contains("sk-leak"), "{err}");
+            assert!(err.contains("line 3"), "{err}");
+        }
     }
 }

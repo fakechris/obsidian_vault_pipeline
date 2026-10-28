@@ -447,6 +447,8 @@ fn check_decision_credentials(
     let providers_exists = vault_root.join(".ovp/providers.toml").is_file();
     let providers = match ovp_domain::providers::read_providers_file(vault_root) {
         Ok(p) => p,
+        // The error carries location + reason only (never the source line,
+        // which can be a credential) — doctor output reaches reports and MCP.
         Err(e) => {
             findings.push(fail(e, "fix .ovp/providers.toml — scheduled runs fail on it too"));
             return;
@@ -2315,7 +2317,20 @@ mod tests {
     fn legacy_daily_env_counts_when_it_is_still_sourced() {
         let tmp = decision_vault(Some(DECISIONS));
         std::fs::write(tmp.path().join(".ovp/daily.env"), "export TYPESAFE_TOKEN=x\n").unwrap();
-        assert_eq!(credential_findings(tmp.path(), false)[0].severity, Severity::Pass);
+        // Windows never sources an env file.
+        let want = if cfg!(windows) { Severity::Fail } else { Severity::Pass };
+        assert_eq!(credential_findings(tmp.path(), false)[0].severity, want);
+    }
+
+    /// A TOML error quotes the source line; on a credential line that is the
+    /// secret itself, and doctor output reaches reports and MCP.
+    #[test]
+    fn malformed_providers_never_echoes_its_content() {
+        let tmp = decision_vault(Some(DECISIONS));
+        std::fs::write(tmp.path().join(".ovp/providers.toml"), "[env]\nTYPESAFE_TOKEN = \"sk-leak\n").unwrap();
+        let f = credential_findings(tmp.path(), false);
+        assert_eq!(f[0].severity, Severity::Fail);
+        assert!(!format!("{f:?}").contains("sk-leak"), "{f:?}");
     }
 
     #[test]
