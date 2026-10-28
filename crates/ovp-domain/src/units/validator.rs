@@ -301,7 +301,9 @@ pub(crate) fn deterministic_contains(text: &str, quote: &str) -> bool {
     !quote.trim().is_empty() && locate(text, quote).is_some()
 }
 
-fn locate(hay: &str, quote: &str) -> Option<(usize, usize, MatchKind)> {
+/// Byte range of `quote` inside `hay` and the tier that matched. Rendered
+/// matches report the whole of `hay` (sub-offsets do not survive the render).
+pub(crate) fn locate(hay: &str, quote: &str) -> Option<(usize, usize, MatchKind)> {
     if let Some(s) = hay.find(quote) {
         return Some((s, s + quote.len(), MatchKind::Exact));
     }
