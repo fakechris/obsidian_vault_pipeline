@@ -76,6 +76,9 @@ fn cite(
         .ok_or("strength citation is not in accepted quote")?;
     // Coordinates refer to the accepted unit quote, not the reader file. A
     // rendered match spans the whole quote: its sub-offsets are not recoverable.
+    // A whitespace-tier range ends at the next non-space char, so drop the
+    // trailing gap (it can hold blank lines) before taking the last line.
+    let end = start + unit.quote[start..end].trim_end().len();
     let start_line = lines_before(&unit.quote, start) + 1;
     let end_line = lines_before(&unit.quote, end.saturating_sub(1).max(start)) + 1;
     let evidence = EvidenceRef {
@@ -336,6 +339,11 @@ mod tests {
         );
         let q = request(&c, &catalog).unwrap();
         assert_eq!((q.evidence[0].start_line, q.evidence[0].end_line), (2, 3));
+        // The whitespace tier's range runs up to the NEXT non-space char; the
+        // gap before it (here a blank line) is not part of the match.
+        let (c, catalog) = with_unit_quote("A\nB\n\nC", "A B");
+        let q = request(&c, &catalog).unwrap();
+        assert_eq!((q.evidence[0].start_line, q.evidence[0].end_line), (1, 2));
     }
 
     /// One ungrounded citation excludes ITS claim only; the rest of the batch
