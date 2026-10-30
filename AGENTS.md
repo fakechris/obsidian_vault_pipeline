@@ -134,7 +134,7 @@ resolve references, one hop at a time.
 |---|---|---|
 | `ovp:source/<sha256>` · `ovp:claim/<claim_key>` · `ovp:pack/<reader dir>` | OVP (this repo's MCP) | `find` / `claim` / `ovp_read_note` |
 | `inv:INV-<n>` | Involute (remote) | `work_get_context` |
-| `pop:<provider>:<session_id>#<message_id>@<revision>` | planofplan (local) | `read_message` / `read_session` |
+| `pop:<provider>:<session_id>#<message_id>@<revision>` | planofplan (local) | `read_session` for the full `SourceRef`, then `read_message` |
 
 When a research conclusion rests on an OVP source, the Involute item cites
 `ovp:source/<sha256>`; do not write the conclusion into the vault. Full
