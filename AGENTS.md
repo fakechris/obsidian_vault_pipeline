@@ -132,10 +132,13 @@ resolve references, one hop at a time.
 
 | Prefix | Owner | Resolve with |
 |---|---|---|
-| `ovp:source/<sha256>` · `ovp:claim/<claim_key>` · `ovp:pack/<reader dir>` | OVP (this repo's MCP) | `find` / `claim` / `ovp_read_note` |
+| `ovp://source/<sha256>` · `ovp://claim/<claim_key>` · `ovp://theme-page/<id>` | OVP (this repo's MCP) | `resources/read` with the URI as is, or `ovp_read_note` / `claim` |
 | `inv:INV-<n>` | Involute (remote) | `work_get_context` |
 | `pop:<provider>:<session_id>#<message_id>@<revision>` | planofplan (local) | `read_session` for the full `SourceRef`, then `read_message` |
 
 When a research conclusion rests on an OVP source, the Involute item cites
-`ovp:source/<sha256>`; do not write the conclusion into the vault. Full
+`ovp://source/<sha256>` — the URI our own tools emit, so every tool that
+emits an `ovp://` URI must keep resolving it. Cite a claim by `claim_key`
+(`ck-…`), a reader pack by its `reader.md` path. Do not write the
+conclusion into the vault. Full
 format and rules: Involute `docs/cross-system-refs.md`.
