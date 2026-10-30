@@ -121,3 +121,21 @@ This repository is bound to the **Involute Work-Graph Kernel** for task tracking
 4. **Report Runs with Evidence**: Record progress via `run_report`. On completion, attach durable evidence (commit SHA, test exit code, PR URL) via `evidence_attach`.
 5. **In Review, Never Done**: Agents transition tasks to `In Review`. Moving work to `Done` is strictly reserved for human review or verified `CLEAR` auto-accept gate.
 
+
+## Cross-system references (INV-1434)
+
+OVP turns outside information into knowledge. Our own conclusions and
+decisions live in Involute; agent session evidence lives in planofplan
+(decision INV-1433). Point between them with text references — OVP never
+calls the other systems at runtime, and only clients (an agent, or `recall`)
+resolve references, one hop at a time.
+
+| Prefix | Owner | Resolve with |
+|---|---|---|
+| `ovp:source/<sha256>` · `ovp:claim/<claim_key>` · `ovp:pack/<reader dir>` | OVP (this repo's MCP) | `find` / `claim` / `ovp_read_note` |
+| `inv:INV-<n>` | Involute (remote) | `work_get_context` |
+| `pop:<provider>:<session_id>#<message_id>@<revision>` | planofplan (local) | `read_session` for the full `SourceRef`, then `read_message` |
+
+When a research conclusion rests on an OVP source, the Involute item cites
+`ovp:source/<sha256>`; do not write the conclusion into the vault. Full
+format and rules: Involute `docs/cross-system-refs.md`.
