@@ -74,16 +74,20 @@ pub fn append_batch(path: &Path, lines: &str, exclusive: bool) -> std::io::Resul
         buf.push(b'\n');
     }
     buf.extend_from_slice(lines.as_bytes());
-    write_or_cut_back(&mut &file, &file, before, &buf, exclusive)
+    write_or_cut_back(&mut &file, &file, path, before, &buf, exclusive)
 }
 
 /// One write of `buf` through `w`. On a short write with `exclusive` access,
-/// truncate `file` back to `before`. The length check is a guard: if the file
-/// is not exactly `before` plus this write's partial bytes, something else
-/// wrote to it, and it is left alone.
+/// truncate the file at `path` back to `before`. The length check is a guard:
+/// if the file is not exactly `before` plus this write's partial bytes,
+/// something else wrote to it, and it is left alone.
+///
+/// The truncation goes through a separate write handle: on Windows an
+/// append-mode handle lacks `FILE_WRITE_DATA`, which `set_len` needs.
 fn write_or_cut_back<W: Write>(
     w: &mut W,
     file: &File,
+    path: &Path,
     before: u64,
     buf: &[u8],
     exclusive: bool,
@@ -103,7 +107,11 @@ fn write_or_cut_back<W: Write>(
     if !exclusive || file.metadata()?.len() != before + written as u64 {
         return Err(err);
     }
-    match file.set_len(before) {
+    let cut = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|f| f.set_len(before));
+    match cut {
         Ok(()) => Err(err),
         Err(cut) => Err(std::io::Error::new(
             err.kind(),
@@ -301,6 +309,7 @@ mod tests {
         let err = write_or_cut_back(
             &mut HalfThenFull(&file),
             &file,
+            &path,
             before.len() as u64,
             batch.as_bytes(),
             true,
@@ -341,6 +350,7 @@ mod tests {
         let err = write_or_cut_back(
             &mut RacedThenHalf(&file, other),
             &file,
+            &path,
             before,
             batch.as_bytes(),
             false,
