@@ -165,28 +165,17 @@ pub(crate) fn active_claim_pairs(
     let ledger = vault_root.join(".ovp/crystal/ledger.jsonl");
     let mut events: Vec<StoreEvent> = Vec::new();
     if ledger.is_file() {
-        let raw = std::fs::read_to_string(&ledger).map_err(|e| format!("reading ledger: {e}"))?;
-        let lines: Vec<(usize, &str)> = raw
-            .lines()
-            .enumerate()
-            .map(|(i, l)| (i, l.trim()))
-            .filter(|(_, l)| !l.is_empty())
-            .collect();
-        for (pos, (i, line)) in lines.iter().enumerate() {
-            match serde_json::from_str::<StoreEvent>(line) {
-                Ok(ev) => events.push(ev),
-                // The serve worker appends without a read/write lock, so a
-                // read can catch a half-written FINAL line — recognizable by
-                // the missing terminating newline. Tolerate just that case
-                // (it will be complete next run). A malformed line that IS
-                // newline-terminated is a complete, permanently bad record —
-                // silently dropping it could lose the latest write/retract
-                // and corrupt the claims projection (codex P2), so it stays
-                // a loud, line-numbered error like mid-file garbage.
-                Err(_) if pos + 1 == lines.len() && !raw.ends_with('\n') => {}
-                Err(e) => return Err(format!("ledger line {}: {e}", i + 1)),
-            }
-        }
+        let raw = std::fs::read(&ledger).map_err(|e| format!("reading ledger: {e}"))?;
+        // The serve worker appends without a read/write lock, so a read can
+        // catch a half-written FINAL line (no terminating newline), or one an
+        // append already closed with a torn-line marker. `Skip` tolerates just
+        // those; any other malformed line is a complete, permanently bad
+        // record — silently dropping it could lose the latest write/retract
+        // and corrupt the claims projection (codex P2), so it stays a loud,
+        // line-numbered error.
+        let skip = ovp_domain::jsonl::TornLines::Skip(|_| {});
+        events = ovp_domain::jsonl::parse_ledger(&raw, skip)
+            .map_err(|bad| format!("ledger line {}: {}", bad.line, bad.error))?;
     }
     Ok(fold_ledger(&events)
         .into_iter()
@@ -461,6 +450,23 @@ mod tests {
         write_ledger(tmp.path(), &format!("{good}\n{{garbage\n{good}"));
         let err = active_claim_pairs(tmp.path()).unwrap_err();
         assert!(err.contains("ledger line 2"), "{err}");
+    }
+
+    /// An append that found a torn tail closes it with a marker line
+    /// (INV-1426); the torn record is skipped and the records after it fold.
+    #[test]
+    fn active_claim_pairs_skips_a_marker_closed_torn_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = serde_json::to_string(&write_event("ck-a", "Active claim.")).unwrap();
+        let b = serde_json::to_string(&write_event("ck-b", "Later claim.")).unwrap();
+        let marker = std::str::from_utf8(ovp_domain::jsonl::TORN_MARKER).unwrap();
+        write_ledger(tmp.path(), &format!("{a}\n{{\"op\":\"wri\n{marker}\n{b}\n"));
+        let keys: Vec<String> = active_claim_pairs(tmp.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| p.0)
+            .collect();
+        assert_eq!(keys, ["ck-a", "ck-b"]);
     }
 
     /// The serve worker appends without a read/write lock: a read can catch a

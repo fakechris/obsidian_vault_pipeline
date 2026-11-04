@@ -47,6 +47,9 @@ pub struct WriteInputs {
     /// Optional forced supersede targets: revision claim_id → durable claim_key
     /// to supersede (from M36 strengthen/supersede review actions).
     pub supersede_targets: std::collections::BTreeMap<String, String>,
+    /// The caller holds the `RunLock` of the vault `store` belongs to, so no
+    /// other writer can append to the ledger meanwhile (INV-1426).
+    pub holds_vault_lock: bool,
 }
 
 /// What a durable write produced (returned so callers can print their own summary).
@@ -92,22 +95,26 @@ pub fn build_grounding_index(packs_dir: &std::path::Path) -> Result<GroundingInd
     ovp_domain::crystal::recheck::build_grounding_index(packs_dir).map_err(CliError::Io)
 }
 
+/// Strict read of the crystal ledger: any malformed line fails the read,
+/// including a torn record (`TornLines::Fail`). Torn-line markers written by
+/// `ovp_domain::jsonl::append_batch` are skipped.
 pub(crate) fn read_ledger(path: &std::path::Path) -> Result<Vec<StoreEvent>, CliError> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(path)
+    let raw = std::fs::read(path)
         .map_err(|e| CliError::Io(format!("reading ledger {}: {e}", path.display())))?;
-    let mut events = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let ev: StoreEvent = serde_json::from_str(line)
-            .map_err(|e| CliError::Io(format!("ledger {} line {}: {e}", path.display(), i + 1)))?;
-        events.push(ev);
-    }
-    Ok(events)
+    let strict = ovp_domain::jsonl::TornLines::<fn(usize)>::Fail;
+    ovp_domain::jsonl::parse_ledger(&raw, strict).map_err(|bad| {
+        let hint = if bad.error.classify() == serde_json::error::Category::Eof {
+            " (an incomplete record, likely left by an interrupted write; it was never \
+             committed, so remove that line and rerun)"
+        } else {
+            ""
+        };
+        let (file, line, error) = (path.display(), bad.line, bad.error);
+        CliError::Io(format!("ledger {file} line {line}: {error}{hint}"))
+    })
 }
 
 pub fn read_review_queue(path: &std::path::Path) -> Result<Vec<ReviewEntry>, CliError> {
@@ -197,7 +204,7 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     // as crystal-synth/daily — otherwise an overlapping scheduled crystallize
     // could duplicate claims or overwrite views from a stale snapshot (codex P1).
     // Only for a real vault store; diagnostic stores take no lock.
-    let _vault_lock = match vault_of_crystal_store(&args.store) {
+    let vault_lock = match vault_of_crystal_store(&args.store) {
         Some(v) => Some(ovp_intake::RunLock::acquire(&v).map_err(CliError::Io)?),
         None => None,
     };
@@ -227,6 +234,7 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
         header,
         processed_review_ids: BTreeSet::new(),
         supersede_targets: Default::default(),
+        holds_vault_lock: vault_lock.is_some(),
     })?;
 
     println!("crystal-write: run_id={}", out.run_id);
@@ -257,6 +265,7 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         header,
         processed_review_ids,
         supersede_targets,
+        holds_vault_lock,
     } = inputs;
     let sources = source_identities_for_store(&store)?;
     let report = lint_candidate_with_sources(&candidate, &index, &sources);
@@ -449,16 +458,10 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
     for note in &lineage_notes {
         println!("  lineage: {note}");
     }
-    if !appended_lines.is_empty() {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&ledger_path)
-            .map_err(|e| CliError::Io(format!("opening ledger {}: {e}", ledger_path.display())))?;
-        f.write_all(appended_lines.as_bytes())
-            .map_err(|e| CliError::Io(format!("appending ledger: {e}")))?;
-    }
+    // One write; a failed batch is cut back off the file only under the vault
+    // lock — a diagnostic store has none, and another writer may share it.
+    ovp_domain::jsonl::append_batch(&ledger_path, &appended_lines, holds_vault_lock)
+        .map_err(|e| CliError::Io(format!("appending ledger {}: {e}", ledger_path.display())))?;
 
     // --- Render current state + review. ---
     let state = fold_ledger(&events);
