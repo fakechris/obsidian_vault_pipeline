@@ -135,7 +135,7 @@ resolve references, one hop at a time.
 | `ovp://source/<sha256>` · `ovp://claim/<claim_key>` | OVP (this repo's MCP) | `resources/read` with the URI as is, or `ovp_read_note` / `claim` |
 | `ovp://theme-page/<id>` | OVP (this repo's MCP) | `resources/read` with the URI as is, or `theme_page` |
 | `inv:INV-<n>` | Involute (remote) | `work_get_context` |
-| `pop:<provider>:<session_id>#<message_id>@<revision>` | planofplan (local) | `read_session` for the full `SourceRef`, then `read_message` |
+| `pop:<session_id>#<message_id>@<revision>` (planofplan's ids as is, e.g. `pop:claude:agent-…`) | planofplan (local) | `read_session` with the session_id unchanged for the full `SourceRef`, then `read_message` |
 
 When a research conclusion rests on an OVP source, the Involute item cites
 `ovp://source/<sha256>` — the URI our own tools emit, so every tool that
