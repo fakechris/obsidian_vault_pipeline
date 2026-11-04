@@ -9,8 +9,19 @@ use crate::{Finding, Severity};
 pub(crate) fn check(vault_root: &Path, findings: &mut Vec<Finding>) {
     let check = "citation-support".to_string();
     let store = vault_root.join(".ovp/crystal");
-    let Ok(raw) = std::fs::read(store.join("citation-support.jsonl")) else {
-        return; // the shadow has never run
+    let raw = match std::fs::read(store.join("citation-support.jsonl")) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return, // the shadow has never run
+        Err(e) => {
+            findings.push(Finding {
+                check,
+                severity: Severity::Warn,
+                message: format!(".ovp/crystal/citation-support.jsonl unreadable: {e}"),
+                hint: None,
+                fixed: false,
+            });
+            return;
+        }
     };
     let judged = match ovp_domain::citation_support::latest_judged(&raw) {
         Ok(j) => j,
@@ -204,6 +215,11 @@ mod tests {
         );
 
         std::fs::write(store.join("citation-support.jsonl"), "garbage\n").unwrap();
+        assert_eq!(run(tmp.path())[0].severity, Severity::Warn);
+
+        // Present but not readable (here a directory): still reported.
+        std::fs::remove_file(store.join("citation-support.jsonl")).unwrap();
+        std::fs::create_dir(store.join("citation-support.jsonl")).unwrap();
         assert_eq!(run(tmp.path())[0].severity, Severity::Warn);
     }
 }

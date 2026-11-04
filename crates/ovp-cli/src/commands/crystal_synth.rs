@@ -748,8 +748,11 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     })?;
     // Off-by-default per-citation support check on the claims just written
     // (INV-1422). Records answers only; the ledger and review queue are done.
+    // Settings and cassettes come from the vault the rows are written to, as
+    // for the run lock.
+    let support_vault = crate::commands::crystal_write::vault_of_crystal_store(&paths.store);
     super::crystal_citation_support::observe(
-        observer_vault.as_deref(),
+        support_vault.as_deref(),
         &paths.store,
         &outcome.appended_records,
         &catalog,
@@ -1384,7 +1387,9 @@ mod tests {
         // cassette is missing, so each row is a recorded failure.
         let review = std::fs::read(store.join("review.json")).unwrap();
         std::fs::write(tmp.path().join(".ovp/decisions.json"), r#"{"profiles":{"p":{"id":"p","provider":"fixture","endpoint":"fixture://citation","model":"synthetic-v1","credential_ref":"UNUSED"}},"capabilities":{"citation_support":{"mode":"shadow","execution":"replay","profile":"p","question_namespace":"citation_support/v1","experiment":null}}}"#).unwrap();
-        let fresh = work.join("store-citation-shadow");
+        // The store is the vault's own crystal store: settings and cassettes
+        // come from the vault the rows are written to.
+        let fresh = tmp.path().join(".ovp/crystal");
         let mut cs_args = mk_args();
         cs_args.vault_root = Some(tmp.path().to_path_buf());
         cs_args.store = Some(fresh.clone());

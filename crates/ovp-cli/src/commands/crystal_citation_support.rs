@@ -15,6 +15,10 @@ use std::path::Path;
 const CAPABILITY: &str = "citation_support";
 pub const FILE: &str = "citation-support.jsonl";
 const SCHEMA: &str = "ovp.crystal.citation_support/v1";
+/// Total time the shadow may spend asking. It runs while crystal-synth holds
+/// the vault lock, so a slow provider must not keep other runs out; claims
+/// left when the budget is spent are recorded as failed rows.
+const BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
 
 pub fn observe(
     vault_root: Option<&Path>,
@@ -38,6 +42,7 @@ pub fn observe(
         store,
         records,
         catalog,
+        BUDGET,
     );
 }
 
@@ -48,6 +53,7 @@ fn observe_with(
     store: &Path,
     records: &[DurableRecord],
     catalog: &UnitsCatalog,
+    budget: std::time::Duration,
 ) {
     let Some(config) = settings.capabilities.get(CAPABILITY) else {
         return;
@@ -66,10 +72,15 @@ fn observe_with(
     } else {
         None
     };
+    let started = std::time::Instant::now();
     let mut rows = Vec::new();
     for record in records {
         let outcome = match refusal {
             Some(reason) => Err(reason.to_string()),
+            None if started.elapsed() >= budget => Err(format!(
+                "not asked: the {} s time budget was used up",
+                budget.as_secs()
+            )),
             None => ask(settings, factory, vault, record, catalog),
         };
         rows.extend(rows_for(record, outcome));
@@ -346,7 +357,7 @@ mod tests {
     fn run(s: &DecisionSettings, f: &Factory, dir: &Path, records: &[DurableRecord]) -> Vec<Value> {
         let store = dir.join("store");
         let _ = std::fs::remove_file(store.join(FILE));
-        observe_with(s, f, dir, &store, records, &catalog());
+        observe_with(s, f, dir, &store, records, &catalog(), BUDGET);
         rows(&store)
     }
 
@@ -464,8 +475,8 @@ mod tests {
 
         let store = tmp.path().join("store");
         let factory = BuiltinDecisionFactory;
-        observe_with(&s, &factory, tmp.path(), &store, &r, &catalog());
-        observe_with(&s, &factory, tmp.path(), &store, &r, &catalog());
+        observe_with(&s, &factory, tmp.path(), &store, &r, &catalog(), BUDGET);
+        observe_with(&s, &factory, tmp.path(), &store, &r, &catalog(), BUDGET);
         let got = rows(&store);
         assert_eq!(got.len(), 4);
         let answers = |rows: &[Value]| {
@@ -487,6 +498,35 @@ mod tests {
         );
         assert_eq!(got[0]["origin"], got[2]["origin"]);
         assert_eq!(got[0]["model"], "jev-1.13.0");
+    }
+
+    #[test]
+    fn claims_past_the_time_budget_are_recorded_as_not_asked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = Factory {
+            calls: AtomicUsize::new(0),
+            fail: false,
+        };
+        let store = tmp.path().join("store");
+        let r = [
+            record("ck-1", &["Agents forget"]),
+            record("ck-2", &["Agents forget"]),
+        ];
+        let zero = std::time::Duration::ZERO;
+        observe_with(
+            &settings(DecisionMode::Shadow),
+            &f,
+            tmp.path(),
+            &store,
+            &r,
+            &catalog(),
+            zero,
+        );
+        let got = rows(&store);
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|row| row["status"] == "failed"));
+        assert!(got[0]["error"].as_str().unwrap().contains("time budget"));
+        assert_eq!(f.calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
