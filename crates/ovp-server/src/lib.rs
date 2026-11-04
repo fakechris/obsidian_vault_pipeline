@@ -2918,6 +2918,11 @@ fn handle_claim(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8>
         Some(&lineage),
     ) {
         Some(mut v) => {
+            // Shadow per-citation support answers (INV-1422), live view only.
+            bodies::annotate_citation_support(
+                &mut v,
+                &state.vault_root.join(state.layout.crystal_store_dir()),
+            );
             // Rebuildable bilingual projection — authority claim stays English.
             if let Some(obj) = v.as_object_mut() {
                 // Same key rule as /api/model (claim_key, else claim_id) —
@@ -8504,6 +8509,30 @@ mod tests {
         let st = state(vault.clone(), None);
         let v = body_json(dispatch(&st, Method::Get, "/api/claim/a", ""));
         assert_eq!(v["claim_zh"], serde_json::json!("键一致性翻译"));
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn claim_endpoint_carries_citation_support_answers() {
+        // INV-1422: the live claim view shows the shadow answer per citation.
+        let vault = portal_vault("claim-support", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+        let v = body_json(dispatch(&st, Method::Get, "/api/claim/a", ""));
+        assert!(v["citations"][0].get("support").is_none(), "no answers yet");
+
+        let row = serde_json::json!({"claim_key":"a","citation":0,"status":"judged",
+                                     "support":"says_nothing","confidence":0.92});
+        std::fs::write(
+            vault.join(".ovp/crystal/citation-support.jsonl"),
+            row.to_string() + "\n",
+        )
+        .unwrap();
+        let v = body_json(dispatch(&st, Method::Get, "/api/claim/a", ""));
+        let support = &v["citations"][0]["support"];
+        assert_eq!(support["flagged"], serde_json::json!(true));
+        assert_eq!(support["support"], serde_json::json!("says_nothing"));
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

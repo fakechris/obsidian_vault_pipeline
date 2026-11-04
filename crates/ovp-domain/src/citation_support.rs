@@ -71,12 +71,59 @@ pub struct CitationJudgment {
     pub confidence: Option<f64>,
 }
 
+/// A confident answer that the quote does not back the claim. Without a
+/// confidence there is nothing to be confident about, so it is not flagged.
+fn is_flagged(support: Support, confidence: Option<f64>) -> bool {
+    support != Support::Supports && confidence.is_some_and(|c| c >= CONFIDENT)
+}
+
 impl CitationJudgment {
-    /// A confident answer that the quote does not back the claim. Without a
-    /// confidence there is nothing to be confident about, so it is not flagged.
     pub fn flagged(&self) -> bool {
-        self.support != Support::Supports && self.confidence.is_some_and(|c| c >= CONFIDENT)
+        is_flagged(self.support, self.confidence)
     }
+}
+
+/// The latest recorded answer for one citation, read back from
+/// `citation-support.jsonl`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Judged {
+    pub support: Support,
+    pub confidence: Option<f64>,
+    pub flagged: bool,
+}
+
+#[derive(Deserialize)]
+struct Row {
+    claim_key: String,
+    citation: usize,
+    status: String,
+    #[serde(default)]
+    support: Option<Support>,
+    #[serde(default)]
+    confidence: Option<f64>,
+}
+
+/// The latest judged row per `(claim_key, citation)`. Failed rows never
+/// replace an earlier judgment; a torn final line (a run cut off mid-write) is
+/// skipped. Any other malformed line is an error.
+pub fn latest_judged(raw: &[u8]) -> Result<BTreeMap<(String, usize), Judged>, String> {
+    let rows: Vec<Row> = crate::jsonl::parse_ledger(raw, crate::jsonl::TornLines::Skip(|_| {}))
+        .map_err(|bad| format!("line {}: {}", bad.line, bad.error))?;
+    let mut latest = BTreeMap::new();
+    for row in rows {
+        if let (true, Some(support)) = (row.status == "judged", row.support) {
+            let flagged = is_flagged(support, row.confidence);
+            latest.insert(
+                (row.claim_key, row.citation),
+                Judged {
+                    support,
+                    confidence: row.confidence,
+                    flagged,
+                },
+            );
+        }
+    }
+    Ok(latest)
 }
 
 /// Build the request for one durable claim. Every citation must ground the
@@ -319,6 +366,34 @@ mod tests {
         assert_eq!(flags, [false, true, false, false]);
         assert_eq!(judged[1].support, Support::SaysNothing);
         assert_eq!(judged[2].citation, 2);
+    }
+
+    #[test]
+    fn latest_judged_keeps_the_newest_judgment_and_ignores_failures() {
+        let row = |key: &str, i: usize, status: &str, support: &str, conf: f64| {
+            json!({"claim_key": key, "citation": i, "status": status, "support": support, "confidence": conf})
+                .to_string()
+        };
+        let raw = [
+            row("ck-1", 0, "judged", "supports", 0.9),
+            row("ck-1", 1, "judged", "says_nothing", 0.95),
+            row("ck-1", 1, "judged", "supports", 0.7),
+            json!({"claim_key": "ck-1", "citation": 0, "status": "failed", "error": "x"})
+                .to_string(),
+            row("ck-2", 0, "judged", "contradicts", 0.85),
+            r#"{"claim_key":"ck-3","cit"#.to_string(),
+        ]
+        .join("\n");
+        let got = latest_judged(raw.as_bytes()).unwrap();
+        assert_eq!(got.len(), 3);
+        assert_eq!(
+            got[&("ck-1".into(), 0)].support,
+            Support::Supports,
+            "a failure keeps the judgment"
+        );
+        assert!(!got[&("ck-1".into(), 1)].flagged, "the newer answer wins");
+        assert!(got[&("ck-2".into(), 0)].flagged);
+        assert!(latest_judged(b"not json\n{}\n").is_err());
     }
 
     #[test]

@@ -31,6 +31,8 @@ pub struct DoctorOptions {
     pub since_hours: Option<u64>,
 }
 
+mod citation_support;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Severity {
     Pass,
@@ -132,8 +134,10 @@ pub fn run_checks(vault_root: &Path, opts: &DoctorOptions) -> Vec<Finding> {
         &|name| std::env::var(name).ok(),
         &mut findings,
     );
+    citation_support::check(vault_root, &mut findings);
     findings
 }
+
 
 /// How many mismatching packs the finding names before eliding.
 const PACK_PROVENANCE_LIST_CAP: usize = 5;
@@ -2397,3 +2401,4 @@ mod tests {
         assert_eq!(f[0].severity, Severity::Fail);
     }
 }
+

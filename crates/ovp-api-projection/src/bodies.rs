@@ -222,6 +222,35 @@ pub fn settings_public_body(model: Option<&IndexModel>) -> Value {
     })
 }
 
+/// Add each citation's latest citation-support answer (INV-1422) to a
+/// `/api/claim` body, as `citations[i].support` (`support`, `confidence`,
+/// `flagged`). Live server only: these are shadow judgments for the operator,
+/// so the static publisher never calls this. A missing or unreadable file
+/// adds nothing; the claim page keeps working and `ovp2 doctor` reports it.
+pub fn annotate_citation_support(body: &mut Value, store_dir: &Path) {
+    let path = store_dir.join("citation-support.jsonl");
+    let Ok(raw) = std::fs::read(&path) else {
+        return;
+    };
+    let judged = match ovp_domain::citation_support::latest_judged(&raw) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("citation support: ignoring {} ({e})", path.display());
+            return;
+        }
+    };
+    let Some(key) = body["claim_key"].as_str().map(str::to_string) else {
+        return;
+    };
+    if let Some(citations) = body["citations"].as_array_mut() {
+        for (i, citation) in citations.iter_mut().enumerate() {
+            if let Some(j) = judged.get(&(key.clone(), i)) {
+                citation["support"] = json!(j);
+            }
+        }
+    }
+}
+
 /// `/api/claim/:id` — one durable claim with its citations resolved to source
 /// metadata. Returns `None` when no active record matches `id` (→ 404).
 ///
@@ -420,5 +449,37 @@ fn claim_status_order(claim: &ClaimRow) -> u8 {
         ClaimStatus::Durable => 0,
         ClaimStatus::Caveated => 1,
         _ => 2,
+    }
+}
+
+#[cfg(test)]
+mod citation_support_tests {
+    use super::*;
+
+    #[test]
+    fn citations_get_their_latest_judgment_and_nothing_else_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rows = [
+            json!({"claim_key":"ck-1","citation":1,"status":"judged","support":"says_nothing","confidence":0.95}),
+            json!({"claim_key":"ck-2","citation":0,"status":"judged","support":"contradicts","confidence":0.9}),
+        ]
+        .map(|r| r.to_string())
+        .join("\n");
+        std::fs::write(tmp.path().join("citation-support.jsonl"), rows).unwrap();
+        let mut body = json!({"claim_key":"ck-1","citations":[{"quote":"a"},{"quote":"b"}]});
+        annotate_citation_support(&mut body, tmp.path());
+        assert!(body["citations"][0].get("support").is_none());
+        assert_eq!(
+            body["citations"][1]["support"],
+            json!({"support":"says_nothing","confidence":0.95,"flagged":true})
+        );
+
+        // No file, or a corrupt one: the body is left as it was.
+        let before = body.clone();
+        std::fs::write(tmp.path().join("citation-support.jsonl"), "garbage\n{}\n").unwrap();
+        annotate_citation_support(&mut body, tmp.path());
+        assert_eq!(body, before);
+        annotate_citation_support(&mut body, &tmp.path().join("missing"));
+        assert_eq!(body, before);
     }
 }
