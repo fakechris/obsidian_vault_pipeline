@@ -356,7 +356,7 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
     // --vault-root, so an explicit `--store <other-vault>/.ovp/crystal` locks the
     // vault it actually writes. A diagnostic store elsewhere takes no lock. Held
     // to the end of the run via the binding.
-    let _vault_lock = match crate::commands::crystal_write::vault_of_crystal_store(&paths.store) {
+    let vault_lock = match crate::commands::crystal_write::vault_of_crystal_store(&paths.store) {
         Some(v) => Some(ovp_intake::RunLock::acquire(&v).map_err(CliError::Io)?),
         None => None,
     };
@@ -744,6 +744,7 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
         run_id: args.run_id.clone(),
         header,
         processed_review_ids: std::collections::BTreeSet::new(),
+        holds_vault_lock: vault_lock.is_some(),
     })?;
 
     // --- Summary (mirrors crystal-write). ---

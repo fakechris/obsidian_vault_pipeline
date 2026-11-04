@@ -50,12 +50,15 @@ pub fn append_line(file: &mut File, path: &Path, line: &str) -> std::io::Result<
 
 /// Append `lines` (complete records, each ending in `"\n"`) to the ledger at
 /// `path` in a single write, closing a torn tail first as [`append_line`]
-/// does. All or nothing: if the write fails, the file is cut back to its
-/// length before the call, so a failed batch leaves no partial record for a
-/// strict reader to fail on — unless another appender landed after it, in
-/// which case the fragment stays as a torn tail for the next append to close
-/// (see [`write_or_cut_back`]).
-pub fn append_batch(path: &Path, lines: &str) -> std::io::Result<()> {
+/// does.
+///
+/// `exclusive` says the caller holds the vault `RunLock`, so no other
+/// appender can run. Only then is a failed write all-or-nothing: the file is
+/// cut back to its length before the call, leaving no partial record for a
+/// strict reader to fail on. Without exclusive access, cutting back could
+/// delete another appender's records, so the fragment stays as a torn tail
+/// and the next append closes it with a marker.
+pub fn append_batch(path: &Path, lines: &str, exclusive: bool) -> std::io::Result<()> {
     if lines.is_empty() {
         return Ok(());
     }
@@ -71,20 +74,19 @@ pub fn append_batch(path: &Path, lines: &str) -> std::io::Result<()> {
         buf.push(b'\n');
     }
     buf.extend_from_slice(lines.as_bytes());
-    write_or_cut_back(&mut &file, &file, before, &buf)
+    write_or_cut_back(&mut &file, &file, before, &buf, exclusive)
 }
 
-/// One write of `buf` through `w`. On a short or failed write, truncate
-/// `file` back to `before`, but only if the file is exactly what this write
-/// left: `before` plus our partial bytes. Anything longer means another
-/// appender (one not holding the vault lock, e.g. a diagnostic `--store`)
-/// landed in between, and cutting back would delete its records; the
-/// fragment is then left as a torn tail, which the next append closes.
+/// One write of `buf` through `w`. On a short write with `exclusive` access,
+/// truncate `file` back to `before`. The length check is a guard: if the file
+/// is not exactly `before` plus this write's partial bytes, something else
+/// wrote to it, and it is left alone.
 fn write_or_cut_back<W: Write>(
     w: &mut W,
     file: &File,
     before: u64,
     buf: &[u8],
+    exclusive: bool,
 ) -> std::io::Result<()> {
     let (written, err) = loop {
         match w.write(buf) {
@@ -98,7 +100,7 @@ fn write_or_cut_back<W: Write>(
             Err(e) => return Err(e),
         }
     };
-    if file.metadata()?.len() != before + written as u64 {
+    if !exclusive || file.metadata()?.len() != before + written as u64 {
         return Err(err);
     }
     match file.set_len(before) {
@@ -301,6 +303,7 @@ mod tests {
             &file,
             before.len() as u64,
             batch.as_bytes(),
+            true,
         )
         .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::WriteZero);
@@ -312,7 +315,7 @@ mod tests {
     }
 
     /// Another appender lands its record first, then this write comes up
-    /// short — an unlocked writer racing this one.
+    /// short — an unlocked writer (a diagnostic `--store`) racing this one.
     struct RacedThenHalf<'a>(&'a std::fs::File, String);
 
     impl Write for RacedThenHalf<'_> {
@@ -326,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_batch_never_cuts_away_another_appenders_record() {
+    fn a_writer_without_the_lock_never_cuts_back() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("l.jsonl");
         append(&path, &rec("一"));
@@ -340,6 +343,7 @@ mod tests {
             &file,
             before,
             batch.as_bytes(),
+            false,
         );
         assert!(err.is_err());
 
@@ -361,7 +365,7 @@ mod tests {
         f.write_all(&rec("二").as_bytes()[..5]).unwrap();
         drop(f);
 
-        append_batch(&path, &format!("{}\n{}\n", rec("三"), rec("四"))).unwrap();
+        append_batch(&path, &format!("{}\n{}\n", rec("三"), rec("四")), true).unwrap();
         let (r, torn) = parse(&std::fs::read(&path).unwrap());
         let titles: Vec<_> = r.unwrap().into_iter().map(|r| r.title).collect();
         assert_eq!(
@@ -376,8 +380,8 @@ mod tests {
     fn batch_creates_a_missing_ledger() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("l.jsonl");
-        append_batch(&path, &format!("{}\n", rec("一"))).unwrap();
-        append_batch(&path, "").unwrap();
+        append_batch(&path, &format!("{}\n", rec("一")), true).unwrap();
+        append_batch(&path, "", true).unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             format!("{}\n", rec("一"))

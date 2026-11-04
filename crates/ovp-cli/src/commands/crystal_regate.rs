@@ -157,8 +157,9 @@ pub(crate) fn append_events(ledger: &Path, events: &[StoreEvent]) -> Result<(), 
         lines.push_str(&line);
         lines.push('\n');
     }
-    // One write; a failed batch is cut back off the file (INV-1426).
-    ovp_domain::jsonl::append_batch(ledger, &lines)
+    // One write; a failed batch is cut back off the file (INV-1426). Every
+    // caller (regate, citation review) holds the vault RunLock.
+    ovp_domain::jsonl::append_batch(ledger, &lines, true)
         .map_err(|e| CliError::Io(format!("appending ledger {}: {e}", ledger.display())))
 }
 

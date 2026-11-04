@@ -47,6 +47,9 @@ pub struct WriteInputs {
     /// Optional forced supersede targets: revision claim_id → durable claim_key
     /// to supersede (from M36 strengthen/supersede review actions).
     pub supersede_targets: std::collections::BTreeMap<String, String>,
+    /// The caller holds the `RunLock` of the vault `store` belongs to, so no
+    /// other writer can append to the ledger meanwhile (INV-1426).
+    pub holds_vault_lock: bool,
 }
 
 /// What a durable write produced (returned so callers can print their own summary).
@@ -201,7 +204,7 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     // as crystal-synth/daily — otherwise an overlapping scheduled crystallize
     // could duplicate claims or overwrite views from a stale snapshot (codex P1).
     // Only for a real vault store; diagnostic stores take no lock.
-    let _vault_lock = match vault_of_crystal_store(&args.store) {
+    let vault_lock = match vault_of_crystal_store(&args.store) {
         Some(v) => Some(ovp_intake::RunLock::acquire(&v).map_err(CliError::Io)?),
         None => None,
     };
@@ -231,6 +234,7 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
         header,
         processed_review_ids: BTreeSet::new(),
         supersede_targets: Default::default(),
+        holds_vault_lock: vault_lock.is_some(),
     })?;
 
     println!("crystal-write: run_id={}", out.run_id);
@@ -261,6 +265,7 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         header,
         processed_review_ids,
         supersede_targets,
+        holds_vault_lock,
     } = inputs;
     let sources = source_identities_for_store(&store)?;
     let report = lint_candidate_with_sources(&candidate, &index, &sources);
@@ -453,8 +458,9 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
     for note in &lineage_notes {
         println!("  lineage: {note}");
     }
-    // One write; a failed batch is cut back off the file (INV-1426).
-    ovp_domain::jsonl::append_batch(&ledger_path, &appended_lines)
+    // One write; a failed batch is cut back off the file only under the vault
+    // lock — a diagnostic store has none, and another writer may share it.
+    ovp_domain::jsonl::append_batch(&ledger_path, &appended_lines, holds_vault_lock)
         .map_err(|e| CliError::Io(format!("appending ledger {}: {e}", ledger_path.display())))?;
 
     // --- Render current state + review. ---

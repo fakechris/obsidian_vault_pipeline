@@ -640,6 +640,8 @@ pub fn run_apply(args: CrystalReviewSessionApplyArgs) -> Result<(), CliError> {
         header,
         processed_review_ids: processed,
         supersede_targets,
+        // `store` is under `--vault-root`, whose RunLock is held above.
+        holds_vault_lock: true,
     })?;
     println!("crystal-review-session-apply: run_id={}", out.run_id);
     println!(
