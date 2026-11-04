@@ -73,7 +73,14 @@ pub(crate) fn ground<'a>(
     unit_id: &str,
     quote: &str,
     catalog: &'a UnitsCatalog,
-) -> Result<(EvidenceRef, &'a crate::crystal::synth::CatalogUnit, crate::units::MatchKind), Ungrounded> {
+) -> Result<
+    (
+        EvidenceRef,
+        &'a crate::crystal::synth::CatalogUnit,
+        crate::units::MatchKind,
+    ),
+    Ungrounded,
+> {
     let unit = catalog
         .cases
         .get(case_id)
@@ -104,10 +111,11 @@ fn cite(
     c: &crate::crystal::Citation,
     catalog: &UnitsCatalog,
 ) -> Result<(EvidenceRef, serde_json::Value), &'static str> {
-    let (evidence, unit, kind) = ground(&c.case_id, &c.unit_id, &c.quote, catalog).map_err(|e| match e {
-        Ungrounded::NoUnit => "strength citation has no accepted unit",
-        Ungrounded::NotInQuote => "strength citation is not in accepted quote",
-    })?;
+    let (evidence, unit, kind) =
+        ground(&c.case_id, &c.unit_id, &c.quote, catalog).map_err(|e| match e {
+            Ungrounded::NoUnit => "strength citation has no accepted unit",
+            Ungrounded::NotInQuote => "strength citation is not in accepted quote",
+        })?;
     let mut citation = json!({"quote":c.quote,"case_id":c.case_id,"unit_id":c.unit_id,"attribution":unit.attribution,"modality":unit.modality,"source_view":"accepted_unit_quote/v1"});
     // Only non-exact matches carry the tier, so exact requests stay
     // byte-identical to those recorded before this field existed.

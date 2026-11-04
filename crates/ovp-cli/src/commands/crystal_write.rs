@@ -59,6 +59,8 @@ pub struct WriteOutcome {
     pub considered: usize,
     /// Newly-appended ledger lines this run.
     pub appended: usize,
+    /// The records those lines wrote, in ledger order.
+    pub appended_records: Vec<ovp_domain::crystal::DurableRecord>,
     /// Total active durable claims in the store after the write.
     pub active_total: usize,
     /// Caveated/reject claims routed to review (never durable).
@@ -373,6 +375,7 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         .filter(|r| r.status == ovp_domain::crystal::CrystalStatus::Active)
         .collect();
     let mut appended = 0usize;
+    let mut appended_records = Vec::new();
     let mut appended_lines = String::new();
     let mut lineage_notes: Vec<String> = Vec::new();
     for r in &new_records {
@@ -454,6 +457,7 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
             .filter(|rec| rec.status == ovp_domain::crystal::CrystalStatus::Active)
             .collect();
         appended += 1;
+        appended_records.push(r.clone());
     }
     for note in &lineage_notes {
         println!("  lineage: {note}");
@@ -492,6 +496,7 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         run_id,
         considered: new_records.len(),
         appended,
+        appended_records,
         active_total: active_now.len(),
         review: review.len(),
         ledger_path,

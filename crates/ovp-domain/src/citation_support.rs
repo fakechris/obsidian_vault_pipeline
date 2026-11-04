@@ -36,7 +36,11 @@ impl Support {
             Support::SaysNothing => "says_nothing",
         }
     }
-    const ALL: [Support; 3] = [Support::Supports, Support::Contradicts, Support::SaysNothing];
+    const ALL: [Support; 3] = [
+        Support::Supports,
+        Support::Contradicts,
+        Support::SaysNothing,
+    ];
 }
 
 fn options() -> BTreeMap<OptionId, String> {
@@ -78,7 +82,10 @@ impl CitationJudgment {
 /// Build the request for one durable claim. Every citation must ground the
 /// way the admission gate grounds it; one that does not makes the claim
 /// unaskable, with the reason.
-pub fn request(record: &DurableRecord, catalog: &UnitsCatalog) -> Result<DecisionRequest, &'static str> {
+pub fn request(
+    record: &DurableRecord,
+    catalog: &UnitsCatalog,
+) -> Result<DecisionRequest, &'static str> {
     if record.claim.trim().is_empty() || record.citations.is_empty() {
         return Err("claim lacks text or citations");
     }
@@ -86,10 +93,11 @@ pub fn request(record: &DurableRecord, catalog: &UnitsCatalog) -> Result<Decisio
     let mut quotes = BTreeMap::new();
     let mut questions = BTreeMap::new();
     for (i, c) in record.citations.iter().enumerate() {
-        let (reference, _, _) = ground(&c.case_id, &c.unit_id, &c.quote, catalog).map_err(|e| match e {
-            Ungrounded::NoUnit => "citation has no accepted unit",
-            Ungrounded::NotInQuote => "citation is not in its accepted unit",
-        })?;
+        let (reference, _, _) =
+            ground(&c.case_id, &c.unit_id, &c.quote, catalog).map_err(|e| match e {
+                Ungrounded::NoUnit => "citation has no accepted unit",
+                Ungrounded::NotInQuote => "citation is not in its accepted unit",
+            })?;
         evidence.push(reference);
         quotes.insert(format!("q{i}"), c.quote.clone());
         questions.insert(
@@ -122,7 +130,10 @@ pub fn request(record: &DurableRecord, catalog: &UnitsCatalog) -> Result<Decisio
 
 /// One judgment per citation of `record`. A missing, abstained or unknown
 /// answer is an error: it is recorded as a failure, never as a judgment.
-pub fn judgments(record: &DurableRecord, reply: &DecisionReply) -> Result<Vec<CitationJudgment>, DecisionError> {
+pub fn judgments(
+    record: &DurableRecord,
+    reply: &DecisionReply,
+) -> Result<Vec<CitationJudgment>, DecisionError> {
     (0..record.citations.len())
         .map(|i| match reply.answers.get(&question_id(i)) {
             Some(DecisionAnswer::Choice {
@@ -133,7 +144,9 @@ pub fn judgments(record: &DurableRecord, reply: &DecisionReply) -> Result<Vec<Ci
                 let support = Support::ALL
                     .into_iter()
                     .find(|s| s.id() == selected.0)
-                    .ok_or(DecisionError::InvalidReply("unknown citation support option"))?;
+                    .ok_or(DecisionError::InvalidReply(
+                        "unknown citation support option",
+                    ))?;
                 Ok(CitationJudgment {
                     citation: i,
                     support,
@@ -141,8 +154,12 @@ pub fn judgments(record: &DurableRecord, reply: &DecisionReply) -> Result<Vec<Ci
                     confidence: *confidence,
                 })
             }
-            Some(DecisionAnswer::Abstain { .. }) => Err(DecisionError::InvalidReply("citation support abstained")),
-            _ => Err(DecisionError::InvalidReply("missing citation support answer")),
+            Some(DecisionAnswer::Abstain { .. }) => {
+                Err(DecisionError::InvalidReply("citation support abstained"))
+            }
+            _ => Err(DecisionError::InvalidReply(
+                "missing citation support answer",
+            )),
         })
         .collect()
 }
@@ -151,7 +168,9 @@ pub fn judgments(record: &DurableRecord, reply: &DecisionReply) -> Result<Vec<Ci
 mod tests {
     use super::*;
     use crate::crystal::synth::{CatalogCase, CatalogUnit};
-    use crate::crystal::{CrystalStatus, DurableCitation, FinalClass, ProvenanceClass, StrengthClass};
+    use crate::crystal::{
+        CrystalStatus, DurableCitation, FinalClass, ProvenanceClass, StrengthClass,
+    };
 
     fn record(quotes: &[&str]) -> DurableRecord {
         DurableRecord {
@@ -230,19 +249,31 @@ mod tests {
     #[test]
     fn grounding_follows_the_admission_gate() {
         let unit = "Layer 1: Session Memory\nCLAUDE.md + auto-memory";
-        assert!(request(&record(&["Layer 1: Session Memory CLAUDE.md"]), &catalog(unit)).is_ok());
+        assert!(
+            request(
+                &record(&["Layer 1: Session Memory CLAUDE.md"]),
+                &catalog(unit)
+            )
+            .is_ok()
+        );
         assert_eq!(
             request(&record(&["invented"]), &catalog(unit)).unwrap_err(),
             "citation is not in its accepted unit"
         );
         let mut r = record(&["Layer 1"]);
         r.citations[0].unit_id = "u-missing".into();
-        assert_eq!(request(&r, &catalog(unit)).unwrap_err(), "citation has no accepted unit");
+        assert_eq!(
+            request(&r, &catalog(unit)).unwrap_err(),
+            "citation has no accepted unit"
+        );
     }
 
     fn reply(answers: Vec<(&str, DecisionAnswer)>) -> DecisionReply {
         DecisionReply {
-            answers: answers.into_iter().map(|(k, a)| (QuestionId(k.into()), a)).collect(),
+            answers: answers
+                .into_iter()
+                .map(|(k, a)| (QuestionId(k.into()), a))
+                .collect(),
             receipt: DecisionReceipt {
                 provider: ProviderIdentity {
                     profile_id: "fixture".into(),
@@ -294,7 +325,10 @@ mod tests {
     fn a_missing_unknown_or_abstained_answer_is_a_failure() {
         let r = record(&["a", "b"]);
         assert!(judgments(&r, &reply(vec![("q0", choice("supports", Some(0.9)))])).is_err());
-        let unknown = reply(vec![("q0", choice("supports", None)), ("q1", choice("maybe", None))]);
+        let unknown = reply(vec![
+            ("q0", choice("supports", None)),
+            ("q1", choice("maybe", None)),
+        ]);
         assert!(judgments(&r, &unknown).is_err());
         let abstained = reply(vec![
             ("q0", choice("supports", None)),

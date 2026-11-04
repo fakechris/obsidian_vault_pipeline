@@ -19,24 +19,8 @@ pub fn observe(
     let Some(vault) = vault_root else {
         return;
     };
-    let path = vault.join(".ovp/decisions.json");
-    let settings = match std::fs::metadata(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => {
-            eprintln!("strength shadow: cannot stat settings: {e}");
-            return;
-        }
-        Ok(meta) if meta.len() > 1024 * 1024 => {
-            eprintln!("strength shadow: settings too large");
-            return;
-        }
-        Ok(_) => match load_settings(&path) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("strength shadow: settings unavailable: {e}");
-                return;
-            }
-        },
+    let Some(settings) = vault_settings(vault, "strength shadow") else {
+        return;
     };
     observe_with(
         &settings,
@@ -47,6 +31,30 @@ pub fn observe(
         catalog,
         baseline,
     );
+}
+
+/// The vault's `.ovp/decisions.json`, or None (with a note on stderr when it
+/// exists but cannot be used). Observers never fail the run they watch.
+pub(crate) fn vault_settings(vault: &Path, label: &str) -> Option<DecisionSettings> {
+    let path = vault.join(".ovp/decisions.json");
+    match std::fs::metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            eprintln!("{label}: cannot stat settings: {e}");
+            None
+        }
+        Ok(meta) if meta.len() > 1024 * 1024 => {
+            eprintln!("{label}: settings too large");
+            None
+        }
+        Ok(_) => match load_settings(&path) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("{label}: settings unavailable: {e}");
+                None
+            }
+        },
+    }
 }
 
 fn observe_with(
