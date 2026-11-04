@@ -257,7 +257,7 @@ fn handle_tools_list() -> Result<Value, RpcError> {
                     "properties": {
                         "key": {
                             "type": "string",
-                            "description": "Vault-relative path, sha256 hash, or note title"
+                            "description": "Vault-relative path, sha256 hash, ovp://source/<sha256> URI, or note title"
                         },
                         "offset_line": {
                             "type": "integer",
@@ -1543,6 +1543,9 @@ fn tool_ovp_read_note(state: &McpState, args: &Value) -> Result<Value, RpcError>
             code: -32602,
             message: "`key` is required".into(),
         })?;
+    // Accept the `ovp://source/<sha256>` URI this tool emits, so a reference
+    // copied from another system resolves without the caller rewriting it.
+    let key = key.strip_prefix("ovp://source/").unwrap_or(key);
 
     let cursor_arg = args
         .get("cursor")
@@ -3448,6 +3451,15 @@ Line 5: End of specification.";
         let val_1: Value = serde_json::from_str(&text_of(&read_1)).unwrap();
         assert_eq!(val_1["sha256"], expected_hash);
         assert_eq!(val_1["uri"], format!("ovp://source/{expected_hash}"));
+        // The emitted URI is a valid key: cross-system references cite it as is.
+        let by_uri = call(
+            &state,
+            "ovp_read_note",
+            serde_json::json!({ "key": val_1["uri"], "line_limit": 3 }),
+        )
+        .unwrap();
+        let by_uri: Value = serde_json::from_str(&text_of(&by_uri)).unwrap();
+        assert_eq!(by_uri["path"], val_1["path"]);
         let cursor_1 = val_1["next_cursor"].as_str().unwrap().to_string();
 
         // 4. Continue reading citation via cursor
