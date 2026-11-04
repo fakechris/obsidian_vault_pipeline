@@ -12,9 +12,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use ovp_domain::crystal::{
-    fold_ledger, CrystalStatus, DurableRecord, FinalClass, ReviewEntry, StoreEvent,
+    fold_ledger, CrystalStatus, DurableRecord, FinalClass, ReviewEntry,
 };
 
+use super::crystal_write::read_ledger;
 use crate::CliError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,24 +145,6 @@ fn print_review_lane(review: &[ReviewEntry], verbose: bool) {
         "  → {} claim(s) need human review. Use `crystal-review` to decide: rewrite/split/keep/reject.",
         caveated.len()
     );
-}
-
-fn read_ledger(path: &std::path::Path) -> Result<Vec<StoreEvent>, CliError> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| CliError::Io(format!("reading ledger {}: {e}", path.display())))?;
-    let mut events = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let ev: StoreEvent = serde_json::from_str(line)
-            .map_err(|e| CliError::Io(format!("ledger {} line {}: {e}", path.display(), i + 1)))?;
-        events.push(ev);
-    }
-    Ok(events)
 }
 
 fn read_review(path: &std::path::Path) -> Result<Vec<ReviewEntry>, CliError> {

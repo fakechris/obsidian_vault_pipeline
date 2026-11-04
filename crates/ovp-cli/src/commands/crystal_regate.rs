@@ -21,7 +21,6 @@
 //! decidable check, and belongs to review.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -158,13 +157,9 @@ pub(crate) fn append_events(ledger: &Path, events: &[StoreEvent]) -> Result<(), 
         lines.push_str(&line);
         lines.push('\n');
     }
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(ledger)
-        .map_err(|e| CliError::Io(format!("opening ledger {}: {e}", ledger.display())))?;
-    f.write_all(lines.as_bytes())
-        .map_err(|e| CliError::Io(format!("appending ledger: {e}")))
+    // One write; a failed batch is cut back off the file (INV-1426).
+    ovp_domain::jsonl::append_batch(ledger, &lines)
+        .map_err(|e| CliError::Io(format!("appending ledger {}: {e}", ledger.display())))
 }
 
 /// Edit review.json as raw JSON: drop entries whose `claim_id` is in `drop`,
@@ -412,6 +407,7 @@ mod tests {
     use ovp_domain::SourceDoc;
     use ovp_domain::crystal::{DurableCitation, ProvenanceClass, ReviewLane, StrengthClass};
     use ovp_domain::units::{Unit, validate};
+    use std::io::Write;
 
     const TODAY: (i32, u32, u32) = (2026, 10, 1);
 
@@ -623,6 +619,43 @@ mod tests {
         assert!(review.iter().any(|r| r.claim_id == "c-001"));
         // Rolling back twice is a no-op.
         assert_eq!(rollback(v, &plan.run_id).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_torn_tail_never_swallows_the_next_batch() {
+        // INV-1426: power loss leaves a record prefix at the end of the ledger.
+        let tmp = vault();
+        let ledger = tmp.path().join(".ovp/crystal/ledger.jsonl");
+        let events = read_ledger(&ledger).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&ledger)
+            .unwrap();
+        f.write_all(br#"{"op":"write","record":{"claim_key":"ck-tor"#)
+            .unwrap();
+        drop(f);
+
+        let later = StoreEvent {
+            op: StoreOp::Retract,
+            ..events[1].clone()
+        };
+        append_events(&ledger, std::slice::from_ref(&later)).unwrap();
+
+        // Authoritative reads still fail loud on the torn line, and say what it is.
+        let err = read_ledger(&ledger).unwrap_err().to_string();
+        assert!(
+            err.contains("line 3") && err.contains("incomplete record"),
+            "{err}"
+        );
+
+        // The batch was not glued to the fragment: drop the fragment line and
+        // every committed event, including the new one, reads back.
+        let text = std::fs::read_to_string(&ledger).unwrap();
+        let kept: Vec<&str> = text.lines().filter(|l| !l.contains("ck-tor")).collect();
+        std::fs::write(&ledger, kept.join("\n") + "\n").unwrap();
+        let after = read_ledger(&ledger).unwrap();
+        assert_eq!(after.len(), 3);
+        assert_eq!(after[2].op, StoreOp::Retract);
     }
 
     #[test]

@@ -48,12 +48,54 @@ pub fn append_line(file: &mut File, path: &Path, line: &str) -> std::io::Result<
     write_once(file, &buf)
 }
 
+/// Append `lines` (complete records, each ending in `"\n"`) to the ledger at
+/// `path` in a single write, closing a torn tail first as [`append_line`]
+/// does. All or nothing: if the write fails, the file is cut back to its
+/// length before the call, so a failed batch leaves no partial record for a
+/// strict reader to fail on. Cutting back is only safe when no other appender
+/// can land in between, so the caller must hold the vault `RunLock`, as every
+/// crystal ledger writer does.
+pub fn append_batch(path: &Path, lines: &str) -> std::io::Result<()> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let before = file.metadata()?.len();
+    let mut buf = Vec::with_capacity(lines.len() + TORN_MARKER.len() + 2);
+    if !ends_with_newline_or_empty(path)? {
+        buf.push(b'\n');
+        buf.extend_from_slice(TORN_MARKER);
+        buf.push(b'\n');
+    }
+    buf.extend_from_slice(lines.as_bytes());
+    write_or_cut_back(&mut &file, &file, before, &buf)
+}
+
+/// [`write_once`] through `w`; on failure, truncate `file` back to `before`.
+fn write_or_cut_back<W: Write>(
+    w: &mut W,
+    file: &File,
+    before: u64,
+    buf: &[u8],
+) -> std::io::Result<()> {
+    write_once(w, buf).map_err(|e| match file.set_len(before) {
+        Ok(()) => e,
+        Err(cut) => std::io::Error::new(
+            e.kind(),
+            format!("{e}; cutting the ledger back to {before} bytes also failed: {cut}"),
+        ),
+    })
+}
+
 /// ONE `write(2)` of the whole buffer. Unlike `write_all`, a short write is
 /// NOT retried: the retry would be a second write that a concurrent appender
 /// can land in front of. The partial record is left as a torn tail (the next
 /// append closes it with a marker) and the caller gets an error. Only
 /// `Interrupted`, which writes nothing, is retried.
-pub fn write_once(file: &mut File, buf: &[u8]) -> std::io::Result<()> {
+pub fn write_once<W: Write>(file: &mut W, buf: &[u8]) -> std::io::Result<()> {
     loop {
         match file.write(buf) {
             Ok(n) if n == buf.len() => return Ok(()),
@@ -208,6 +250,77 @@ mod tests {
         let (r, torn) = parse(raw.as_bytes());
         assert_eq!(r.unwrap_err().line, 2);
         assert!(torn.is_empty());
+    }
+
+    /// Accepts the first half of the buffer, then reports a short write — a
+    /// disk filling up mid-batch.
+    struct HalfThenFull<'a>(&'a std::fs::File);
+
+    impl Write for HalfThenFull<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let half = buf.len() / 2;
+            self.0.write_all(&buf[..half])?;
+            Ok(half)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn failed_batch_leaves_the_ledger_at_its_old_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("l.jsonl");
+        append(&path, &rec("一"));
+        let before = std::fs::read(&path).unwrap();
+
+        let file = OpenOptions::new().append(true).open(&path).unwrap();
+        let batch = format!("{}\n{}\n", rec("二"), rec("三"));
+        let err = write_or_cut_back(
+            &mut HalfThenFull(&file),
+            &file,
+            before.len() as u64,
+            batch.as_bytes(),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::WriteZero);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "no partial record left behind"
+        );
+    }
+
+    #[test]
+    fn batch_lands_whole_and_closes_a_torn_tail_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("l.jsonl");
+        append(&path, &rec("一"));
+        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+        f.write_all(&rec("二").as_bytes()[..5]).unwrap();
+        drop(f);
+
+        append_batch(&path, &format!("{}\n{}\n", rec("三"), rec("四"))).unwrap();
+        let (r, torn) = parse(&std::fs::read(&path).unwrap());
+        let titles: Vec<_> = r.unwrap().into_iter().map(|r| r.title).collect();
+        assert_eq!(
+            titles,
+            ["一", "三", "四"],
+            "the batch is not glued to the fragment"
+        );
+        assert_eq!(torn, [2]);
+    }
+
+    #[test]
+    fn batch_creates_a_missing_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("l.jsonl");
+        append_batch(&path, &format!("{}\n", rec("一"))).unwrap();
+        append_batch(&path, "").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("{}\n", rec("一"))
+        );
     }
 
     #[test]
