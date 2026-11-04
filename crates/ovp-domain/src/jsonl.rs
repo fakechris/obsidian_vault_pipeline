@@ -52,9 +52,9 @@ pub fn append_line(file: &mut File, path: &Path, line: &str) -> std::io::Result<
 /// `path` in a single write, closing a torn tail first as [`append_line`]
 /// does. All or nothing: if the write fails, the file is cut back to its
 /// length before the call, so a failed batch leaves no partial record for a
-/// strict reader to fail on. Cutting back is only safe when no other appender
-/// can land in between, so the caller must hold the vault `RunLock`, as every
-/// crystal ledger writer does.
+/// strict reader to fail on — unless another appender landed after it, in
+/// which case the fragment stays as a torn tail for the next append to close
+/// (see [`write_or_cut_back`]).
 pub fn append_batch(path: &Path, lines: &str) -> std::io::Result<()> {
     if lines.is_empty() {
         return Ok(());
@@ -74,20 +74,40 @@ pub fn append_batch(path: &Path, lines: &str) -> std::io::Result<()> {
     write_or_cut_back(&mut &file, &file, before, &buf)
 }
 
-/// [`write_once`] through `w`; on failure, truncate `file` back to `before`.
+/// One write of `buf` through `w`. On a short or failed write, truncate
+/// `file` back to `before`, but only if the file is exactly what this write
+/// left: `before` plus our partial bytes. Anything longer means another
+/// appender (one not holding the vault lock, e.g. a diagnostic `--store`)
+/// landed in between, and cutting back would delete its records; the
+/// fragment is then left as a torn tail, which the next append closes.
 fn write_or_cut_back<W: Write>(
     w: &mut W,
     file: &File,
     before: u64,
     buf: &[u8],
 ) -> std::io::Result<()> {
-    write_once(w, buf).map_err(|e| match file.set_len(before) {
-        Ok(()) => e,
-        Err(cut) => std::io::Error::new(
-            e.kind(),
-            format!("{e}; cutting the ledger back to {before} bytes also failed: {cut}"),
-        ),
-    })
+    let (written, err) = loop {
+        match w.write(buf) {
+            Ok(n) if n == buf.len() => return Ok(()),
+            Ok(n) => {
+                let msg = format!("short write: {n} of {} bytes (disk full?)", buf.len());
+                break (n, std::io::Error::new(std::io::ErrorKind::WriteZero, msg));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            // A failed `write` wrote nothing.
+            Err(e) => return Err(e),
+        }
+    };
+    if file.metadata()?.len() != before + written as u64 {
+        return Err(err);
+    }
+    match file.set_len(before) {
+        Ok(()) => Err(err),
+        Err(cut) => Err(std::io::Error::new(
+            err.kind(),
+            format!("{err}; cutting the ledger back to {before} bytes also failed: {cut}"),
+        )),
+    }
 }
 
 /// ONE `write(2)` of the whole buffer. Unlike `write_all`, a short write is
@@ -95,7 +115,7 @@ fn write_or_cut_back<W: Write>(
 /// can land in front of. The partial record is left as a torn tail (the next
 /// append closes it with a marker) and the caller gets an error. Only
 /// `Interrupted`, which writes nothing, is retried.
-pub fn write_once<W: Write>(file: &mut W, buf: &[u8]) -> std::io::Result<()> {
+pub fn write_once(file: &mut File, buf: &[u8]) -> std::io::Result<()> {
     loop {
         match file.write(buf) {
             Ok(n) if n == buf.len() => return Ok(()),
@@ -289,6 +309,47 @@ mod tests {
             before,
             "no partial record left behind"
         );
+    }
+
+    /// Another appender lands its record first, then this write comes up
+    /// short — an unlocked writer racing this one.
+    struct RacedThenHalf<'a>(&'a std::fs::File, String);
+
+    impl Write for RacedThenHalf<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.write_all(self.1.as_bytes())?;
+            HalfThenFull(self.0).write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_failed_batch_never_cuts_away_another_appenders_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("l.jsonl");
+        append(&path, &rec("一"));
+        let before = std::fs::metadata(&path).unwrap().len();
+
+        let file = OpenOptions::new().append(true).open(&path).unwrap();
+        let batch = format!("{}\n", rec("三"));
+        let other = format!("{}\n", rec("二"));
+        let err = write_or_cut_back(
+            &mut RacedThenHalf(&file, other),
+            &file,
+            before,
+            batch.as_bytes(),
+        );
+        assert!(err.is_err());
+
+        // Not cut back: the other record survives; our fragment is a torn tail
+        // that the next append closes.
+        append(&path, &rec("四"));
+        let (r, torn) = parse(&std::fs::read(&path).unwrap());
+        let titles: Vec<_> = r.unwrap().into_iter().map(|r| r.title).collect();
+        assert_eq!(titles, ["一", "二", "四"]);
+        assert_eq!(torn, [3]);
     }
 
     #[test]

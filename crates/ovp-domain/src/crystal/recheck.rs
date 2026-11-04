@@ -353,18 +353,11 @@ pub fn build_grounding_index(packs_dir: &Path) -> Result<GroundingIndex, String>
 /// all of them then reports as intact — staleness is measured from citation
 /// defects, and a claim with no citations has none.
 pub fn durable_from_ledger(path: &Path) -> Result<CrystalCandidate, String> {
-    let text =
-        std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
-    let mut events: Vec<StoreEvent> = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let ev: StoreEvent = serde_json::from_str(line)
-            .map_err(|e| format!("{}:{}: {e}", path.display(), i + 1))?;
-        events.push(ev);
-    }
+    let raw = std::fs::read(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    // Strict, but skips the torn-line markers `jsonl::append_batch` writes.
+    let strict = crate::jsonl::TornLines::<fn(usize)>::Fail;
+    let events: Vec<StoreEvent> = crate::jsonl::parse_ledger(&raw, strict)
+        .map_err(|bad| format!("{}:{}: {}", path.display(), bad.line, bad.error))?;
     let items = fold_ledger(&events)
         .into_iter()
         .filter(|r| r.status == CrystalStatus::Active && r.final_class == FinalClass::Durable)
@@ -765,6 +758,24 @@ mod loader_tests {
             &[r#"{"op":"write","record":{"claim_key":"ck-1","claim_id":"ck-1","claim":"a","theme":"t","source_cases":[],"citations":[{"case_id":"c","unit_id":123,"quote":"q"}],"provenance_score":1.0,"provenance_class":"durable","strength":"supported","strength_rationale":"r","final_class":"durable","run_id":"r1","status":"active"}}"#],
         );
         assert!(durable_from_ledger(&p).is_err());
+    }
+
+    #[test]
+    fn torn_line_markers_are_skipped_but_a_torn_record_still_fails() {
+        // `jsonl::append_batch` closes a torn tail with a marker line (INV-1426).
+        let marker = std::str::from_utf8(crate::jsonl::TORN_MARKER).unwrap();
+        let write = format!(
+            r#"{{"op":"write","record":{}}}"#,
+            rec("ck-1", "a", "durable", "u-1")
+        );
+        let d = tmp("marker");
+        let p = write_ledger(d.path(), &[&write, marker, &write]);
+        assert_eq!(durable_from_ledger(&p).unwrap().items.len(), 1);
+        let p = write_ledger(d.path(), &[&write, r#"{"op":"wri"#, marker, &write]);
+        assert!(
+            durable_from_ledger(&p).is_err(),
+            "strict: the torn record fails loud"
+        );
     }
 
     #[test]

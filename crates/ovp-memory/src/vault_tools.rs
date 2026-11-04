@@ -795,17 +795,13 @@ pub fn load_active_records(vault_root: &Path) -> Result<Vec<DurableRecord>, Stri
     let ledger = vault_root
         .join(VaultLayout::new().crystal_store_dir())
         .join("ledger.jsonl");
-    let raw = std::fs::read_to_string(&ledger)
-        .map_err(|e| format!("reading {}: {e}", ledger.display()))?;
-    let mut events = Vec::new();
-    for (line_index, line) in raw.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let event = serde_json::from_str::<StoreEvent>(line)
-            .map_err(|e| format!("parsing {} line {}: {e}", ledger.display(), line_index + 1))?;
-        events.push(event);
-    }
+    let raw = std::fs::read(&ledger).map_err(|e| format!("reading {}: {e}", ledger.display()))?;
+    // Strict, but skips the torn-line markers `jsonl::append_batch` writes.
+    let strict = ovp_domain::jsonl::TornLines::<fn(usize)>::Fail;
+    let events: Vec<StoreEvent> = ovp_domain::jsonl::parse_ledger(&raw, strict).map_err(|bad| {
+        let (file, line, error) = (ledger.display(), bad.line, bad.error);
+        format!("parsing {file} line {line}: {error}")
+    })?;
     Ok(fold_ledger(&events)
         .into_iter()
         .filter(|record| record.status == CrystalStatus::Active)
@@ -6092,6 +6088,33 @@ mod tests {
             ToolOutcome::Failed(ref detail) if detail.contains("claim ledger unavailable")
         ));
         assert_eq!(tools.coverage().claims, LayerState::Unavailable);
+    }
+
+    #[test]
+    fn ledger_torn_line_markers_are_skipped() {
+        // `jsonl::append_batch` closes a torn tail with a marker line (INV-1426).
+        let temp = tempfile::tempdir().expect("temp vault");
+        write_ledger(
+            temp.path(),
+            &[
+                record("ck-a", "c-a", "case-a"),
+                record("ck-b", "c-b", "case-b"),
+            ],
+        );
+        let ledger = temp
+            .path()
+            .join(VaultLayout::new().crystal_store_dir())
+            .join("ledger.jsonl");
+        let body = fs::read_to_string(&ledger).expect("ledger");
+        let (first, rest) = body.split_once('\n').expect("two lines");
+        let marker = std::str::from_utf8(ovp_domain::jsonl::TORN_MARKER).expect("utf-8");
+        fs::write(&ledger, format!("{first}\n{marker}\n{rest}")).expect("rewrite");
+        let keys: Vec<String> = load_active_records(temp.path())
+            .expect("marker is not a record")
+            .into_iter()
+            .map(|r| r.claim_key)
+            .collect();
+        assert_eq!(keys.len(), 2, "{keys:?}");
     }
 
     #[test]
