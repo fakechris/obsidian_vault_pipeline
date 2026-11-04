@@ -132,7 +132,8 @@ resolve references, one hop at a time.
 
 | Prefix | Owner | Resolve with |
 |---|---|---|
-| `ovp://source/<sha256>` · `ovp://claim/<claim_key>` · `ovp://theme-page/<id>` | OVP (this repo's MCP) | `resources/read` with the URI as is, or `ovp_read_note` / `claim` |
+| `ovp://source/<sha256>` · `ovp://claim/<claim_key>` | OVP (this repo's MCP) | `resources/read` with the URI as is, or `ovp_read_note` / `claim` |
+| `ovp://theme-page/<id>` | OVP (this repo's MCP) | `resources/read` with the URI as is, or `theme_page` |
 | `inv:INV-<n>` | Involute (remote) | `work_get_context` |
 | `pop:<provider>:<session_id>#<message_id>@<revision>` | planofplan (local) | `read_session` for the full `SourceRef`, then `read_message` |
 
