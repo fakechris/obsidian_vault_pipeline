@@ -27,6 +27,7 @@ import {
   fetchThemeGraph,
 } from '../lib/api';
 import {
+  citationSupportMark,
   closureNodeIds,
   focusBounds,
   groupCommunities,
@@ -1008,6 +1009,23 @@ export default function KnowledgeGraph({
                       <div className="graph-evidence-quote">
                         “{c.quote.length > MAX_QUOTE_LENGTH ? `${c.quote.slice(0, MAX_QUOTE_LENGTH)}…` : c.quote}”
                       </div>
+                      {(() => {
+                        const mark = citationSupportMark(c);
+                        if (!mark) return null;
+                        return (
+                          <span
+                            className={`pill ${mark.kind === 'contradicts' ? 'failed' : 'caveated'}`}
+                            title={t('graph.evidenceSupportHint')}
+                          >
+                            {t(
+                              mark.kind === 'contradicts'
+                                ? 'graph.evidenceContradicts'
+                                : 'graph.evidenceSaysNothing',
+                              { pct: mark.pct },
+                            )}
+                          </span>
+                        );
+                      })()}
                       <div className="tiny muted">
                         {c.unit_id}
                         {c.resolved_line != null &&

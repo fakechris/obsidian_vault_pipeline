@@ -2,6 +2,7 @@
  * and Library pages render is computed here so it stays testable and the
  * components stay dumb. */
 import type {
+  CitationDetail,
   ClaimRow,
   IndexModel,
   LastRunModel,
@@ -1994,4 +1995,21 @@ export interface ScheduleJobLike {
   last_run?: string;
   last_error?: string | null;
   consecutive_failures?: number;
+}
+
+// ------------------------------------------------- citation support (INV-1422)
+
+export interface CitationSupportMark {
+  kind: 'says_nothing' | 'contradicts';
+  /** Confidence as a whole percentage. */
+  pct: number;
+}
+
+/** The mark a citation carries on the claim page: only when the server
+ *  flagged it as confidently not supporting the claim. The threshold lives on
+ *  the server; the page never re-derives it. */
+export function citationSupportMark(c: Pick<CitationDetail, 'support'>): CitationSupportMark | null {
+  const s = c.support;
+  if (!s?.flagged || s.support === 'supports' || s.confidence == null) return null;
+  return { kind: s.support, pct: Math.round(s.confidence * 100) };
 }

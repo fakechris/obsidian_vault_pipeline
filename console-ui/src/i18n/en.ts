@@ -413,6 +413,10 @@ export const en = {
   'graph.lineageSupersedes': 'supersedes {key}',
   'graph.lineageSupersededBy': 'superseded by {key}',
   'graph.evidenceLine': 'line {n}',
+  'graph.evidenceSaysNothing': 'Unrelated to the claim · {pct}%',
+  'graph.evidenceContradicts': 'Contradicts the claim · {pct}%',
+  'graph.evidenceSupportHint':
+    'A separate check judged that this quote does not back the claim. The claim keeps its grade; review the citation.',
   'graph.no3d': '3D needs WebGL, which is unavailable in this browser.',
   'graph.controls3d': 'Drag to rotate · scroll to zoom · right-drag to pan',
   'graph.focusCommunity': 'Focus this community',

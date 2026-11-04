@@ -401,6 +401,9 @@ export const zh: Record<keyof typeof en, string> = {
   'graph.lineageSupersedes': '取代 {key}',
   'graph.lineageSupersededBy': '被 {key} 取代',
   'graph.evidenceLine': '第 {n} 行',
+  'graph.evidenceSaysNothing': '与结论无关 · {pct}%',
+  'graph.evidenceContradicts': '与结论矛盾 · {pct}%',
+  'graph.evidenceSupportHint': '另一道检查判定这段引文不支撑结论。结论的分级不变，请人工核对这条引用。',
   'graph.noPage': '旧源——该 vault 中没有对应的详情页。',
   'graph.cardHint': '这是本源的记忆——完整卡片在"记忆"标签页。',
 

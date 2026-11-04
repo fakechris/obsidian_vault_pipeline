@@ -52,6 +52,14 @@ export interface GraphResponse {
   truncated: boolean;
 }
 
+/** Shadow answer to "does this quote back the claim?" (INV-1422). Never
+ *  changes the claim's grade; `flagged` = confidently not supporting. */
+export interface CitationSupport {
+  support: 'supports' | 'contradicts' | 'says_nothing';
+  confidence: number | null;
+  flagged: boolean;
+}
+
 export interface CitationDetail {
   unit_id: string;
   unit_text: string;
@@ -61,6 +69,8 @@ export interface CitationDetail {
   source_title: string;
   source_url: string;
   source_sha256: string;
+  /** Live server only; absent when the shadow has not judged this citation. */
+  support?: CitationSupport;
 }
 
 export interface ClaimDetail {
