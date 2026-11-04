@@ -45,8 +45,18 @@ pub(crate) fn check(vault_root: &Path, findings: &mut Vec<Finding>) {
         .collect();
     let (mut answered, mut flagged_claims, mut flagged) = (0, 0, 0);
     for r in &active {
-        let answers: Vec<_> = (0..r.citations.len())
-            .filter_map(|i| judged.get(&(r.claim_key.clone(), i)))
+        let answers: Vec<_> = r
+            .citations
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                judged.get(
+                    &r.claim_key,
+                    i,
+                    &r.claim,
+                    (&c.case_id, &c.unit_id, &c.quote),
+                )
+            })
             .collect();
         answered += usize::from(!answers.is_empty());
         let n = answers.iter().filter(|j| j.flagged).count();
@@ -123,7 +133,9 @@ mod tests {
     }
 
     fn row(key: &str, i: usize, support: &str, confidence: f64) -> String {
-        serde_json::json!({"claim_key":key,"citation":i,"status":"judged","support":support,"confidence":confidence})
+        // Matches `event`'s record: claim "c", case "a", unit "u{i}", quote "q".
+        let fp = ovp_domain::citation_support::fingerprint("c", "a", &format!("u{i}"), "q");
+        serde_json::json!({"claim_key":key,"citation":i,"status":"judged","support":support,"confidence":confidence,"fingerprint":fp})
             .to_string()
     }
 

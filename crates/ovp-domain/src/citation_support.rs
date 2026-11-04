@@ -83,6 +83,19 @@ impl CitationJudgment {
     }
 }
 
+/// What a judgment was about: the claim text and one citation. A rewrite can
+/// keep a claim's `claim_key` while changing or reordering its quotes, so a
+/// judgment is shown only while this still matches the record.
+pub fn fingerprint(claim: &str, case_id: &str, unit_id: &str, quote: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    for part in [claim, case_id, unit_id, quote] {
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part.as_bytes());
+    }
+    format!("{:x}", hash.finalize())
+}
+
 /// The latest recorded answer for one citation, read back from
 /// `citation-support.jsonl`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -90,6 +103,30 @@ pub struct Judged {
     pub support: Support,
     pub confidence: Option<f64>,
     pub flagged: bool,
+    #[serde(skip)]
+    fingerprint: Option<String>,
+}
+
+/// Latest judgments by `(claim_key, citation)`; read them with [`Judgments::get`].
+#[derive(Debug, Default)]
+pub struct Judgments(BTreeMap<(String, usize), Judged>);
+
+impl Judgments {
+    /// The judgment for citation `citation` of the claim, only if it was made
+    /// about exactly this claim text and quote. A stale one is not shown, and
+    /// an older one never stands in for it.
+    pub fn get(
+        &self,
+        claim_key: &str,
+        citation: usize,
+        claim: &str,
+        cited: (&str, &str, &str),
+    ) -> Option<&Judged> {
+        let (case_id, unit_id, quote) = cited;
+        let judged = self.0.get(&(claim_key.to_string(), citation))?;
+        let current = fingerprint(claim, case_id, unit_id, quote);
+        (judged.fingerprint.as_deref() == Some(current.as_str())).then_some(judged)
+    }
 }
 
 #[derive(Deserialize)]
@@ -101,12 +138,14 @@ struct Row {
     support: Option<Support>,
     #[serde(default)]
     confidence: Option<f64>,
+    #[serde(default)]
+    fingerprint: Option<String>,
 }
 
 /// The latest judged row per `(claim_key, citation)`. Failed rows never
 /// replace an earlier judgment; a torn final line (a run cut off mid-write) is
 /// skipped. Any other malformed line is an error.
-pub fn latest_judged(raw: &[u8]) -> Result<BTreeMap<(String, usize), Judged>, String> {
+pub fn latest_judged(raw: &[u8]) -> Result<Judgments, String> {
     let rows: Vec<Row> = crate::jsonl::parse_ledger(raw, crate::jsonl::TornLines::Skip(|_| {}))
         .map_err(|bad| format!("line {}: {}", bad.line, bad.error))?;
     let mut latest = BTreeMap::new();
@@ -119,11 +158,12 @@ pub fn latest_judged(raw: &[u8]) -> Result<BTreeMap<(String, usize), Judged>, St
                     support,
                     confidence: row.confidence,
                     flagged,
+                    fingerprint: row.fingerprint,
                 },
             );
         }
     }
-    Ok(latest)
+    Ok(Judgments(latest))
 }
 
 /// Build the request for one durable claim. Every citation must ground the
@@ -370,29 +410,47 @@ mod tests {
 
     #[test]
     fn latest_judged_keeps_the_newest_judgment_and_ignores_failures() {
-        let row = |key: &str, i: usize, status: &str, support: &str, conf: f64| {
-            json!({"claim_key": key, "citation": i, "status": status, "support": support, "confidence": conf})
-                .to_string()
+        let claim = "Agents need memory";
+        let fp = |q: &str| fingerprint(claim, "c", "u", q);
+        let row = |key: &str, i: usize, status: &str, support: &str, conf: f64, quote: &str| {
+            json!({"claim_key": key, "citation": i, "status": status, "support": support,
+                   "confidence": conf, "fingerprint": fp(quote)})
+            .to_string()
         };
         let raw = [
-            row("ck-1", 0, "judged", "supports", 0.9),
-            row("ck-1", 1, "judged", "says_nothing", 0.95),
-            row("ck-1", 1, "judged", "supports", 0.7),
-            json!({"claim_key": "ck-1", "citation": 0, "status": "failed", "error": "x"})
-                .to_string(),
-            row("ck-2", 0, "judged", "contradicts", 0.85),
-            r#"{"claim_key":"ck-3","cit"#.to_string(),
+            row("ck-1", 0, "judged", "supports", 0.9, "a"),
+            row("ck-1", 1, "judged", "says_nothing", 0.95, "b"),
+            row("ck-1", 1, "judged", "supports", 0.7, "b"),
+            json!({"claim_key": "ck-1", "citation": 0, "status": "failed", "error": "x"}).to_string(),
+            row("ck-2", 0, "judged", "contradicts", 0.85, "a"),
+            json!({"claim_key": "ck-3", "citation": 0, "status": "judged", "support": "contradicts",
+                   "confidence": 0.9})
+            .to_string(),
+            r#"{"claim_key":"ck-4","cit"#.to_string(),
         ]
         .join("\n");
         let got = latest_judged(raw.as_bytes()).unwrap();
-        assert_eq!(got.len(), 3);
+        let get = |key: &str, i: usize, quote: &str| got.get(key, i, claim, ("c", "u", quote));
         assert_eq!(
-            got[&("ck-1".into(), 0)].support,
+            get("ck-1", 0, "a").unwrap().support,
             Support::Supports,
             "a failure keeps the judgment"
         );
-        assert!(!got[&("ck-1".into(), 1)].flagged, "the newer answer wins");
-        assert!(got[&("ck-2".into(), 0)].flagged);
+        assert!(
+            !get("ck-1", 1, "b").unwrap().flagged,
+            "the newer answer wins"
+        );
+        assert!(get("ck-2", 0, "a").unwrap().flagged);
+        // The record changed since it was judged: the old answer is not shown.
+        assert!(get("ck-2", 0, "a different quote").is_none());
+        assert!(
+            got.get("ck-2", 0, "another claim", ("c", "u", "a"))
+                .is_none()
+        );
+        assert!(
+            get("ck-3", 0, "a").is_none(),
+            "a row without a fingerprint is never shown"
+        );
         assert!(latest_judged(b"not json\n{}\n").is_err());
     }
 

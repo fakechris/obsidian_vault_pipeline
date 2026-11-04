@@ -136,6 +136,7 @@ fn rows_for(record: &DurableRecord, outcome: Result<Answered, String>) -> Vec<Va
                 "case_id": c.case_id,
                 "unit_id": c.unit_id,
                 "question": citation_support::NAMESPACE,
+                "fingerprint": citation_support::fingerprint(&record.claim, &c.case_id, &c.unit_id, &c.quote),
             });
             match &outcome {
                 Ok(a) => {
@@ -388,6 +389,12 @@ mod tests {
         );
         assert_eq!(got[1]["flagged"], true);
         assert_eq!(got[1]["model"], "synthetic-v1");
+        let fp = citation_support::fingerprint("Agents need memory", "c", "u", "Memory is needed");
+        assert_eq!(
+            got[1]["fingerprint"],
+            json!(fp),
+            "the row names what it judged"
+        );
         assert_eq!(got[1]["question"], citation_support::NAMESPACE);
         assert!(
             got[1]["request_key"]

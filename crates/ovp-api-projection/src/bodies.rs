@@ -239,12 +239,17 @@ pub fn annotate_citation_support(body: &mut Value, store_dir: &Path) {
             return;
         }
     };
-    let Some(key) = body["claim_key"].as_str().map(str::to_string) else {
+    let (Some(key), Some(claim)) = (
+        body["claim_key"].as_str().map(str::to_string),
+        body["claim"].as_str().map(str::to_string),
+    ) else {
         return;
     };
     if let Some(citations) = body["citations"].as_array_mut() {
         for (i, citation) in citations.iter_mut().enumerate() {
-            if let Some(j) = judged.get(&(key.clone(), i)) {
+            let field = |name: &str| citation[name].as_str().unwrap_or("").to_string();
+            let cited = (field("case_id"), field("unit_id"), field("quote"));
+            if let Some(j) = judged.get(&key, i, &claim, (&cited.0, &cited.1, &cited.2)) {
                 citation["support"] = json!(j);
             }
         }
@@ -459,20 +464,28 @@ mod citation_support_tests {
     #[test]
     fn citations_get_their_latest_judgment_and_nothing_else_changes() {
         let tmp = tempfile::tempdir().unwrap();
+        let fp = |q: &str| ovp_domain::citation_support::fingerprint("claim", "c", "u", q);
         let rows = [
-            json!({"claim_key":"ck-1","citation":1,"status":"judged","support":"says_nothing","confidence":0.95}),
-            json!({"claim_key":"ck-2","citation":0,"status":"judged","support":"contradicts","confidence":0.9}),
+            json!({"claim_key":"ck-1","citation":1,"status":"judged","support":"says_nothing","confidence":0.95,"fingerprint":fp("b")}),
+            json!({"claim_key":"ck-2","citation":0,"status":"judged","support":"contradicts","confidence":0.9,"fingerprint":fp("a")}),
         ]
         .map(|r| r.to_string())
         .join("\n");
         std::fs::write(tmp.path().join("citation-support.jsonl"), rows).unwrap();
-        let mut body = json!({"claim_key":"ck-1","citations":[{"quote":"a"},{"quote":"b"}]});
+        let cit = |q: &str| json!({"quote": q, "case_id": "c", "unit_id": "u"});
+        let mut body = json!({"claim_key":"ck-1","claim":"claim","citations":[cit("a"), cit("b")]});
         annotate_citation_support(&mut body, tmp.path());
         assert!(body["citations"][0].get("support").is_none());
         assert_eq!(
             body["citations"][1]["support"],
             json!({"support":"says_nothing","confidence":0.95,"flagged":true})
         );
+
+        // The quote changed since it was judged: no stale answer is shown.
+        let mut changed =
+            json!({"claim_key":"ck-1","claim":"claim","citations":[cit("a"), cit("b2")]});
+        annotate_citation_support(&mut changed, tmp.path());
+        assert!(changed["citations"][1].get("support").is_none());
 
         // No file, or a corrupt one: the body is left as it was.
         let before = body.clone();

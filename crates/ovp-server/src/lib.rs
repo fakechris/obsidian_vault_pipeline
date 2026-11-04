@@ -8522,8 +8522,16 @@ mod tests {
         let v = body_json(dispatch(&st, Method::Get, "/api/claim/a", ""));
         assert!(v["citations"][0].get("support").is_none(), "no answers yet");
 
+        let c = &v["citations"][0];
+        let s = |x: &serde_json::Value| x.as_str().unwrap().to_string();
+        let fp = ovp_domain::citation_support::fingerprint(
+            &s(&v["claim"]),
+            &s(&c["case_id"]),
+            &s(&c["unit_id"]),
+            &s(&c["quote"]),
+        );
         let row = serde_json::json!({"claim_key":"a","citation":0,"status":"judged",
-                                     "support":"says_nothing","confidence":0.92});
+                                     "support":"says_nothing","confidence":0.92,"fingerprint":fp});
         std::fs::write(
             vault.join(".ovp/crystal/citation-support.jsonl"),
             row.to_string() + "\n",
