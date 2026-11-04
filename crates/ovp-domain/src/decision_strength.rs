@@ -58,22 +58,38 @@ fn lines_before(s: &str, byte: usize) -> u32 {
     s.as_bytes()[..byte].iter().filter(|b| **b == b'\n').count() as u32
 }
 
-/// Evidence for one citation, or why it cannot be asked about. Grounding uses
-/// the admission gate's own test (exact → whitespace → rendered), so anything
-/// the gate accepted can be asked about (INV-1410).
-fn cite(
-    c: &crate::crystal::Citation,
-    catalog: &UnitsCatalog,
-) -> Result<(EvidenceRef, serde_json::Value), &'static str> {
+/// Why a citation cannot be asked about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ungrounded {
+    NoUnit,
+    NotInQuote,
+}
+
+/// Locate a cited quote in its accepted unit with the admission gate's own
+/// test (exact → whitespace → rendered), so anything the gate accepted can be
+/// asked about (INV-1410). Shared by every question that cites units.
+pub(crate) fn ground<'a>(
+    case_id: &str,
+    unit_id: &str,
+    quote: &str,
+    catalog: &'a UnitsCatalog,
+) -> Result<
+    (
+        EvidenceRef,
+        &'a crate::crystal::synth::CatalogUnit,
+        crate::units::MatchKind,
+    ),
+    Ungrounded,
+> {
     let unit = catalog
         .cases
-        .get(&c.case_id)
-        .and_then(|case| case.units.iter().find(|u| u.unit_id == c.unit_id))
-        .ok_or("strength citation has no accepted unit")?;
-    let (start, end, kind) = (!c.quote.trim().is_empty())
-        .then(|| crate::units::validator::locate(&unit.quote, &c.quote))
+        .get(case_id)
+        .and_then(|case| case.units.iter().find(|u| u.unit_id == unit_id))
+        .ok_or(Ungrounded::NoUnit)?;
+    let (start, end, kind) = (!quote.trim().is_empty())
+        .then(|| crate::units::validator::locate(&unit.quote, quote))
         .flatten()
-        .ok_or("strength citation is not in accepted quote")?;
+        .ok_or(Ungrounded::NotInQuote)?;
     // Coordinates refer to the accepted unit quote, not the reader file. A
     // rendered match spans the whole quote: its sub-offsets are not recoverable.
     // A whitespace-tier range ends at the next non-space char, so drop the
@@ -82,11 +98,24 @@ fn cite(
     let start_line = lines_before(&unit.quote, start) + 1;
     let end_line = lines_before(&unit.quote, end.saturating_sub(1).max(start)) + 1;
     let evidence = EvidenceRef {
-        source_id: format!("{}:{}", c.case_id, c.unit_id),
+        source_id: format!("{case_id}:{unit_id}"),
         revision: format!("{:x}", Sha256::digest(unit.quote.as_bytes())),
         start_line,
         end_line,
     };
+    Ok((evidence, unit, kind))
+}
+
+/// Evidence for one strength citation, or why it cannot be asked about.
+fn cite(
+    c: &crate::crystal::Citation,
+    catalog: &UnitsCatalog,
+) -> Result<(EvidenceRef, serde_json::Value), &'static str> {
+    let (evidence, unit, kind) =
+        ground(&c.case_id, &c.unit_id, &c.quote, catalog).map_err(|e| match e {
+            Ungrounded::NoUnit => "strength citation has no accepted unit",
+            Ungrounded::NotInQuote => "strength citation is not in accepted quote",
+        })?;
     let mut citation = json!({"quote":c.quote,"case_id":c.case_id,"unit_id":c.unit_id,"attribution":unit.attribution,"modality":unit.modality,"source_view":"accepted_unit_quote/v1"});
     // Only non-exact matches carry the tier, so exact requests stay
     // byte-identical to those recorded before this field existed.

@@ -746,6 +746,17 @@ pub(crate) fn run_stats(args: CrystalSynthArgs) -> Result<RunStats, CliError> {
         processed_review_ids: std::collections::BTreeSet::new(),
         holds_vault_lock: vault_lock.is_some(),
     })?;
+    // Off-by-default per-citation support check on the claims just written
+    // (INV-1422). Records answers only; the ledger and review queue are done.
+    // Settings and cassettes come from the vault the rows are written to, as
+    // for the run lock.
+    let support_vault = crate::commands::crystal_write::vault_of_crystal_store(&paths.store);
+    super::crystal_citation_support::observe(
+        support_vault.as_deref(),
+        &paths.store,
+        &outcome.appended_records,
+        &catalog,
+    );
 
     // --- Summary (mirrors crystal-write). ---
     println!("crystal-synth: run_id={}", outcome.run_id);
@@ -1368,6 +1379,36 @@ mod tests {
         assert_eq!(
             lines2, 1,
             "re-run appends nothing (idempotent by claim_key)"
+        );
+
+        // INV-1422: the citation-support shadow, writing into a fresh store,
+        // leaves the ledger and review queue byte-identical to a run without
+        // it, and records every citation of the claim it wrote. The replay
+        // cassette is missing, so each row is a recorded failure.
+        let review = std::fs::read(store.join("review.json")).unwrap();
+        std::fs::write(tmp.path().join(".ovp/decisions.json"), r#"{"profiles":{"p":{"id":"p","provider":"fixture","endpoint":"fixture://citation","model":"synthetic-v1","credential_ref":"UNUSED"}},"capabilities":{"citation_support":{"mode":"shadow","execution":"replay","profile":"p","question_namespace":"citation_support/v1","experiment":null}}}"#).unwrap();
+        // The store is the vault's own crystal store: settings and cassettes
+        // come from the vault the rows are written to.
+        let fresh = tmp.path().join(".ovp/crystal");
+        let mut cs_args = mk_args();
+        cs_args.vault_root = Some(tmp.path().to_path_buf());
+        cs_args.store = Some(fresh.clone());
+        run(cs_args).expect("citation shadow run ok");
+        assert_eq!(
+            std::fs::read_to_string(fresh.join("ledger.jsonl")).unwrap(),
+            ledger
+        );
+        assert_eq!(std::fs::read(fresh.join("review.json")).unwrap(), review);
+        let rows = std::fs::read_to_string(fresh.join("citation-support.jsonl")).unwrap();
+        let rows: Vec<serde_json::Value> = rows
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "one row per citation of the claim written");
+        assert!(rows.iter().all(|r| r["status"] == "failed"), "{rows:?}");
+        assert!(
+            !store.join("citation-support.jsonl").exists(),
+            "off: nothing written"
         );
     }
 

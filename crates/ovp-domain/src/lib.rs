@@ -18,6 +18,7 @@ pub mod knowledge_index;
 /// matcher; fail-loud (a non-grounded claim can never be durable). No durable
 /// write / graph / Referent. See `docs/stage-m22-crystal-gates.md`.
 pub mod crystal;
+pub mod citation_support;
 pub mod decision_strength;
 /// One diagnostic shape shared by lint / doctor / crystal-lint (pure projection).
 pub mod diagnostics;
