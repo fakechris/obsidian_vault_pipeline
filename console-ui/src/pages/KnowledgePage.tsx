@@ -18,7 +18,7 @@ import KnowledgeGraph from '../components/KnowledgeGraph';
 const KnowledgeTerrain = lazy(() => import('../components/KnowledgeTerrain'));
 import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
-import { fetchThemes } from '../lib/api';
+import { fetchPortalSummary, fetchThemes } from '../lib/api';
 import {
   caseCanonicalIds,
   isMiscTheme,
@@ -27,6 +27,7 @@ import {
   resolveKnowledgeWallSort,
   sortThemeWall,
   sourceDaysByCase,
+  themesFromPortalSummary,
   themeRoute,
   themeSourceBadge,
   themeWall,
@@ -146,13 +147,22 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
   const [themes, setThemes] = useState<ThemeCount[]>([]);
   useEffect(() => {
     let cancelled = false;
-    fetchThemes()
-      .then((list) => {
-        if (!cancelled) setThemes(list);
+    const applyThemes = (list: ThemeCount[]) => {
+      if (!cancelled) setThemes(list);
+    };
+    fetchPortalSummary()
+      .then((summary) => {
+        if (cancelled) return;
+        if (summary) {
+          applyThemes(themesFromPortalSummary(summary));
+          return;
+        }
+        return fetchThemes().then(applyThemes);
       })
       .catch(() => {
         // The wall degrades to model-derived groups (crystal-only counts
         // missing) — not an error state.
+        fetchThemes().then(applyThemes).catch(() => {});
       });
     return () => {
       cancelled = true;

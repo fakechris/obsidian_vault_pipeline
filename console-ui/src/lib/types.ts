@@ -596,6 +596,38 @@ export interface RunRow {
   lifecycle_warnings: number;
 }
 
+/** Precomputed portal aggregate (`.ovp/console/portal-summary.json`). */
+export interface PortalSummary {
+  generated_at: string;
+  theme_count: number;
+  claim_count: number;
+  active_claim_count: number;
+  source_count: number;
+  themes: ThemeSummaryRow[];
+  recent_activity: ActivityDayRow[];
+  index_health: PortalIndexHealth;
+}
+
+export interface ThemeSummaryRow {
+  theme_id: number | null;
+  label: string;
+  claim_count: number;
+  source_count: number;
+  latest_date: string | null;
+}
+
+export interface ActivityDayRow {
+  date: string;
+  new_packs: number;
+  new_claims: number;
+}
+
+export interface PortalIndexHealth {
+  last_daily_run: string | null;
+  total_packs: number;
+  grounded_fraction: number;
+}
+
 export interface Totals {
   sources: number;
   queued: number;

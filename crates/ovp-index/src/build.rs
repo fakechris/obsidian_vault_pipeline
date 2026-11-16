@@ -16,7 +16,10 @@ use std::path::Path;
 use ovp_daily::{MAX_FAILURES_BEFORE_BLOCKED, RunReport, RunStatus, read_daily_ledger};
 use ovp_domain::VaultLayout;
 use ovp_domain::crystal::themes::{ThemesFile, UNCLASSIFIED_ID, UNCLASSIFIED_THEME};
-use ovp_domain::crystal::{CrystalStatus, ReviewEntry, StoreEvent, fold_ledger};
+use ovp_domain::crystal::{CrystalStatus, DurableRecord, ReviewEntry, StoreEvent, fold_ledger};
+use ovp_domain::portal_summary::{
+    build_portal_summary, SummaryClaimRow, SummaryPackRow, SummaryTotals,
+};
 use ovp_domain::tags::{TagAliases, TagsInferredFile, canonical_tags};
 use ovp_domain::units::{read_source_from_path, read_source_with_meta};
 use ovp_intake::vaultops::{hex_sha256, read_jsonl_strict, rel_to};
@@ -220,6 +223,103 @@ pub fn write_index(vault_root: &Path, model: &IndexModel) -> Result<String, Stri
     let target = vault_root.join(layout.index_file());
     let body =
         serde_json::to_string_pretty(model).map_err(|e| format!("serializing index: {e}"))?;
+    write_atomic(&target, &format!("{body}\n"))?;
+    Ok(rel_to(vault_root, &target))
+}
+
+/// Active durable ledger records with the same semantic-theme overlay as the
+/// index build — used for portal-summary theme counts that match `/api/themes`.
+fn active_durable_records(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<DurableRecord>, String> {
+    let store = vault_root.join(layout.crystal_store_dir());
+    let events: Vec<StoreEvent> = read_jsonl_strict(&store.join("ledger.jsonl"))?;
+    let mut records: Vec<DurableRecord> = fold_ledger(&events)
+        .into_iter()
+        .filter(|r| r.status == CrystalStatus::Active)
+        .collect();
+    if let Some(themes) = ThemesFile::load(&store.join("themes.json"))? {
+        for r in records.iter_mut() {
+            r.theme_id = Some(
+                themes
+                    .majority_community(&r.source_cases)
+                    .unwrap_or(UNCLASSIFIED_ID),
+            );
+            r.theme = themes
+                .majority_label(&r.source_cases)
+                .unwrap_or_else(|| UNCLASSIFIED_THEME.to_string());
+        }
+    }
+    Ok(records)
+}
+
+/// Build the portal-summary value from vault state + a freshly-built index.
+pub fn portal_summary_from_model(
+    vault_root: &Path,
+    model: &IndexModel,
+) -> Result<ovp_domain::PortalSummary, String> {
+    let layout = VaultLayout::new();
+    let records = active_durable_records(vault_root, &layout)?;
+    Ok(portal_summary_from_parts(vault_root, model, &records))
+}
+
+/// Same as [`portal_summary_from_model`] but accepts pre-folded durable
+/// records (used by the publisher's public-safe scrub path).
+pub fn portal_summary_from_parts(
+    vault_root: &Path,
+    model: &IndexModel,
+    records: &[DurableRecord],
+) -> ovp_domain::PortalSummary {
+    let _ = vault_root;
+    let generated_at = model.built_at.as_deref().unwrap_or(model.date.as_str());
+    let last_daily = model.ops.last_run.as_ref().and_then(|r| {
+        r.ended_at
+            .as_deref()
+            .or(Some(r.started_at.as_str()))
+    });
+    let claims: Vec<SummaryClaimRow> = model
+        .claims
+        .iter()
+        .map(|c| SummaryClaimRow {
+            theme_id: c.theme_id,
+            theme: c.theme.clone(),
+            sources: c.sources.clone(),
+            run_date: c.run_date.clone(),
+            active: matches!(c.status, ClaimStatus::Durable | ClaimStatus::Caveated),
+        })
+        .collect();
+    let packs: Vec<SummaryPackRow> = model
+        .packs
+        .iter()
+        .map(|p| SummaryPackRow {
+            date: p.date.clone(),
+            units: p.units,
+        })
+        .collect();
+    let totals = SummaryTotals {
+        sources: model.totals.sources,
+        packs: model.totals.packs,
+        claims_total: model.claims.len(),
+        claims_active: model.totals.claims_durable + model.totals.claims_caveated,
+        packs_with_units: model.packs.iter().filter(|p| p.units > 0).count(),
+    };
+    build_portal_summary(
+        generated_at,
+        records,
+        &claims,
+        &packs,
+        totals,
+        last_daily,
+    )
+}
+
+/// Persist `.ovp/console/portal-summary.json` beside the product console.
+pub fn write_portal_summary(vault_root: &Path, model: &IndexModel) -> Result<String, String> {
+    let layout = VaultLayout::new();
+    let summary = portal_summary_from_model(vault_root, model)?;
+    let dir = vault_root.join(layout.console_dir());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    let target = dir.join("portal-summary.json");
+    let body =
+        serde_json::to_string_pretty(&summary).map_err(|e| format!("serializing portal summary: {e}"))?;
     write_atomic(&target, &format!("{body}\n"))?;
     Ok(rel_to(vault_root, &target))
 }

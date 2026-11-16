@@ -9,6 +9,7 @@ import type {
   FlowData,
   GraphResponse,
   IndexModel,
+  PortalSummary,
   SettingsPayload,
   SourceDetail,
   ThemeCount,
@@ -128,6 +129,17 @@ export function fetchSearchSubgraph(q: string): Promise<GraphResponse> {
 
 export function fetchThemes(): Promise<ThemeCount[]> {
   return fetchJson<ThemeCount[]>(STATIC_MODE ? `${API}/themes.json` : '/api/themes');
+}
+
+/** Precomputed headline aggregate — 404 means fall back to per-endpoint calls. */
+export async function fetchPortalSummary(): Promise<PortalSummary | null> {
+  const path = STATIC_MODE ? `${API}/portal-summary.json` : '/api/portal-summary';
+  const res = await fetch(path);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`API ${path}: ${res.status} ${res.statusText}`);
+  }
+  return res.json() as Promise<PortalSummary>;
 }
 
 export function fetchModel(): Promise<IndexModel> {

@@ -1145,6 +1145,7 @@ fn dispatch(
         (Method::Get, p) if p.starts_with("/api/graph") => handle_graph(state, url),
         (Method::Get, "/api/flow") => handle_flow(state),
         (Method::Get, "/api/settings") => handle_settings(state),
+        (Method::Get, "/api/portal-summary") => handle_portal_summary(state),
         (Method::Get, "/api/themes") => handle_themes(state),
         (Method::Get, "/api/theme-pages") => handle_theme_pages(state),
         (Method::Get, "/api/terrain") => handle_terrain(state),
@@ -1673,6 +1674,29 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
     }
     let body = serde_json::Value::Array(hits).to_string();
     json_stamped(200, &body, Some(&model))
+}
+
+fn handle_portal_summary(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
+    let layout = ovp_domain::VaultLayout::new();
+    let path = state
+        .vault_root
+        .join(layout.console_dir())
+        .join("portal-summary.json");
+    match std::fs::read_to_string(&path) {
+        Ok(body) => {
+            if serde_json::from_str::<serde_json::Value>(&body).is_err() {
+                return json_response(500, r#"{"error":"portal summary corrupt"}"#);
+            }
+            json_response(200, &body)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            json_response(404, r#"{"error":"portal summary missing"}"#)
+        }
+        Err(e) => json_response(
+            500,
+            &format!(r#"{{"error":"reading portal summary: {e}"}}"#),
+        ),
+    }
 }
 
 fn handle_themes(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
