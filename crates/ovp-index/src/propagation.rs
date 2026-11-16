@@ -36,9 +36,14 @@ fn note<'a>(
         .entry(rel.to_string())
         .or_insert_with(|| {
             let doc = read_source_from_path(&vault_root.join(rel)).ok()?;
-            let published = doc
-                .published
-                .as_deref()
+            // A paper's own publication metadata beats the clipping's
+            // top-level `published` (which may be the clip day).
+            let paper_day = match &doc.source_kind {
+                ovp_domain::source_doc::SourceKind::Paper(meta) => meta.published.as_deref(),
+                ovp_domain::source_doc::SourceKind::Article => None,
+            };
+            let published = paper_day
+                .or(doc.published.as_deref())
                 .and_then(|p| p.get(..10))
                 .filter(|d| crate::model::is_iso_day(d))
                 .map(str::to_string);
@@ -198,6 +203,27 @@ mod tests {
         assert_eq!(c.adoption_timeline[0].citation_type, CitationType::ExactLink);
         assert!(claims[1].origin_source.is_none(), "superseded rows are not stamped");
         assert!(claims[2].origin_source.is_none(), "single-source claims have no propagation");
+    }
+
+    #[test]
+    fn a_papers_own_publication_date_beats_the_clip_day() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("paper.md"),
+            "---\ntitle: \"P\"\nsource: \"https://arxiv.org/abs/2601.1\"\npublished: 2026-05-01\n\
+             source_type: arxiv-paper\narxiv_id: \"2601.1\"\nsource_published_at: 2026-01-01\n---\nBody.\n",
+        )
+        .unwrap();
+        write_note(dir.path(), "b.md", "2026-02-01", "y");
+        let sources = vec![
+            source("sha-p", "2026-05-01", "https://arxiv.org/abs/2601.1", "paper.md"),
+            source("sha-b", "2026-02-01", "https://b.dev/x", "b.md"),
+        ];
+        let packs = vec![pack("case-p", "sha-p"), pack("case-b", "sha-b")];
+        let mut claims = vec![claim(ClaimStatus::Durable, &["case-b", "case-p"])];
+        assert_eq!(attach_propagation(dir.path(), &mut claims, &sources, &packs), 1);
+        assert_eq!(claims[0].origin_source.as_deref(), Some("case-p"));
+        assert_eq!(claims[0].adoption_timeline[0].lag_days, Some(31));
     }
 
     #[test]
