@@ -29,7 +29,7 @@ pub mod sqlite;
 pub use build::{
     build_index, build_index_at, build_index_with_progress, failed_reader_attempt,
     last_run_to_model, now_rfc3339, read_index, read_last_run_model, write_index,
-    portal_summary_from_model, portal_summary_from_parts, write_portal_summary,
+    portal_summary_from_parts,
 };
 pub use evidence::{EvidenceModel, build_evidence, evidence_path, read_evidence, write_evidence};
 pub use model::{

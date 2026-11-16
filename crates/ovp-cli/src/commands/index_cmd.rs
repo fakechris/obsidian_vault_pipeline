@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use ovp_domain::tags::TagAliases;
 use ovp_index::{
     build_evidence, build_index_with_progress, read_evidence, read_index, run_evidence_query,
-    run_query, write_evidence, write_index, write_portal_summary, Query, QueryKind,
+    run_query, write_evidence, write_index, Query, QueryKind,
 };
 
 use crate::CliError;
@@ -78,13 +78,11 @@ pub fn run_index(args: IndexArgs) -> Result<(), CliError> {
     let model = build_index_with_progress(&args.vault_root, &args.date, None, &mut on_phase)
         .map_err(CliError::Io)?;
     let rel = write_index(&args.vault_root, &model).map_err(CliError::Io)?;
-    let summary_rel = write_portal_summary(&args.vault_root, &model).map_err(CliError::Io)?;
     let evidence = build_evidence(&args.vault_root, &args.date, &model).map_err(CliError::Io)?;
     let evidence_rel = write_evidence(&args.vault_root, &evidence).map_err(CliError::Io)?;
     shadow_sqlite(&args.vault_root, &model, &evidence);
     let t = &model.totals;
     println!("index [{}]: {rel}", args.date);
-    println!("  portal-summary: {summary_rel}");
     println!(
         "  evidence: {evidence_rel} (cards={} units={} warnings={})",
         evidence.cards.len(),

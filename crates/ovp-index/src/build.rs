@@ -229,48 +229,15 @@ pub fn write_index(vault_root: &Path, model: &IndexModel) -> Result<String, Stri
     Ok(rel_to(vault_root, &target))
 }
 
-/// Active durable ledger records with the same semantic-theme overlay as the
-/// index build — used for portal-summary theme counts that match `/api/themes`.
-fn active_durable_records(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<DurableRecord>, String> {
-    let store = vault_root.join(layout.crystal_store_dir());
-    let events: Vec<StoreEvent> = read_jsonl_strict(&store.join("ledger.jsonl"))?;
-    let mut records: Vec<DurableRecord> = fold_ledger(&events)
-        .into_iter()
-        .filter(|r| r.status == CrystalStatus::Active)
-        .collect();
-    if let Some(themes) = ThemesFile::load(&store.join("themes.json"))? {
-        for r in records.iter_mut() {
-            r.theme_id = Some(
-                themes
-                    .majority_community(&r.source_cases)
-                    .unwrap_or(UNCLASSIFIED_ID),
-            );
-            r.theme = themes
-                .majority_label(&r.source_cases)
-                .unwrap_or_else(|| UNCLASSIFIED_THEME.to_string());
-        }
-    }
-    Ok(records)
-}
-
-/// Build the portal-summary value from vault state + a freshly-built index.
-pub fn portal_summary_from_model(
-    vault_root: &Path,
-    model: &IndexModel,
-) -> Result<ovp_domain::PortalSummary, String> {
-    let layout = VaultLayout::new();
-    let records = active_durable_records(vault_root, &layout)?;
-    Ok(portal_summary_from_parts(vault_root, model, &records))
-}
-
-/// Same as [`portal_summary_from_model`] but accepts pre-folded durable
-/// records (used by the publisher's public-safe scrub path).
+/// The portal headline aggregate from an index model plus the ACTIVE ledger
+/// records it is served with. Callers pass the same records `/api/themes`
+/// uses (the live server's projection, or the publisher's scrubbed set), so
+/// the theme counts can never disagree with the themes endpoint or go stale
+/// behind the ledger.
 pub fn portal_summary_from_parts(
-    vault_root: &Path,
     model: &IndexModel,
     records: &[DurableRecord],
 ) -> ovp_domain::PortalSummary {
-    let _ = vault_root;
     let generated_at = model.built_at.as_deref().unwrap_or(model.date.as_str());
     let last_daily = model.ops.last_run.as_ref().and_then(|r| {
         r.ended_at
@@ -311,19 +278,6 @@ pub fn portal_summary_from_parts(
         totals,
         last_daily,
     )
-}
-
-/// Persist `.ovp/console/portal-summary.json` beside the product console.
-pub fn write_portal_summary(vault_root: &Path, model: &IndexModel) -> Result<String, String> {
-    let layout = VaultLayout::new();
-    let summary = portal_summary_from_model(vault_root, model)?;
-    let dir = vault_root.join(layout.console_dir());
-    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-    let target = dir.join("portal-summary.json");
-    let body =
-        serde_json::to_string_pretty(&summary).map_err(|e| format!("serializing portal summary: {e}"))?;
-    write_atomic(&target, &format!("{body}\n"))?;
-    Ok(rel_to(vault_root, &target))
 }
 
 /// Load a persisted index (for `find`).

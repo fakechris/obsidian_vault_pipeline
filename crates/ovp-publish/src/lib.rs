@@ -145,7 +145,7 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
     )
     .map_err(|e| format!("publish: {e}"))?;
 
-    let portal_summary = ovp_index::portal_summary_from_parts(&args.vault_root, public, &records);
+    let portal_summary = ovp_index::portal_summary_from_parts(public, &records);
     let files = write_api_tree(
         &args.out_dir.join("api"),
         public,

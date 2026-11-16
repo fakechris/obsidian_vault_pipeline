@@ -1676,26 +1676,20 @@ fn handle_search(state: &AppState, url: &str) -> Response<std::io::Cursor<Vec<u8
     json_stamped(200, &body, Some(&model))
 }
 
+/// `GET /api/portal-summary` (INV-1885) — computed per request from the
+/// served model + the live ledger projection, the same pair `/api/themes`
+/// reads, so the knowledge wall's counts track crystallize / review / patch
+/// writes immediately instead of waiting for the next `index` or daily run.
+/// 404 when no index exists (the portal then falls back to `/api/themes`).
 fn handle_portal_summary(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
-    let layout = ovp_domain::VaultLayout::new();
-    let path = state
-        .vault_root
-        .join(layout.console_dir())
-        .join("portal-summary.json");
-    match std::fs::read_to_string(&path) {
-        Ok(body) => {
-            if serde_json::from_str::<serde_json::Value>(&body).is_err() {
-                return json_response(500, r#"{"error":"portal summary corrupt"}"#);
-            }
-            json_response(200, &body)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            json_response(404, r#"{"error":"portal summary missing"}"#)
-        }
-        Err(e) => json_response(
-            500,
-            &format!(r#"{{"error":"reading portal summary: {e}"}}"#),
-        ),
+    let Some(model) = state.current_model() else {
+        return json_response(404, r#"{"error":"no index — run `ovp2 index`"}"#);
+    };
+    let records = load_active_records(state);
+    let summary = ovp_index::portal_summary_from_parts(&model, &records);
+    match serde_json::to_string(&summary) {
+        Ok(body) => json_stamped(200, &body, Some(&model)),
+        Err(e) => json_response(500, &format!(r#"{{"error":"serializing portal summary: {e}"}}"#)),
     }
 }
 
@@ -6982,6 +6976,52 @@ mod tests {
             .map(|t| t["theme"].as_str().unwrap())
             .collect();
         assert_eq!(themes, vec!["alpha", "beta"]);
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn portal_summary_is_live_and_agrees_with_api_themes() {
+        // #525 served a file written only by index/console/daily, so the
+        // knowledge wall lagged behind crystallize/review writes. The summary
+        // is now computed per request from the same pair /api/themes reads.
+        let vault = portal_vault("portal-summary-live", "50-Inbox/03-Processed/good.md", "body\n");
+        write_ledger(&vault);
+        let st = state(vault.clone(), None);
+        let labels = |v: &serde_json::Value, list: &str, field: &str| -> Vec<(String, u64)> {
+            let arr = if list.is_empty() { v.as_array() } else { v[list].as_array() };
+            let mut out: Vec<(String, u64)> = arr
+                .unwrap()
+                .iter()
+                .map(|t| (t[field].as_str().unwrap().to_string(),
+                          t[if list.is_empty() { "count" } else { "claim_count" }].as_u64().unwrap()))
+                .collect();
+            out.sort();
+            out
+        };
+        let summary = body_json(dispatch(&st, Method::Get, "/api/portal-summary", ""));
+        let themes = body_json(dispatch(&st, Method::Get, "/api/themes", ""));
+        assert_eq!(labels(&summary, "themes", "label"), labels(&themes, "", "theme"));
+        assert_eq!(labels(&summary, "themes", "label"),
+                   vec![("alpha".to_string(), 1), ("beta".to_string(), 1)]);
+
+        // A ledger-side change with NO reindex shows up immediately.
+        let store = vault.join(VaultLayout::new().crystal_store_dir());
+        std::fs::write(
+            store.join("themes.json"),
+            serde_json::json!({
+                "schema": "ovp.themes/v1", "model": "m",
+                "params": {"k": 10, "cosine_threshold": 0.5, "resolution": 1.5,
+                            "seed": 42, "text_prefix": "", "head_chars": 1500},
+                "generated_from": "deadbeef", "packs": {"good": 0},
+                "communities": [{"id": 0, "label": "Agent memory", "label_zh": "智能体记忆",
+                                  "keywords": ["memory"], "size": 1}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let summary = body_json(dispatch(&st, Method::Get, "/api/portal-summary", ""));
+        assert_eq!(labels(&summary, "themes", "label"), vec![("Agent memory".to_string(), 2)]);
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
