@@ -20,6 +20,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::citation_support::CitationType;
+use crate::crystal::source_identity::canonical_source_url;
 
 /// What the caller knows about one cited source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,11 +76,7 @@ pub fn compute_propagation(
         let Some(day) = s.published.as_deref().and_then(day_number) else {
             continue;
         };
-        let url_key = s
-            .url
-            .as_deref()
-            .and_then(normalize_url)
-            .map(|(full, _)| full);
+        let url_key = s.url.as_deref().and_then(canonical_source_url);
         let dup = dated.iter_mut().find(|(d, _, d_url)| {
             d.identity == s.identity || (url_key.is_some() && url_key.as_deref() == Some(d_url))
         });
@@ -156,8 +153,8 @@ const PLATFORM_HOSTS: &[&str] = &[
 ];
 
 struct CreditProbe {
-    /// Normalized origin URL, only when it has a path (a bare domain is a
-    /// site, not a document — that is a credit, not an exact link).
+    /// Canonical origin URL, only when it names a document (has a path or an
+    /// identity query) — a bare domain is a site, so linking it is a credit.
     exact: Option<String>,
     host: Option<String>,
     names: Vec<String>,
@@ -165,14 +162,12 @@ struct CreditProbe {
 
 impl CreditProbe {
     fn new(origin: &SourceFacts) -> Self {
-        let parsed = origin.url.as_deref().and_then(normalize_url);
-        let exact = parsed
-            .as_ref()
-            .filter(|(full, host)| full.len() > host.len())
-            .map(|(full, _)| full.clone());
-        let host = parsed
-            .map(|(_, host)| host)
-            .filter(|h| !PLATFORM_HOSTS.contains(&h.as_str()));
+        let canon = origin.url.as_deref().and_then(canonical_source_url);
+        let host_of = |c: &str| c.split(['/', '?']).next().unwrap_or("").to_string();
+        let exact = canon.clone().filter(|c| c.len() > host_of(c).len());
+        let host = canon
+            .map(|c| host_of(&c))
+            .filter(|h| h.contains('.') && !PLATFORM_HOSTS.contains(&h.as_str()));
         let names = origin
             .author
             .as_deref()
@@ -185,12 +180,16 @@ impl CreditProbe {
     }
 
     fn classify(&self, text: &str) -> CitationType {
-        let text = text.to_lowercase();
-        if self.exact.as_deref().is_some_and(|u| text.contains(u)) {
+        // Whole URLs only, compared by canonical identity: `/post` must not
+        // match `/postscript`, nor one status id a longer one.
+        if let Some(exact) = self.exact.as_deref()
+            && url_tokens(text).any(|u| canonical_source_url(u).as_deref() == Some(exact))
+        {
             return CitationType::ExactLink;
         }
-        let names_origin = self.names.iter().any(|n| text.contains(n.as_str()));
-        if names_origin || self.host.as_deref().is_some_and(|h| text.contains(h)) {
+        let lower = text.to_lowercase();
+        let names_origin = self.names.iter().any(|n| contains_bounded(&lower, n));
+        if names_origin || self.host.as_deref().is_some_and(|h| contains_bounded(&lower, h)) {
             return CitationType::Credit;
         }
         CitationType::Inferred
@@ -207,18 +206,40 @@ fn is_distinctive_name(n: &str) -> bool {
     n.split_whitespace().count() >= 2 && n.len() >= 6
 }
 
-/// `https://www.Example.com/a/b/?utm=x#y` → (`example.com/a/b`, `example.com`).
-fn normalize_url(url: &str) -> Option<(String, String)> {
-    let lower = url.trim().to_lowercase();
-    let rest = lower.split_once("://").map_or(lower.as_str(), |(_, r)| r);
-    let rest = rest.split(['?', '#']).next().unwrap_or("");
-    let rest = rest.trim_end_matches('/');
-    let rest = rest.strip_prefix("www.").unwrap_or(rest);
-    let host = rest.split('/').next().unwrap_or("");
-    if host.is_empty() || !host.contains('.') {
-        return None;
-    }
-    Some((rest.to_string(), host.to_string()))
+/// Every `http(s)://…` token in `text`, cut at whitespace / markdown and
+/// HTML delimiters, with trailing sentence punctuation dropped.
+fn url_tokens(text: &str) -> impl Iterator<Item = &str> {
+    // ASCII lowercasing keeps byte offsets, so indices slice `text` directly.
+    let lower = text.to_ascii_lowercase();
+    let starts: Vec<usize> = lower
+        .match_indices("http")
+        .filter(|(i, _)| lower[*i..].starts_with("http://") || lower[*i..].starts_with("https://"))
+        .map(|(i, _)| i)
+        .collect();
+    starts.into_iter().map(move |i| {
+        let rest = &text[i..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | ']' | '>' | '<' | '"' | '\'' | '`'))
+            .unwrap_or(rest.len());
+        rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?'])
+    })
+}
+
+/// `needle` occurs in `hay` not glued to a longer word or host on either
+/// side (`blog.a.io` must not match `sub.blog.a.io` or `blog.a.iox`).
+fn contains_bounded(hay: &str, needle: &str) -> bool {
+    let glue = |c: char| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '@');
+    hay.match_indices(needle).any(|(i, m)| {
+        let before = hay[..i].chars().next_back();
+        let after = hay[i + m.len()..].chars().next();
+        // A trailing '.' ends a sentence, not a host.
+        let after_glued = match after {
+            Some('.') => hay[i + m.len() + 1..].chars().next().is_some_and(|c| c.is_alphanumeric()),
+            Some(c) => glue(c),
+            None => false,
+        };
+        !before.is_some_and(glue) && !after_glued
+    })
 }
 
 /// Days since 1970-01-01 for a strict `YYYY-MM-DD`; `None` otherwise.
@@ -293,7 +314,7 @@ mod tests {
             src(
                 "o",
                 Some("2026-01-01"),
-                "https://www.blog.a.io/memory/?utm=x",
+                "https://www.blog.a.io/memory/?utm_source=x",
                 Some("Ada Lovelace"),
             ),
             src("link", Some("2026-01-02"), "https://l.dev/1", None),
@@ -366,6 +387,47 @@ mod tests {
             dup,
         ];
         assert!(run(&sources, &[("a2", "https://a.dev/post")]).is_none());
+    }
+
+    #[test]
+    fn exact_link_compares_whole_canonical_urls() {
+        let sources = vec![
+            src("o", Some("2026-01-01"), "https://Example.com/post/?utm_source=x", None),
+            src("prefix", Some("2026-01-02"), "https://p.dev/1", None),
+            src("same", Some("2026-01-03"), "https://s.dev/1", None),
+        ];
+        let p = run(
+            &sources,
+            &[
+                ("prefix", "see https://example.com/postscript for more"),
+                ("same", "via [this](https://www.example.com/post?utm_medium=y)."),
+            ],
+        )
+        .unwrap();
+        let types: Vec<CitationType> = p.adoptions.iter().map(|a| a.citation_type).collect();
+        // `prefix` names the origin's site (a credit), but never its document.
+        assert_eq!(types, vec![CitationType::Credit, CitationType::ExactLink]);
+    }
+
+    #[test]
+    fn identity_query_parameters_keep_distinct_documents_apart() {
+        let sources = vec![
+            src("v1", Some("2026-01-01"), "https://youtube.com/watch?v=AAA", None),
+            src("v2", Some("2026-01-02"), "https://youtube.com/watch?v=BBB", None),
+        ];
+        let p = run(&sources, &[("v2", "https://youtube.com/watch?v=BBB")]).unwrap();
+        assert_eq!(p.adoptions.len(), 1, "different videos are different sources");
+        assert_eq!(p.adoptions[0].citation_type, CitationType::Inferred);
+    }
+
+    #[test]
+    fn host_and_name_matches_need_word_boundaries() {
+        assert!(contains_bounded("a post on blog.a.io said", "blog.a.io"));
+        assert!(contains_bounded("ends with blog.a.io.", "blog.a.io"));
+        assert!(!contains_bounded("see sub.blog.a.io", "blog.a.io"));
+        assert!(!contains_bounded("see blog.a.iox", "blog.a.io"));
+        assert!(contains_bounded("as ada lovelace said", "ada lovelace"));
+        assert!(!contains_bounded("as ada lovelacey said", "ada lovelace"));
     }
 
     #[test]

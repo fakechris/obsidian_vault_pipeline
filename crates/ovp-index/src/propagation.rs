@@ -1,17 +1,51 @@
 //! Attach the claim-propagation projection (INV-1882) to active claim rows.
 //!
-//! Joins each cited case to its source row (via the pack's `source_sha256`),
-//! takes the source's publication date (`content_date`), and reads a later
-//! source's text — once per file per build — to see whether it links or
-//! credits the origin. The rule itself lives in
+//! Joins each cited case to its source row (via the pack's `source_sha256`)
+//! and reads the source note once per build for two things: its frontmatter
+//! `published` day, and its body (to see whether a later source links or
+//! credits the origin). The rule itself lives in
 //! `ovp_domain::crystal::propagation`.
+//!
+//! Dates are deliberately narrower than `SourceRow::content_date`, which
+//! falls back to filename days and, for Pinboard captures, holds the
+//! BOOKMARK day. Ordering sources by when they were saved would invent a
+//! chronology, so only a non-Pinboard frontmatter `published` counts; any
+//! other source is undated and takes no part in origin selection.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use ovp_domain::crystal::propagation::{compute_propagation, SourceFacts};
+use ovp_domain::units::read_source_from_path;
 
 use crate::model::{AdoptionTimelineEntry, ClaimRow, ClaimStatus, PackRow, SourceRow};
+
+/// What one source note contributes, read once per build.
+struct NoteFacts {
+    published: Option<String>,
+    body: String,
+}
+
+fn note<'a>(
+    notes: &'a mut HashMap<String, Option<NoteFacts>>,
+    vault_root: &Path,
+    s: &SourceRow,
+) -> Option<&'a NoteFacts> {
+    let rel = s.rel_path.as_deref()?;
+    notes
+        .entry(rel.to_string())
+        .or_insert_with(|| {
+            let doc = read_source_from_path(&vault_root.join(rel)).ok()?;
+            let published = doc
+                .published
+                .as_deref()
+                .and_then(|p| p.get(..10))
+                .filter(|d| crate::model::is_iso_day(d))
+                .map(str::to_string);
+            Some(NoteFacts { published, body: doc.body_markdown })
+        })
+        .as_ref()
+}
 
 /// Returns how many claims received a propagation origin.
 pub fn attach_propagation(
@@ -29,34 +63,37 @@ pub fn attach_propagation(
             Some((case, *by_sha.get(p.source_sha256.as_deref()?)?))
         })
         .collect();
-    let mut texts: HashMap<String, Option<String>> = HashMap::new();
+    let mut notes: HashMap<String, Option<NoteFacts>> = HashMap::new();
 
     let mut stamped = 0;
     for claim in claims
         .iter_mut()
         .filter(|c| matches!(c.status, ClaimStatus::Durable | ClaimStatus::Caveated))
     {
+        if claim.sources.len() < 2 {
+            continue;
+        }
+        let mut bodies: HashMap<String, String> = HashMap::new();
         let facts: Vec<SourceFacts> = claim
             .sources
             .iter()
             .filter_map(|case| {
                 let s = case_source.get(case.as_str())?;
+                let facts = note(&mut notes, vault_root, s);
+                if let Some(f) = facts {
+                    bodies.insert(case.clone(), f.body.clone());
+                }
+                let pinboard = s.origin.as_deref() == Some("pinboard");
                 Some(SourceFacts {
                     case_id: case.clone(),
                     identity: s.sha256.clone(),
-                    published: s.content_date.clone(),
+                    published: facts.and_then(|f| f.published.clone()).filter(|_| !pinboard),
                     url: s.url.clone(),
                     author: s.author.clone(),
                 })
             })
             .collect();
-        let Some(p) = compute_propagation(&facts, |case| {
-            let rel = case_source.get(case)?.rel_path.as_deref()?;
-            texts
-                .entry(rel.to_string())
-                .or_insert_with(|| std::fs::read_to_string(vault_root.join(rel)).ok())
-                .clone()
-        }) else {
+        let Some(p) = compute_propagation(&facts, |case| bodies.remove(case)) else {
             continue;
         };
         claim.origin_source = Some(p.origin_case_id);
@@ -126,13 +163,23 @@ mod tests {
         }
     }
 
+    fn write_note(dir: &Path, rel: &str, published: &str, body: &str) {
+        std::fs::write(
+            dir.join(rel),
+            format!("---\ntitle: \"T\"\nsource: \"https://x.dev/{rel}\"\npublished: {published}\n---\n{body}\n"),
+        )
+        .unwrap();
+    }
+
     #[test]
-    fn stamps_active_claims_from_publication_dates_and_source_text() {
+    fn stamps_active_claims_from_frontmatter_published_and_body_text() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("b.md"), "as https://a.dev/post shows").unwrap();
+        write_note(dir.path(), "a.md", "2026-01-01", "the original");
+        write_note(dir.path(), "b.md", "2026-01-04T09:00:00Z", "as https://a.dev/post shows");
+        // content_date is deliberately misleading: only frontmatter counts.
         let sources = vec![
-            source("sha-a", "2026-01-01", "https://a.dev/post", "a.md"),
-            source("sha-b", "2026-01-04", "https://b.dev/x", "b.md"),
+            source("sha-a", "2026-09-09", "https://a.dev/post", "a.md"),
+            source("sha-b", "2025-01-01", "https://b.dev/x", "b.md"),
         ];
         let packs = vec![pack("case-b", "sha-b"), pack("case-a", "sha-a")];
         let mut claims = vec![
@@ -146,18 +193,24 @@ mod tests {
         assert_eq!(c.origin_source.as_deref(), Some("case-a"));
         assert_eq!(c.adoption_count, Some(1));
         assert_eq!(c.credit_rate, Some(1.0));
+        assert_eq!(c.adoption_timeline[0].first_seen_date.as_deref(), Some("2026-01-04"));
         assert_eq!(c.adoption_timeline[0].lag_days, Some(3));
-        assert_eq!(
-            c.adoption_timeline[0].citation_type,
-            CitationType::ExactLink
-        );
-        assert!(
-            claims[1].origin_source.is_none(),
-            "superseded rows are not stamped"
-        );
-        assert!(
-            claims[2].origin_source.is_none(),
-            "single-source claims have no propagation"
-        );
+        assert_eq!(c.adoption_timeline[0].citation_type, CitationType::ExactLink);
+        assert!(claims[1].origin_source.is_none(), "superseded rows are not stamped");
+        assert!(claims[2].origin_source.is_none(), "single-source claims have no propagation");
+    }
+
+    #[test]
+    fn pinboard_bookmark_days_are_not_publication_dates() {
+        let dir = tempfile::tempdir().unwrap();
+        write_note(dir.path(), "a.md", "2026-01-01", "x");
+        write_note(dir.path(), "b.md", "2026-01-04", "y");
+        let mut a = source("sha-a", "2026-01-01", "https://a.dev/post", "a.md");
+        a.origin = Some("pinboard".into());
+        let sources = vec![a, source("sha-b", "2026-01-04", "https://b.dev/x", "b.md")];
+        let packs = vec![pack("case-a", "sha-a"), pack("case-b", "sha-b")];
+        let mut claims = vec![claim(ClaimStatus::Durable, &["case-a", "case-b"])];
+        assert_eq!(attach_propagation(dir.path(), &mut claims, &sources, &packs), 0);
+        assert!(claims[0].origin_source.is_none());
     }
 }
