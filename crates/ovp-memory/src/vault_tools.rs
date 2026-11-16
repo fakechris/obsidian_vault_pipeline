@@ -4258,7 +4258,7 @@ mod tests {
                 case_id: case_id.into(),
                 unit_id: "unit-1".into(),
                 quote: "verbatim evidence".into(),
-                resolved_line: Some(1),
+                resolved_line: Some(1), citation_type: Default::default(),
             }],
             provenance_score: 0.9,
             provenance_class: ProvenanceClass::Durable,

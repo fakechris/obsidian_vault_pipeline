@@ -1660,7 +1660,7 @@ mod tests {
                     case_id: (*c).into(),
                     unit_id: (*u).into(),
                     quote: format!("quote {u}"),
-                    resolved_line: None,
+                    resolved_line: None, citation_type: Default::default(),
                 })
                 .collect(),
             provenance_score: prov,

@@ -304,7 +304,7 @@ mod tests {
                     case_id: (*c).into(),
                     unit_id: (*u).into(),
                     quote: "q".into(),
-                    resolved_line: Some(1),
+                    resolved_line: Some(1), citation_type: Default::default(),
                 })
                 .collect(),
             provenance_score: 1.0,

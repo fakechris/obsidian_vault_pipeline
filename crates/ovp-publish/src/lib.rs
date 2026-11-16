@@ -537,7 +537,7 @@ mod tests {
                 case_id: "case1".into(),
                 unit_id: "u-001".into(),
                 quote: "q".into(),
-                resolved_line: None,
+                resolved_line: None, citation_type: Default::default(),
             }],
             provenance_score: 0.9,
             provenance_class: ProvenanceClass::Durable,
