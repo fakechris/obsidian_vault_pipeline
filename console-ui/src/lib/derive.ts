@@ -2012,6 +2012,66 @@ export interface ScheduleJobLike {
   consecutive_failures?: number;
 }
 
+// -------------------------------------------- portal visualizations (INV-1886)
+
+export const SPARKLINE_DAYS = 30;
+
+export function computeBarHeights(data: number[], maxHeight: number): number[] {
+  if (data.length === 0 || maxHeight <= 0) return [];
+  const max = Math.max(...data);
+  if (max === 0) return data.map(() => 0);
+  return data.map((v) => (v / max) * maxHeight);
+}
+
+export function sparklineHasActivity(data: number[]): boolean {
+  return data.some((v) => v > 0);
+}
+
+export function recentIsoDayRange(days: number, endDay?: string | null): string[] {
+  if (days <= 0) return [];
+  let end = isIsoDay(endDay) ? endDay! : null;
+  if (!end) end = new Date().toISOString().slice(0, 10);
+  const out: string[] = [];
+  const cursor = new Date(`${end}T12:00:00Z`);
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(cursor);
+    d.setUTCDate(d.getUTCDate() - i);
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+function bumpBucket(buckets: number[], range: string[], day: string): void {
+  if (!isIsoDay(day)) return;
+  const idx = range.indexOf(day);
+  if (idx >= 0) buckets[idx] += 1;
+}
+
+export function sparklinesByThemeGroup(
+  claims: ClaimRow[],
+  builtAt: string | undefined,
+  days: number,
+  sourceDays: Map<string, string> | null,
+): Map<string, number[]> {
+  const range = recentIsoDayRange(days, builtAt?.slice(0, 10) ?? builtAt);
+  const out = new Map<string, number[]>();
+  for (const c of activeClaims(claims)) {
+    const key = themeGroupKey(c.theme_id ?? null, c.theme ?? '');
+    let buckets = out.get(key);
+    if (!buckets) {
+      buckets = new Array(range.length).fill(0);
+      out.set(key, buckets);
+    }
+    const day = claimDay(c, sourceDays);
+    if (day) bumpBucket(buckets, range, day);
+  }
+  return out;
+}
+
+export function themeGroupStorageKey(group: { id: number | null; theme: string }): string {
+  return themeGroupKey(group.id, group.theme);
+}
+
 // ------------------------------------------------- citation support (INV-1422)
 
 export interface CitationSupportMark {
