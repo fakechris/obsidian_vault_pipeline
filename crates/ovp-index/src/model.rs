@@ -331,12 +331,18 @@ pub struct ClaimRow {
     /// Precomputed portal graph position `[x, y]` (claim-centric view).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xy: Option<[f64; 2]>,
+    /// Propagation projection (INV-1882, `ovp_domain::crystal::propagation`):
+    /// the cited case with the earliest PUBLICATION date. None when fewer
+    /// than two distinct dated sources exist or the earliest date is tied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_source: Option<String>,
+    /// The claim's later sources, earliest publication first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adoption_timeline: Vec<AdoptionTimelineEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adoption_count: Option<usize>,
+    /// Share of later sources whose text links or credits the origin.
+    /// Usually 0: captured sources rarely cite each other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credit_rate: Option<f64>,
 }
@@ -344,10 +350,15 @@ pub struct ClaimRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdoptionTimelineEntry {
     pub source_case_id: String,
+    /// The later source's publication date.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_seen_date: Option<String>,
+    /// Calendar days after the origin's publication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lag_days: Option<i64>,
+    /// How this source relates to the origin (link / credit / inferred).
+    #[serde(default, skip_serializing_if = "ovp_domain::citation_support::is_unknown")]
+    pub citation_type: ovp_domain::citation_support::CitationType,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

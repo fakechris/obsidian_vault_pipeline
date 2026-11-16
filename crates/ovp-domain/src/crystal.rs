@@ -49,7 +49,8 @@ pub mod themes;
 /// over active durable claims. Append-only; never rewrites evidence.
 pub mod lineage;
 
-/// Claim propagation: origin source, adoption timeline, credit rate (INV-1882).
+/// Claim propagation projection: origin by publication date, later sources,
+/// credit rate (INV-1882). Never stored in the ledger.
 pub mod propagation;
 
 /// Short positional handles for the identifiers a model must echo back —
@@ -619,16 +620,6 @@ pub struct DurableCitation {
     pub citation_type: crate::citation_support::CitationType,
 }
 
-/// One source adopting a claim after the credited origin (INV-1882).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AdoptionEntry {
-    pub source_case_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub first_seen_date: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lag_days: Option<i64>,
-}
-
 /// A durable Crystal record — the full audit chain for one claim.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DurableRecord {
@@ -654,15 +645,6 @@ pub struct DurableRecord {
     pub final_class: FinalClass,
     pub run_id: String,
     pub status: CrystalStatus,
-    /// Earliest source case that declared this claim (propagation origin).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin_source: Option<String>,
-    /// Later source adoptions in chronological order.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub adoption_timeline: Vec<AdoptionEntry>,
-    /// Share of later records that cite `origin_source` (0.0–1.0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credit_rate: Option<f64>,
 }
 
 /// One append-only ledger event.
@@ -740,9 +722,6 @@ pub fn build_durable_record(
         final_class,
         run_id: run_id.to_string(),
         status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
     }
 }
 
@@ -1496,9 +1475,6 @@ mod tests {
             provenance_score: 0.9, provenance_class: ProvenanceClass::Durable,
             strength: StrengthClass::Supported, strength_rationale: "ok".into(),
             final_class: FinalClass::Durable, run_id: "r1".into(), status: CrystalStatus::Active,
-            origin_source: None,
-            adoption_timeline: Vec::new(),
-            credit_rate: None,
         }
     }
 

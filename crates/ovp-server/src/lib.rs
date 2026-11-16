@@ -6330,9 +6330,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
         };
         let events = [
             StoreEvent {
@@ -8104,9 +8101,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r".into(),
             status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
         };
         let records = vec![record("ck-a", "dup"), record("ck-b", "dup"), record("ck-c", "uniq")];
         // A real (fixture-built) index: agent_citations only reads sources.

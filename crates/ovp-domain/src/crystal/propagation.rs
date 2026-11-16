@@ -1,326 +1,385 @@
-//! Claim propagation analysis: origin detection, adoption timeline, credit rate.
-
-use std::collections::BTreeMap;
+//! Claim propagation (INV-1882): within ONE durable claim, which of its cited
+//! sources published first, when the others followed, and whether they say
+//! where they got it.
+//!
+//! This is a projection, not ledger state. It is derived at index build from
+//! the claim's own `source_cases` and each source's publication date, so the
+//! append-only crystal ledger never carries it and it can be recomputed at
+//! any time.
+//!
+//! Two deliberate refusals:
+//! - The date is the source's PUBLICATION date. When OVP happened to
+//!   crystallize the claim says nothing about who said it first.
+//! - When two distinct sources tie for the earliest date there is no origin.
+//!   Picking one (by id, by capture order) would invent an answer.
+//!
+//! Explicit cross-crediting between captured sources is rare (on the dogfood
+//! vault ~2% of later sources link the origin's URL, ~2% name its author), so
+//! a `credit_rate` of 0 is the expected, truthful common case.
 
 use serde::{Deserialize, Serialize};
 
-use super::{AdoptionEntry, DurableRecord};
+use crate::citation_support::CitationType;
+
+/// What the caller knows about one cited source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceFacts {
+    pub case_id: String,
+    /// Content identity (sha256). Two cases with the same identity, or the
+    /// same normalized URL, are ONE source captured twice.
+    pub identity: String,
+    /// Publication date, `YYYY-MM-DD`. Anything else counts as undated.
+    pub published: Option<String>,
+    pub url: Option<String>,
+    pub author: Option<String>,
+}
+
+/// One later source that carries the claim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Adoption {
+    pub case_id: String,
+    pub published: String,
+    /// Calendar days after the origin's publication (>= 0).
+    pub lag_days: i64,
+    /// How this source relates to the origin: `exact_link` (contains its
+    /// URL), `credit` (names its author or site), `inferred` (only OVP's
+    /// claim matching connects them), `unknown` (text unreadable).
+    pub citation_type: CitationType,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PropagationSummary {
-    pub origin_case_id: Option<String>,
-    pub adoption_count: usize,
+pub struct Propagation {
+    pub origin_case_id: String,
+    pub origin_published: String,
+    /// Later sources, earliest first.
+    pub adoptions: Vec<Adoption>,
+    /// Share of classified later sources that link or credit the origin.
+    /// `None` when no later source's text could be read.
     pub credit_rate: Option<f64>,
-    pub timeline: Vec<AdoptionEntry>,
 }
 
-/// Stamp `origin_source`, `adoption_timeline`, and `credit_rate` on each record
-/// by grouping on normalized claim text among the supplied slice.
-pub fn overlay_propagation(records: &mut [DurableRecord]) {
-    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (i, rec) in records.iter().enumerate() {
-        groups.entry(rec.claim.trim().to_string()).or_default().push(i);
-    }
-    for indices in groups.into_values() {
-        if indices.len() < 2 {
+/// Compute propagation for one claim. `adopter_text(case_id)` returns the
+/// later source's full text (only called for later sources); `None` means it
+/// could not be read, which yields `CitationType::Unknown` for that source.
+///
+/// Returns `None` when fewer than two distinct dated sources exist or the
+/// earliest date is shared.
+pub fn compute_propagation(
+    sources: &[SourceFacts],
+    mut adopter_text: impl FnMut(&str) -> Option<String>,
+) -> Option<Propagation> {
+    // Distinct dated sources, earliest first; a duplicate capture keeps its
+    // earliest-dated case.
+    let mut dated: Vec<(&SourceFacts, i64, String)> = Vec::new();
+    for s in sources {
+        let Some(day) = s.published.as_deref().and_then(day_number) else {
             continue;
-        }
-        let slice: Vec<DurableRecord> = indices.iter().map(|&i| records[i].clone()).collect();
-        let summary = compute_propagation(&slice);
-        if summary.origin_case_id.is_none() {
-            continue;
-        }
-        for i in indices {
-            records[i].origin_source = summary.origin_case_id.clone();
-            records[i].adoption_timeline = summary.timeline.clone();
-            records[i].credit_rate = summary.credit_rate;
-        }
-    }
-}
-
-/// Compute propagation for records sharing the same claim text (2+ required).
-pub fn compute_propagation(records: &[DurableRecord]) -> PropagationSummary {
-    let empty = PropagationSummary {
-        origin_case_id: None,
-        adoption_count: 0,
-        credit_rate: None,
-        timeline: Vec::new(),
-    };
-    if records.len() < 2 {
-        return empty;
-    }
-
-    let mut first_seen: BTreeMap<String, (usize, Option<String>)> = BTreeMap::new();
-    for (rec_idx, rec) in records.iter().enumerate() {
-        let rec_date = run_date_from_run_id(&rec.run_id);
-        let rec_ord = record_order_key(rec);
-        for case in &rec.source_cases {
-            first_seen
-                .entry(case.clone())
-                .and_modify(|(best_idx, best_date)| {
-                    let best_ord = record_order_key(&records[*best_idx]);
-                    if (rec_ord.clone(), rec_date.as_deref()) < (best_ord, best_date.as_deref()) {
-                        *best_idx = rec_idx;
-                        *best_date = rec_date.clone();
-                    }
-                })
-                .or_insert((rec_idx, rec_date.clone()));
+        };
+        let url_key = s
+            .url
+            .as_deref()
+            .and_then(normalize_url)
+            .map(|(full, _)| full);
+        let dup = dated.iter_mut().find(|(d, _, d_url)| {
+            d.identity == s.identity || (url_key.is_some() && url_key.as_deref() == Some(d_url))
+        });
+        match dup {
+            Some(entry) if day < entry.1 => *entry = (s, day, url_key.unwrap_or_default()),
+            Some(_) => {}
+            None => dated.push((s, day, url_key.unwrap_or_default())),
         }
     }
-
-    if first_seen.is_empty() {
-        return empty;
+    if dated.len() < 2 {
+        return None;
+    }
+    dated.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.case_id.cmp(&b.0.case_id)));
+    if dated[0].1 == dated[1].1 {
+        return None;
     }
 
-    let mut ordered: Vec<(String, usize, Option<String>)> = first_seen
-        .into_iter()
-        .map(|(case, (idx, date))| (case, idx, date))
-        .collect();
-    ordered.sort_by(|a, b| {
-        let ord_a = record_order_key(&records[a.1]);
-        let ord_b = record_order_key(&records[b.1]);
-        (ord_a, a.2.as_deref(), &a.0).cmp(&(ord_b, b.2.as_deref(), &b.0))
-    });
-
-    let (origin_case, _, origin_date) = &ordered[0];
-    let origin_case = origin_case.clone();
-    let origin_date = origin_date.clone();
-
-    let mut timeline: Vec<AdoptionEntry> = ordered
+    let (origin, origin_day, _) = dated[0];
+    let probe = CreditProbe::new(origin);
+    let adoptions: Vec<Adoption> = dated[1..]
         .iter()
-        .skip(1)
-        .map(|(case, _, date)| AdoptionEntry {
-            source_case_id: case.clone(),
-            first_seen_date: date.clone(),
-            lag_days: lag_days(origin_date.as_deref(), date.as_deref()),
+        .map(|(s, day, _)| Adoption {
+            case_id: s.case_id.clone(),
+            published: s.published.clone().unwrap_or_default(),
+            lag_days: day - origin_day,
+            citation_type: adopter_text(&s.case_id)
+                .map_or(CitationType::Unknown, |text| probe.classify(&text)),
         })
         .collect();
-    timeline.sort_by(|a, b| {
-        (
-            a.lag_days.unwrap_or(i64::MAX),
-            a.first_seen_date.as_deref(),
-            a.source_case_id.as_str(),
-        )
-            .cmp(&(
-                b.lag_days.unwrap_or(i64::MAX),
-                b.first_seen_date.as_deref(),
-                b.source_case_id.as_str(),
-            ))
-    });
 
-    let origin_key = record_order_key(&records[ordered[0].1]);
-    let mut later_total = 0usize;
-    let mut later_citing = 0usize;
-    for rec in records {
-        if record_order_key(rec) <= origin_key {
-            continue;
-        }
-        later_total += 1;
-        if rec.source_cases.iter().any(|c| c == &origin_case)
-            || rec.citations.iter().any(|c| c.case_id == origin_case)
-        {
-            later_citing += 1;
-        }
+    let classified = adoptions
+        .iter()
+        .filter(|a| a.citation_type != CitationType::Unknown)
+        .count();
+    let credited = adoptions
+        .iter()
+        .filter(|a| {
+            matches!(
+                a.citation_type,
+                CitationType::ExactLink | CitationType::Credit
+            )
+        })
+        .count();
+    Some(Propagation {
+        origin_case_id: origin.case_id.clone(),
+        origin_published: origin.published.clone().unwrap_or_default(),
+        adoptions,
+        credit_rate: (classified > 0).then(|| credited as f64 / classified as f64),
+    })
+}
+
+/// Hosts that carry everyone's content. Their name appearing in a text says
+/// nothing about crediting a particular source on them (on the dogfood vault
+/// `x.com` / `github.com` mentions were ~97% of all host matches).
+const PLATFORM_HOSTS: &[&str] = &[
+    "x.com",
+    "twitter.com",
+    "github.com",
+    "gist.github.com",
+    "youtube.com",
+    "youtu.be",
+    "medium.com",
+    "substack.com",
+    "mp.weixin.qq.com",
+    "weixin.qq.com",
+    "zhihu.com",
+    "zhuanlan.zhihu.com",
+    "bilibili.com",
+    "arxiv.org",
+    "reddit.com",
+    "news.ycombinator.com",
+    "linkedin.com",
+    "huggingface.co",
+];
+
+struct CreditProbe {
+    /// Normalized origin URL, only when it has a path (a bare domain is a
+    /// site, not a document — that is a credit, not an exact link).
+    exact: Option<String>,
+    host: Option<String>,
+    names: Vec<String>,
+}
+
+impl CreditProbe {
+    fn new(origin: &SourceFacts) -> Self {
+        let parsed = origin.url.as_deref().and_then(normalize_url);
+        let exact = parsed
+            .as_ref()
+            .filter(|(full, host)| full.len() > host.len())
+            .map(|(full, _)| full.clone());
+        let host = parsed
+            .map(|(_, host)| host)
+            .filter(|h| !PLATFORM_HOSTS.contains(&h.as_str()));
+        let names = origin
+            .author
+            .as_deref()
+            .unwrap_or("")
+            .split([',', '|', ';'])
+            .map(|n| n.trim().to_lowercase())
+            .filter(|n| is_distinctive_name(n))
+            .collect();
+        Self { exact, host, names }
     }
 
-    let credit_rate = if later_total == 0 {
-        None
-    } else {
-        Some(later_citing as f64 / later_total as f64)
-    };
-
-    PropagationSummary {
-        origin_case_id: Some(origin_case),
-        adoption_count: timeline.len(),
-        credit_rate,
-        timeline,
+    fn classify(&self, text: &str) -> CitationType {
+        let text = text.to_lowercase();
+        if self.exact.as_deref().is_some_and(|u| text.contains(u)) {
+            return CitationType::ExactLink;
+        }
+        let names_origin = self.names.iter().any(|n| text.contains(n.as_str()));
+        if names_origin || self.host.as_deref().is_some_and(|h| text.contains(h)) {
+            return CitationType::Credit;
+        }
+        CitationType::Inferred
     }
 }
 
-fn record_order_key(rec: &DurableRecord) -> (Option<String>, String) {
-    (run_date_from_run_id(&rec.run_id), rec.run_id.clone())
-}
-
-fn run_date_from_run_id(run_id: &str) -> Option<String> {
-    if let Some(i) = run_id.find("20") {
-        let slice = &run_id[i..];
-        if slice.len() >= 10 {
-            let cand = &slice[..10];
-            if is_iso_day(cand) {
-                return Some(cand.to_string());
-            }
-        }
-        if slice.len() >= 8 {
-            let cand = &slice[..8];
-            if cand.bytes().all(|b| b.is_ascii_digit()) {
-                return Some(format!("{}-{}-{}", &cand[..4], &cand[4..6], &cand[6..8]));
-            }
-        }
+/// A single short word ("openai", "admin") matches far too much prose to
+/// count as crediting a person; a full name or an @handle does not.
+fn is_distinctive_name(n: &str) -> bool {
+    let n = n.trim();
+    if n.starts_with('@') {
+        return n.len() >= 4;
     }
-    None
+    n.split_whitespace().count() >= 2 && n.len() >= 6
 }
 
-fn is_iso_day(s: &str) -> bool {
+/// `https://www.Example.com/a/b/?utm=x#y` → (`example.com/a/b`, `example.com`).
+fn normalize_url(url: &str) -> Option<(String, String)> {
+    let lower = url.trim().to_lowercase();
+    let rest = lower.split_once("://").map_or(lower.as_str(), |(_, r)| r);
+    let rest = rest.split(['?', '#']).next().unwrap_or("");
+    let rest = rest.trim_end_matches('/');
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    let host = rest.split('/').next().unwrap_or("");
+    if host.is_empty() || !host.contains('.') {
+        return None;
+    }
+    Some((rest.to_string(), host.to_string()))
+}
+
+/// Days since 1970-01-01 for a strict `YYYY-MM-DD`; `None` otherwise.
+fn day_number(s: &str) -> Option<i64> {
     let b = s.as_bytes();
-    b.len() == 10
-        && b[4] == b'-'
-        && b[7] == b'-'
-        && b[..4].iter().all(|c| c.is_ascii_digit())
-        && b[5..7].iter().all(|c| c.is_ascii_digit())
-        && b[8..10].iter().all(|c| c.is_ascii_digit())
-}
-
-fn lag_days(origin: Option<&str>, adopter: Option<&str>) -> Option<i64> {
-    match (origin, adopter) {
-        (Some(o), Some(a)) => {
-            let o = iso_day_number(o)?;
-            let a = iso_day_number(a)?;
-            Some(a - o)
-        }
-        _ => None,
-    }
-}
-
-fn iso_day_number(s: &str) -> Option<i64> {
-    if !is_iso_day(s) {
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
         return None;
     }
     let y: i64 = s[..4].parse().ok()?;
     let m: i64 = s[5..7].parse().ok()?;
     let d: i64 = s[8..10].parse().ok()?;
-    Some(y * 372 + m * 31 + d)
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // Howard Hinnant's days_from_civil.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crystal::{
-        CrystalStatus, DurableCitation, FinalClass, ProvenanceClass, StrengthClass,
-    };
+    use std::collections::HashMap;
 
-    fn rec(
-        key: &str,
-        claim: &str,
-        run_id: &str,
-        cases: &[&str],
-        cite_origin: bool,
-        origin: &str,
-    ) -> DurableRecord {
-        let mut source_cases: Vec<String> = cases.iter().map(|c| (*c).to_string()).collect();
-        if cite_origin && !source_cases.contains(&origin.to_string()) {
-            source_cases.push(origin.to_string());
+    fn src(case: &str, published: Option<&str>, url: &str, author: Option<&str>) -> SourceFacts {
+        SourceFacts {
+            case_id: case.into(),
+            identity: format!("sha-{case}"),
+            published: published.map(str::to_string),
+            url: Some(url.into()),
+            author: author.map(str::to_string),
         }
-        source_cases.sort();
-        source_cases.dedup();
-        let citations: Vec<DurableCitation> = source_cases
+    }
+
+    fn run(sources: &[SourceFacts], texts: &[(&str, &str)]) -> Option<Propagation> {
+        let texts: HashMap<&str, &str> = texts.iter().copied().collect();
+        compute_propagation(sources, |c| texts.get(c).map(|t| (*t).to_string()))
+    }
+
+    #[test]
+    fn origin_is_earliest_publication_and_adoptions_sorted_with_calendar_lag() {
+        let sources = vec![
+            src("c", Some("2026-03-01"), "https://c.dev/post", None),
+            src(
+                "a",
+                Some("2026-02-28"),
+                "https://blog.a.io/memory",
+                Some("Ada Lovelace"),
+            ),
+            src("b", Some("2026-03-10"), "https://b.dev/x", None),
+        ];
+        let p = run(&sources, &[("b", "plain"), ("c", "plain")]).unwrap();
+        assert_eq!(p.origin_case_id, "a");
+        assert_eq!(p.origin_published, "2026-02-28");
+        let order: Vec<(&str, i64)> = p
+            .adoptions
             .iter()
-            .map(|case_id| DurableCitation {
-                case_id: case_id.clone(),
-                unit_id: "u-0".into(),
-                quote: "q".into(),
-                resolved_line: Some(1),
-                citation_type: Default::default(),
-            })
+            .map(|a| (a.case_id.as_str(), a.lag_days))
             .collect();
-        DurableRecord {
-            claim_key: key.into(),
-            claim_id: format!("id-{key}"),
-            claim: claim.into(),
-            theme: "t".into(),
-            theme_id: None,
-            source_cases,
-            citations,
-            provenance_score: 0.9,
-            provenance_class: ProvenanceClass::Durable,
-            strength: StrengthClass::Supported,
-            strength_rationale: "ok".into(),
-            final_class: FinalClass::Durable,
-            run_id: run_id.into(),
-            status: CrystalStatus::Active,
-            origin_source: None,
-            adoption_timeline: Vec::new(),
-            credit_rate: None,
-        }
+        // Feb 28 → Mar 1 is ONE day (the old y*372+m*31+d made it 4).
+        assert_eq!(order, vec![("c", 1), ("b", 10)]);
     }
 
     #[test]
-    fn three_sources_origin_is_earliest_and_timeline_sorted() {
-        let claim = "Agents need durable memory";
-        let records = vec![
-            rec("ck-b", claim, "daily-2026-01-10", &["case-b"], false, "case-a"),
-            rec("ck-a", claim, "daily-2026-01-05", &["case-a"], false, "case-a"),
-            rec("ck-c", claim, "daily-2026-01-20", &["case-c"], true, "case-a"),
-            rec("ck-d", claim, "daily-2026-01-25", &["case-d"], true, "case-a"),
+    fn classifies_exact_link_credit_and_inferred_and_computes_credit_rate() {
+        let sources = vec![
+            src(
+                "o",
+                Some("2026-01-01"),
+                "https://www.blog.a.io/memory/?utm=x",
+                Some("Ada Lovelace"),
+            ),
+            src("link", Some("2026-01-02"), "https://l.dev/1", None),
+            src("credit", Some("2026-01-03"), "https://cr.dev/1", None),
+            src("site", Some("2026-01-04"), "https://s.dev/1", None),
+            src("none", Some("2026-01-05"), "https://n.dev/1", None),
+            src("unread", Some("2026-01-06"), "https://u.dev/1", None),
         ];
-        let summary = compute_propagation(&records);
-        assert_eq!(summary.origin_case_id.as_deref(), Some("case-a"));
-        assert_eq!(summary.adoption_count, 3);
-        assert_eq!(summary.timeline.len(), 3);
+        let p = run(
+            &sources,
+            &[
+                ("link", "see HTTPS://blog.a.io/memory for details"),
+                ("credit", "as Ada Lovelace argued last week"),
+                ("site", "a post on blog.a.io said so"),
+                ("none", "memory is scarce"),
+            ],
+        )
+        .unwrap();
+        let types: Vec<CitationType> = p.adoptions.iter().map(|a| a.citation_type).collect();
         assert_eq!(
-            summary
-                .timeline
-                .iter()
-                .map(|e| e.lag_days)
-                .collect::<Vec<_>>(),
-            vec![Some(5), Some(15), Some(20)]
+            types,
+            vec![
+                CitationType::ExactLink,
+                CitationType::Credit,
+                CitationType::Credit,
+                CitationType::Inferred,
+                CitationType::Unknown,
+            ]
         );
-        assert_eq!(summary.credit_rate, Some(2.0 / 3.0));
+        // 3 credited of 4 classified; the unreadable one is not counted.
+        assert_eq!(p.credit_rate, Some(0.75));
     }
 
     #[test]
-    fn single_or_empty_records_yield_none() {
-        let one = vec![rec(
-            "ck-a",
-            "solo",
-            "daily-2026-01-05",
-            &["case-a"],
-            false,
-            "case-a",
-        )];
-        let summary = compute_propagation(&one);
-        assert!(summary.origin_case_id.is_none());
-        assert!(summary.timeline.is_empty());
-        assert!(summary.credit_rate.is_none());
-
-        let summary = compute_propagation(&[]);
-        assert!(summary.origin_case_id.is_none());
-    }
-
-    #[test]
-    fn durable_record_deserializes_without_propagation_fields() {
-        let json = r#"{
-            "claim_key": "ck-legacy",
-            "claim_id": "c-legacy",
-            "claim": "Legacy claim",
-            "theme": "t",
-            "source_cases": ["case-a"],
-            "citations": [],
-            "provenance_score": 0.5,
-            "provenance_class": "durable",
-            "strength": "supported",
-            "strength_rationale": "r",
-            "final_class": "durable",
-            "run_id": "daily-2026-01-01",
-            "status": "active"
-        }"#;
-        let rec: DurableRecord = serde_json::from_str(json).unwrap();
-        assert!(rec.origin_source.is_none());
-        assert!(rec.adoption_timeline.is_empty());
-        assert!(rec.credit_rate.is_none());
-    }
-
-    #[test]
-    fn overlay_stamps_all_siblings() {
-        let claim = "Shared claim text";
-        let mut records = vec![
-            rec("ck-1", claim, "daily-2026-02-01", &["src-1"], false, "src-1"),
-            rec("ck-2", claim, "daily-2026-02-10", &["src-2"], false, "src-1"),
+    fn platform_hosts_and_single_word_authors_do_not_count_as_credit() {
+        let sources = vec![
+            src("o", Some("2026-01-01"), "https://x.com", Some("openai")),
+            src("later", Some("2026-01-02"), "https://l.dev/1", None),
         ];
-        overlay_propagation(&mut records);
-        for r in &records {
-            assert_eq!(r.origin_source.as_deref(), Some("src-1"));
-            assert_eq!(r.adoption_timeline.len(), 1);
-            assert_eq!(r.adoption_timeline[0].source_case_id, "src-2");
-        }
+        let p = run(&sources, &[("later", "openai posted this on x.com")]).unwrap();
+        assert_eq!(p.adoptions[0].citation_type, CitationType::Inferred);
+        assert_eq!(p.credit_rate, Some(0.0));
+    }
+
+    #[test]
+    fn tie_for_earliest_or_too_few_dated_sources_yields_none() {
+        let tie = vec![
+            src("a", Some("2026-01-01"), "https://a.dev/1", None),
+            src("b", Some("2026-01-01"), "https://b.dev/1", None),
+            src("c", Some("2026-01-09"), "https://c.dev/1", None),
+        ];
+        assert!(run(&tie, &[]).is_none());
+
+        let undated = vec![
+            src("a", Some("2026-01-01"), "https://a.dev/1", None),
+            src("b", None, "https://b.dev/1", None),
+            src("c", Some("not-a-date"), "https://c.dev/1", None),
+        ];
+        assert!(run(&undated, &[]).is_none());
+        assert!(run(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn duplicate_captures_of_one_source_are_one_source() {
+        // Same URL captured twice (different content hash): not an adoption.
+        let mut dup = src("a2", Some("2026-01-05"), "https://a.dev/post/", None);
+        dup.identity = "sha-other".into();
+        let sources = vec![
+            src("a1", Some("2026-01-01"), "https://a.dev/post", None),
+            dup,
+        ];
+        assert!(run(&sources, &[("a2", "https://a.dev/post")]).is_none());
+    }
+
+    #[test]
+    fn day_number_is_a_real_calendar() {
+        assert_eq!(day_number("1970-01-01"), Some(0));
+        assert_eq!(
+            day_number("2024-03-01").unwrap() - day_number("2024-02-28").unwrap(),
+            2
+        );
+        assert_eq!(
+            day_number("2026-01-01").unwrap() - day_number("2025-12-31").unwrap(),
+            1
+        );
+        assert_eq!(day_number("2026-13-01"), None);
+        assert_eq!(day_number("20260101"), None);
     }
 }
