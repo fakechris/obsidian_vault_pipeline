@@ -1093,6 +1093,21 @@ function themeGroupKey(id: number | null | undefined, label: string): string {
  * ledger order (count desc); index-only themes append after. Groups are
  * keyed by the STABLE community id when present (so a relabel doesn't split
  * a community into two cards); pre-theme entries fall back to the label. */
+/** Map precomputed portal-summary themes into the `/api/themes` row shape. */
+export function themesFromPortalSummary(summary: {
+  themes: {
+    theme_id: number | null;
+    label: string;
+    claim_count: number;
+  }[];
+}): { id?: number | null; theme: string; count: number }[] {
+  return summary.themes.map((t) => ({
+    id: t.theme_id,
+    theme: t.label,
+    count: t.claim_count,
+  }));
+}
+
 export function themeWall(
   claims: ClaimRow[],
   ledgerThemes: {

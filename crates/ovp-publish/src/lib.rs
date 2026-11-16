@@ -145,6 +145,7 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
     )
     .map_err(|e| format!("publish: {e}"))?;
 
+    let portal_summary = ovp_index::portal_summary_from_parts(&args.vault_root, public, &records);
     let files = write_api_tree(
         &args.out_dir.join("api"),
         public,
@@ -152,6 +153,7 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
         theme_pages.as_ref(),
         &terrain_src,
         args.published_at.as_deref(),
+        Some(&portal_summary),
     )?;
 
     Ok(PublishReport {
@@ -177,6 +179,7 @@ fn write_api_tree(
     theme_pages: Option<&ovp_domain::crystal::theme_pages::ThemePagesFile>,
     terrain_src: &Path,
     published_at: Option<&str>,
+    portal_summary: Option<&ovp_domain::PortalSummary>,
 ) -> Result<usize, String> {
     fs_reset_dir(api)?;
     let mut files = 0usize;
@@ -197,6 +200,13 @@ fn write_api_tree(
     let empty = Query::default();
     write_json(&api.join("search-index.json"), &bodies::find_body(public, &empty))?;
     files += 6;
+    if let Some(summary) = portal_summary {
+        write_json(
+            &api.join("portal-summary.json"),
+            &serde_json::to_value(summary).unwrap_or_default(),
+        )?;
+        files += 1;
+    }
 
     // Graph: the global overview + one keyed file of per-theme subgraphs (keyed
     // by label so the SPA looks up client-side, no slug-matching). Neighborhood
@@ -707,6 +717,7 @@ mod tests {
             Some(&pages),
             &tmp.path().join("no-terrain.json"),
             Some("2026-07-01T12:00:00Z"),
+            None,
         )
         .unwrap();
         assert!(n >= 8, "expected the full tree, got {n} files");

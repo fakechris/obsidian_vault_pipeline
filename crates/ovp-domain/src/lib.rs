@@ -32,6 +32,8 @@ pub mod jsonl;
 pub mod model_reply;
 pub mod moc;
 pub mod paper_doc;
+/// Precomputed portal headline aggregate (`.ovp/console/portal-summary.json`).
+pub mod portal_summary;
 pub mod prompt;
 pub mod response;
 pub mod sinks;
@@ -74,6 +76,10 @@ pub use knowledge_index::{
 };
 pub use moc::MocBuilder;
 pub use paper_doc::{PaperDoc, PaperSections};
+pub use portal_summary::{
+    build_portal_summary, ActivityEntry, IndexHealth, PortalSummary, SummaryClaimRow,
+    SummaryPackRow, SummaryTotals, ThemeSummary,
+};
 pub use prompt::{PromptId, PromptRequest};
 pub use response::{ModelResponse, ResponseContent};
 pub use sinks::{ArticleVaultPlanSink, EvergreenSink, PaperVaultPlanSink};

@@ -5,7 +5,9 @@
 use std::path::PathBuf;
 
 use ovp_console::{write_console, write_ops_pages};
-use ovp_index::{build_evidence, build_index_at, now_rfc3339, write_evidence, write_index};
+use ovp_index::{
+    build_evidence, build_index_at, now_rfc3339, write_evidence, write_index, write_portal_summary,
+};
 
 use crate::CliError;
 
@@ -27,6 +29,7 @@ pub fn run(args: ConsoleArgs) -> Result<(), CliError> {
     crate::commands::index_cmd::shadow_sqlite(&args.vault_root, &model, &evidence);
     let console_rel = write_console(&args.vault_root, &model).map_err(CliError::Io)?;
     let ops_pages = write_ops_pages(&args.vault_root, &model).map_err(CliError::Io)?;
+    let summary_rel = write_portal_summary(&args.vault_root, &model).map_err(CliError::Io)?;
     println!(
         "console [{}]: {}",
         args.date,
@@ -41,6 +44,7 @@ pub fn run(args: ConsoleArgs) -> Result<(), CliError> {
     for p in &ops_pages {
         println!("  ops page: {p}");
     }
+    println!("  portal-summary: {summary_rel}");
     println!(
         "  sources={} packs={} durable={} caveated={} runs={}",
         model.totals.sources,

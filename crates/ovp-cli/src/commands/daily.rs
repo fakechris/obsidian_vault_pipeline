@@ -26,6 +26,7 @@ use ovp_enrich::github::{
 use ovp_enrich::web_fetch::{FixtureWebFetch, WebFetch, enrich_needs_content_with_progress};
 use ovp_index::{
     build_evidence, build_index, build_index_with_progress, write_evidence, write_index,
+    write_portal_summary,
 };
 use ovp_intake::{
     EnrichOutcome, FixturePinboardFetch, IntakeConfig, PinboardFetch, PipelineLogEvent,
@@ -935,6 +936,8 @@ fn run_inner(
     crate::commands::index_cmd::shadow_sqlite(&args.vault_root, &model, &evidence);
     let console_rel = write_console(&args.vault_root, &model).map_err(CliError::Io)?;
     let _ops_pages = write_ops_pages(&args.vault_root, &model).map_err(CliError::Io)?;
+    let _summary_rel =
+        ovp_index::write_portal_summary(&args.vault_root, &model).map_err(CliError::Io)?;
 
     // Phase 6 — optional daily digest (ephemeral reuse surface).
     if !args.no_digest {
@@ -1227,6 +1230,7 @@ fn rebuild_projection(
     crate::commands::index_cmd::shadow_sqlite(vault_root, &model, &evidence);
     write_console(vault_root, &model).map_err(CliError::Io)?;
     write_ops_pages(vault_root, &model).map_err(CliError::Io)?;
+    write_portal_summary(vault_root, &model).map_err(CliError::Io)?;
     Ok(())
 }
 
