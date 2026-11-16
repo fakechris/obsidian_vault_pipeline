@@ -985,6 +985,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                 tags,
                 tags_inferred,
                 tags_implied,
+                xy: None,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1063,6 +1064,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                         adoption_timeline: Vec::new(),
                         adoption_count: None,
                         credit_rate: None,
+                        xy: None,
                     },
                     r.get::<_, String>(6)?,
                 ))
@@ -1512,6 +1514,7 @@ mod tests {
                 tags_inferred: vec!["agents".into(), "记忆".into()],
                 tags_implied: vec!["ml".into()],
                 entities: vec!["Anthropic".into()],
+                xy: None,
             }],
             packs: vec![PackRow {
                 pack_dir: "40-Resources/Reader/a".into(),
@@ -1540,6 +1543,7 @@ mod tests {
             adoption_timeline: Vec::new(),
             adoption_count: None,
             credit_rate: None,
+            xy: None,
             }],
             runs: vec![crate::model::RunRow {
                 run_id: "daily-2026-08-02".into(),

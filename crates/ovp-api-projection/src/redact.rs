@@ -171,6 +171,7 @@ mod tests {
             tags_inferred: vec!["rust".into()],
             tags_implied: Vec::new(),
             entities: vec!["github:owner/repo".into()],
+            xy: None,
         }
     }
 
@@ -192,6 +193,7 @@ mod tests {
         adoption_timeline: Vec::new(),
         adoption_count: None,
         credit_rate: None,
+        xy: None,
         }
     }
 

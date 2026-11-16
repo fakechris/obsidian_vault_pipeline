@@ -26,6 +26,8 @@ export interface GraphNode {
   /** Claims only: index claim_id for portal links — the node `id` carries
    * the ledger claim_key, which can differ. */
   claim_id?: string;
+  /** Index-build layout — when present on every node the graph skips simulation. */
+  xy?: [number, number];
 }
 
 export interface GraphEdge {

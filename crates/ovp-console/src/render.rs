@@ -451,6 +451,7 @@ mod tests {
                     tags_inferred: Vec::new(),
                     tags_implied: Vec::new(),
                     entities: Vec::new(),
+                    xy: None,
                 },
                 SourceRow {
                     sha256: "cccc".into(),
@@ -475,6 +476,7 @@ mod tests {
                     tags_inferred: Vec::new(),
                     tags_implied: Vec::new(),
                     entities: Vec::new(),
+                    xy: None,
                 },
             ],
             packs: vec![PackRow {
@@ -505,6 +507,7 @@ mod tests {
                 adoption_timeline: Vec::new(),
                 adoption_count: None,
                 credit_rate: None,
+            xy: None,
                 },
                 ClaimRow {
                     claim_id: "c02".into(),
@@ -523,6 +526,7 @@ mod tests {
                 adoption_timeline: Vec::new(),
                 adoption_count: None,
                 credit_rate: None,
+            xy: None,
                 },
             ],
             runs: vec![RunRow {

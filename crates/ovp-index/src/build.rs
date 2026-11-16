@@ -23,6 +23,7 @@ use ovp_intake::vaultops::{hex_sha256, read_jsonl_strict, rel_to};
 use ovp_intake::{IntakeAction, read_intake_ledger, read_pinboard_ledger};
 use serde::Deserialize;
 
+use crate::graph_layout;
 use crate::model::{
     first_iso_day_in, is_iso_day, run_date_from_run_id, BlockedSource, ClaimRow, ClaimStatus,
     INDEX_SCHEMA, IndexModel, LastRunModel, OpsState, PackRow, RecentSourceModel, RunRow, RunStats,
@@ -115,7 +116,7 @@ pub fn build_index_at_with_progress(
     on_phase(&format!("tagged {tagged} source(s)"));
     let originated = attach_origins(vault_root, &layout, &mut sources)?;
     on_phase(&format!("origins on {originated} source(s)"));
-    let claims = build_claims(vault_root, &layout)?;
+    let mut claims = build_claims(vault_root, &layout)?;
     on_phase(&format!("folded {} claim(s)", claims.len()));
 
     let totals = Totals {
@@ -138,6 +139,8 @@ pub fn build_index_at_with_progress(
             .count(),
         runs: runs.len(),
     };
+
+    graph_layout::attach_graph_layout(&mut claims, &mut sources, &packs);
 
     let mut ops = build_ops_state(&sources, &runs, &reports, date);
     ops.last_run = build_last_run(vault_root);
@@ -1025,6 +1028,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 .collect(),
             adoption_count,
             credit_rate: rec.credit_rate,
+            xy: None,
         });
     }
 
@@ -1062,6 +1066,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 adoption_timeline: Vec::new(),
                 adoption_count: None,
                 credit_rate: None,
+                xy: None,
             });
         }
     }

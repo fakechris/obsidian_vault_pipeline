@@ -579,6 +579,7 @@ mod tests {
             tags_inferred: inferred.iter().map(|t| t.to_string()).collect(),
             tags_implied: Vec::new(),
             entities: Vec::new(),
+            xy: None,
         }
     }
 

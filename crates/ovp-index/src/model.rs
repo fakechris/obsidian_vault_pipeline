@@ -156,6 +156,9 @@ pub struct SourceRow {
     /// Serde-additive: pre-entity indexes deserialize to empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entities: Vec<String>,
+    /// Precomputed portal graph position `[x, y]` (source-centric view).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xy: Option<[f64; 2]>,
 }
 
 impl SourceRow {
@@ -184,6 +187,7 @@ impl SourceRow {
             tags_inferred: Vec::new(),
             tags_implied: Vec::new(),
             entities: Vec::new(),
+            xy: None,
         }
     }
 
@@ -324,6 +328,9 @@ pub struct ClaimRow {
     /// When modified by a Human Patch Record (M37), the active patch ID (e.g. `hp-...`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patched_by: Option<String>,
+    /// Precomputed portal graph position `[x, y]` (claim-centric view).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xy: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_source: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

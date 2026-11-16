@@ -835,6 +835,7 @@ mod tests {
             tags_inferred: vec![],
             tags_implied: vec![],
             entities: vec![],
+            xy: None,
         }
     }
 

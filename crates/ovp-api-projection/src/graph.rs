@@ -141,6 +141,35 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
+fn attach_precomputed_coords(base: &mut BaseGraph, model: &IndexModel) {
+    let claims: HashMap<&str, [f64; 2]> = model
+        .claims
+        .iter()
+        .filter_map(|c| {
+            let key = c.claim_key.as_deref().unwrap_or(c.claim_id.as_str());
+            c.xy.map(|xy| (key, xy))
+        })
+        .collect();
+    let sources: HashMap<&str, [f64; 2]> = model
+        .sources
+        .iter()
+        .filter_map(|s| s.xy.map(|xy| (s.sha256.as_str(), xy)))
+        .collect();
+    for node in base.nodes.values_mut() {
+        node.xy = if node.node_type == "claim" {
+            node.id
+                .strip_prefix("claim:")
+                .and_then(|k| claims.get(k).copied())
+        } else if node.node_type == "source" {
+            node.id
+                .strip_prefix("source:")
+                .and_then(|k| sources.get(k).copied())
+        } else {
+            None
+        };
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct GNode {
     pub id: String,
@@ -177,6 +206,9 @@ pub struct GNode {
     /// differ by construction, so the payload carries both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claim_id: Option<String>,
+    /// Index-build layout — when present the client skips force simulation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xy: Option<[f64; 2]>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -223,6 +255,9 @@ pub fn build_graph(
     compute_degrees(&mut base);
     assign_clusters(&mut base);
     compute_importance(&mut base, records);
+    if let Some(m) = model {
+        attach_precomputed_coords(&mut base, m);
+    }
 
     match params.mode {
         GraphMode::Overview => Ok(match params.persp {
@@ -292,6 +327,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
             hit: false,
             provenance: Some(rec.provenance_score),
             claim_id: Some(rec.claim_id.clone()),
+            xy: None,
         });
 
         for cit in &rec.citations {
@@ -314,6 +350,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                 hit: false,
                 provenance: None,
                 claim_id: None,
+                xy: None,
             });
 
             edges.push(GEdge {
@@ -343,6 +380,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                     hit: false,
                     provenance: None,
                     claim_id: None,
+                    xy: None,
                 });
                 sid
             } else {
@@ -361,6 +399,7 @@ fn build_base(records: &[DurableRecord], model: Option<&IndexModel>) -> BaseGrap
                     hit: false,
                     provenance: None,
                     claim_id: None,
+                    xy: None,
                 });
                 sid
             };
@@ -1077,6 +1116,7 @@ fn memory_card_nodes(
             hit: false,
             provenance: None,
             claim_id: None,
+            xy: None,
         })
         .collect()
 }
@@ -1104,6 +1144,9 @@ pub fn source_neighborhood(
     compute_degrees(&mut base);
     assign_clusters(&mut base);
     compute_importance(&mut base, records);
+    if let Some(m) = model {
+        attach_precomputed_coords(&mut base, m);
+    }
 
     let focus_id = format!("source:{sha}");
 
@@ -1150,6 +1193,7 @@ pub fn source_neighborhood(
             hit: false,
             provenance: None,
             claim_id: None,
+            xy: src.xy,
         };
         let mut nodes = vec![node];
         let budget = MAX_NEIGHBORHOOD_NODES.saturating_sub(nodes.len());
@@ -1327,6 +1371,7 @@ fn caveated_theme_claims(
                     hit: false,
                     provenance: None,
                     claim_id: None,
+                    xy: None,
                 });
             }
             sources.insert(sid);
@@ -1348,6 +1393,7 @@ fn caveated_theme_claims(
                 hit: false,
                 provenance: None,
                 claim_id: Some(row.claim_id.clone()),
+                xy: row.xy,
             },
             sources,
         });
@@ -1387,6 +1433,9 @@ pub fn theme_subgraph(
     compute_degrees(&mut base);
     assign_clusters(&mut base);
     compute_importance(&mut base, records);
+    if let Some(m) = model {
+        attach_precomputed_coords(&mut base, m);
+    }
 
     // Ledger claims for the theme, importance-ranked so a huge theme keeps
     // its strongest claims under the shared node cap.
@@ -1529,6 +1578,9 @@ pub fn search_subgraph(
     compute_degrees(&mut base);
     assign_clusters(&mut base);
     compute_importance(&mut base, records);
+    if let Some(m) = model {
+        attach_precomputed_coords(&mut base, m);
+    }
 
     let needle = query.to_lowercase();
     let mut matching: Vec<(&DurableRecord, f64)> = records
@@ -1638,6 +1690,7 @@ pub fn theme_counts(records: &[DurableRecord]) -> Vec<(String, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ovp_domain::citation_support::CitationType;
     use ovp_domain::crystal::{CrystalStatus, DurableCitation, FinalClass, ProvenanceClass};
 
     fn rec(
@@ -1660,7 +1713,8 @@ mod tests {
                     case_id: (*c).into(),
                     unit_id: (*u).into(),
                     quote: format!("quote {u}"),
-                    resolved_line: None, citation_type: Default::default(),
+                    resolved_line: None,
+                    citation_type: CitationType::Unknown,
                 })
                 .collect(),
             provenance_score: prov,
@@ -1670,9 +1724,9 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            credit_rate: None,
         }
     }
 
@@ -2028,6 +2082,7 @@ mod tests {
                     tags_inferred: Vec::new(),
                     tags_implied: Vec::new(),
                     entities: Vec::new(),
+                xy: None,
                 })
                 .collect(),
             packs: cases
@@ -2120,6 +2175,7 @@ mod tests {
             tags_inferred: Vec::new(),
             tags_implied: Vec::new(),
             entities: Vec::new(),
+        xy: None,
         });
         let resp = source_neighborhood(&records, Some(&model), None, "freshsha").unwrap();
         assert_eq!(resp.nodes.len(), 1);
@@ -2181,6 +2237,7 @@ mod tests {
             tags_inferred: Vec::new(),
             tags_implied: Vec::new(),
             entities: Vec::new(),
+        xy: None,
         });
         let evidence = evidence_for("fresh", "freshsha", 2);
         let resp =
@@ -2368,10 +2425,11 @@ mod tests {
             run_date: None,
             lane: None,
             patched_by: None,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        adoption_count: None,
-        credit_rate: None,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            adoption_count: None,
+            credit_rate: None,
+            xy: None,
         });
         let resp = theme_subgraph(&records, Some(&model), "gamma").unwrap();
         let ids: Vec<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();

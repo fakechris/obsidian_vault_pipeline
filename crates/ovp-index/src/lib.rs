@@ -19,6 +19,7 @@
 
 pub mod build;
 pub mod evidence;
+pub mod graph_layout;
 pub mod model;
 pub mod query;
 pub mod score;

@@ -49,19 +49,22 @@ pub fn extract_wikilinks(md: &str) -> Vec<String> {
 
 /// A derived knowledge-index entry: a canonical concept plus the vault
 /// notes that reference it (`[[slug]]` backlinks).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KnowledgeIndexEntry {
     pub slug: String,
     pub title: String,
     pub evergreen_path: String,
     /// Vault-relative paths of notes that wikilink this concept, sorted.
     pub backlinks: Vec<String>,
+    /// Precomputed graph layout position `[x, y]` in portal coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xy: Option<[f64; 2]>,
 }
 
 /// A derived index over the canonical concepts + vault backlinks. Fully
 /// rebuildable from (canonical store + vault), holds no authority
 /// (invariant #11). Serialized to a single JSON artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KnowledgeIndex {
     pub entries: Vec<KnowledgeIndexEntry>,
 }
@@ -86,11 +89,49 @@ impl KnowledgeIndex {
                     title: c.title.clone(),
                     evergreen_path: c.evergreen_path.clone(),
                     backlinks: links,
+                    xy: None,
                 }
             })
             .collect();
         entries.sort_by(|a, b| a.slug.cmp(&b.slug));
-        Self { entries }
+        Self { entries }.with_layout()
+    }
+
+    /// Compute graph layout from entries' co-citation backlink graph.
+    pub fn with_layout(mut self) -> Self {
+        use crate::graph_layout;
+
+        let mut node_weights = BTreeMap::new();
+        for e in &self.entries {
+            node_weights.insert(e.slug.clone(), e.backlinks.len() as f64);
+        }
+
+        let mut edges = Vec::new();
+        let n = self.entries.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let shared = self.entries[i]
+                    .backlinks
+                    .iter()
+                    .filter(|b| self.entries[j].backlinks.contains(b))
+                    .count();
+                if shared > 0 {
+                    edges.push((
+                        self.entries[i].slug.clone(),
+                        self.entries[j].slug.clone(),
+                        shared as f64,
+                    ));
+                }
+            }
+        }
+
+        let layout = graph_layout::compute_layout_default(&node_weights, &edges);
+        for node in layout.nodes {
+            if let Some(entry) = self.entries.iter_mut().find(|e| e.slug == node.id) {
+                entry.xy = Some(node.xy);
+            }
+        }
+        self
     }
 
     /// Deterministic pretty JSON.
@@ -245,5 +286,23 @@ mod tests {
         let plan = b.plan_rebuild(RunId::new("r"), &new_idx, Some(&old));
         assert_eq!(plan.len(), 1);
         assert!(matches!(plan.ops[0], WriteOp::VaultUpdate(_)));
+    }
+
+    #[test]
+    fn entry_xy_optional_backward_compatible() {
+        let json = r#"{"slug":"a","title":"A","evergreen_path":"p/a.md","backlinks":[]}"#;
+        let entry: KnowledgeIndexEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.xy.is_none());
+    }
+
+    #[test]
+    fn build_assigns_layout_coordinates() {
+        let mut bl = BTreeMap::new();
+        bl.insert("a".to_string(), vec!["shared.md".into()]);
+        bl.insert("b".to_string(), vec!["shared.md".into()]);
+        let idx = KnowledgeIndex::build(&[concept("a"), concept("b")], &bl);
+        for e in &idx.entries {
+            assert!(e.xy.is_some());
+        }
     }
 }

@@ -576,6 +576,7 @@ mod tests {
             tags_inferred: Vec::new(),
             tags_implied: Vec::new(),
             entities: Vec::new(),
+            xy: None,
         }
     }
 
@@ -615,6 +616,7 @@ mod tests {
                 adoption_timeline: Vec::new(),
                 adoption_count: None,
                 credit_rate: None,
+            xy: None,
                 },
                 ClaimRow {
                     claim_id: "id-2".into(),
@@ -633,6 +635,7 @@ mod tests {
                 adoption_timeline: Vec::new(),
                 adoption_count: None,
                 credit_rate: None,
+            xy: None,
                 },
             ],
             runs: vec![],
