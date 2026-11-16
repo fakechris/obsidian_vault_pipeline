@@ -123,7 +123,7 @@ mod tests {
                     case_id: "a".into(),
                     unit_id: format!("u{i}"),
                     quote: "q".into(),
-                    resolved_line: None, citation_type: Default::default(),
+                    resolved_line: None,
                 })
                 .collect(),
             provenance_score: 1.0,

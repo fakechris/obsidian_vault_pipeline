@@ -6321,7 +6321,7 @@ mod tests {
                 case_id: case.into(),
                 unit_id: unit.into(),
                 quote: format!("quote {unit}"),
-                resolved_line: None, citation_type: Default::default(),
+                resolved_line: None,
             }],
             provenance_score: 0.8,
             provenance_class: ProvenanceClass::Durable,

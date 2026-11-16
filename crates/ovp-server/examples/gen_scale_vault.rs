@@ -85,7 +85,7 @@ fn main() {
                 case_id: format!("case-{src:05}"),
                 unit_id: format!("u-{i}-{c}"),
                 quote: format!("synthetic quote {i}-{c} for scale testing"),
-                resolved_line: Some(10 + c), citation_type: Default::default(),
+                resolved_line: Some(10 + c),
             });
         }
 

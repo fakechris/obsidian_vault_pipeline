@@ -56,7 +56,7 @@ fn load_cases() -> Vec<Case> {
                     case_id: x["case_id"].as_str().unwrap().to_string(),
                     unit_id: x["unit_id"].as_str().unwrap().to_string(),
                     quote: x["quote"].as_str().unwrap().to_string(),
-                    claimed_line: None, citation_type: Default::default(),
+                    claimed_line: None,
                 })
                 .collect(),
             strength: serde_json::from_value(c["strength"].clone()).unwrap(),

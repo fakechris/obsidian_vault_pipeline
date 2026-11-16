@@ -92,9 +92,6 @@ pub struct Citation {
     pub quote: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_line: Option<usize>,
-    /// How this citation relationship was established.
-    #[serde(default, skip_serializing_if = "crate::citation_support::is_unknown")]
-    pub citation_type: crate::citation_support::CitationType,
 }
 
 /// One cross-source synthesis claim with its supporting citations.
@@ -615,9 +612,6 @@ pub struct DurableCitation {
     pub quote: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_line: Option<usize>,
-    /// How this citation relationship was established.
-    #[serde(default, skip_serializing_if = "crate::citation_support::is_unknown")]
-    pub citation_type: crate::citation_support::CitationType,
 }
 
 /// A durable Crystal record — the full audit chain for one claim.
@@ -701,7 +695,6 @@ pub fn build_durable_record(
             unit_id: c.unit_id.clone(),
             quote: c.quote.clone(),
             resolved_line: v.resolved_line,
-            citation_type: c.citation_type,
         })
         .collect();
     let mut source_cases: Vec<String> = citations.iter().map(|c| c.case_id.clone()).collect();
@@ -1184,7 +1177,7 @@ mod tests {
         let uid = unit_id(&idx, "m18-01", 0);
         let cand = CrystalCandidate { items: vec![CrystalClaim {
             id: "c1".into(), claim: "chunks are neutral".into(), theme: "x".into(),
-            citations: vec![Citation { case_id: "m18-01".into(), unit_id: uid, quote: "structurally neutral container".into(), claimed_line: Some(999), citation_type: Default::default() }],
+            citations: vec![Citation { case_id: "m18-01".into(), unit_id: uid, quote: "structurally neutral container".into(), claimed_line: Some(999) }],
             caveat: None,
         }]};
         let rep = lint_candidate(&cand, &idx);
@@ -1202,7 +1195,7 @@ mod tests {
         let uid = unit_id(&idx, "m18-01", 0);
         let cand = CrystalCandidate { items: vec![CrystalClaim {
             id: "c1".into(), claim: "x".into(), theme: "x".into(),
-            citations: vec![Citation { case_id: "m18-01".into(), unit_id: uid, quote: "chunks are wonderful and free".into(), claimed_line: None, citation_type: Default::default() }],
+            citations: vec![Citation { case_id: "m18-01".into(), unit_id: uid, quote: "chunks are wonderful and free".into(), claimed_line: None }],
             caveat: None,
         }]};
         let rep = lint_candidate(&cand, &idx);
@@ -1226,8 +1219,8 @@ mod tests {
         let cand = CrystalCandidate { items: vec![CrystalClaim {
             id: "c1".into(), claim: "x".into(), theme: "x".into(),
             citations: vec![
-                Citation { case_id: "m18-99".into(), unit_id: "u-x".into(), quote: "z".into(), claimed_line: None, citation_type: Default::default() },
-                Citation { case_id: "m18-01".into(), unit_id: "u-nope".into(), quote: "z".into(), claimed_line: None, citation_type: Default::default() },
+                Citation { case_id: "m18-99".into(), unit_id: "u-x".into(), quote: "z".into(), claimed_line: None },
+                Citation { case_id: "m18-01".into(), unit_id: "u-nope".into(), quote: "z".into(), claimed_line: None },
             ],
             caveat: None,
         }]};
@@ -1249,8 +1242,8 @@ mod tests {
         let cand = CrystalCandidate { items: vec![CrystalClaim {
             id: "c1".into(), claim: "grounded cross-source".into(), theme: "x".into(),
             citations: vec![
-                Citation { case_id: "m18-01".into(), unit_id: u1, quote: "structurally neutral container".into(), claimed_line: None, citation_type: Default::default() },
-                Citation { case_id: "m18-02".into(), unit_id: u2, quote: "scarce working memory".into(), claimed_line: None, citation_type: Default::default() },
+                Citation { case_id: "m18-01".into(), unit_id: u1, quote: "structurally neutral container".into(), claimed_line: None },
+                Citation { case_id: "m18-02".into(), unit_id: u2, quote: "scarce working memory".into(), claimed_line: None },
             ],
             caveat: Some("benchmark-dependent".into()),
         }]};
@@ -1273,8 +1266,8 @@ mod tests {
         let cand = CrystalCandidate { items: vec![CrystalClaim {
             id: "c1".into(), claim: "grounded cross-source".into(), theme: "x".into(),
             citations: vec![
-                Citation { case_id: "pack-a".into(), unit_id: u1, quote: "structurally neutral container".into(), claimed_line: None, citation_type: Default::default() },
-                Citation { case_id: "pack-b".into(), unit_id: u2, quote: "scarce working memory".into(), claimed_line: None, citation_type: Default::default() },
+                Citation { case_id: "pack-a".into(), unit_id: u1, quote: "structurally neutral container".into(), claimed_line: None },
+                Citation { case_id: "pack-b".into(), unit_id: u2, quote: "scarce working memory".into(), claimed_line: None },
             ],
             caveat: Some("benchmark-dependent".into()),
         }]};
@@ -1370,7 +1363,7 @@ mod tests {
         let u0 = unit_id(&idx, "m18-01", 0);
         let cand = CrystalCandidate { items: vec![CrystalClaim {
             id: "c1".into(), claim: "single source".into(), theme: "x".into(),
-            citations: vec![Citation { case_id: "m18-01".into(), unit_id: u0, quote: "structurally neutral".into(), claimed_line: None, citation_type: Default::default() }],
+            citations: vec![Citation { case_id: "m18-01".into(), unit_id: u0, quote: "structurally neutral".into(), claimed_line: None }],
             caveat: None,
         }]};
         let rep = lint_candidate(&cand, &idx);
@@ -1471,7 +1464,7 @@ mod tests {
         DurableRecord {
             claim_key: key.into(), claim_id: claim_id.into(), claim: "c".into(), theme: "t".into(), theme_id: None,
             source_cases: vec!["m18-01".into()], citations: vec![DurableCitation {
-                case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), resolved_line: Some(12), citation_type: Default::default() }],
+                case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), resolved_line: Some(12) }],
             provenance_score: 0.9, provenance_class: ProvenanceClass::Durable,
             strength: StrengthClass::Supported, strength_rationale: "ok".into(),
             final_class: FinalClass::Durable, run_id: "r1".into(), status: CrystalStatus::Active,
@@ -1480,8 +1473,8 @@ mod tests {
 
     #[test]
     fn claim_key_is_deterministic_and_citation_sensitive() {
-        let c1 = vec![DurableCitation { case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), resolved_line: None, citation_type: Default::default() }];
-        let c2 = vec![DurableCitation { case_id: "m18-02".into(), unit_id: "u-9".into(), quote: "q".into(), resolved_line: None, citation_type: Default::default() }];
+        let c1 = vec![DurableCitation { case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), resolved_line: None }];
+        let c2 = vec![DurableCitation { case_id: "m18-02".into(), unit_id: "u-9".into(), quote: "q".into(), resolved_line: None }];
         assert_eq!(claim_key("same claim", &c1), claim_key("same claim", &c1), "stable");
         assert_ne!(claim_key("same claim", &c1), claim_key("same claim", &c2), "citation-sensitive");
         assert_ne!(claim_key("claim A", &c1), claim_key("claim B", &c1), "text-sensitive");
@@ -1549,7 +1542,7 @@ mod tests {
     fn claim(id: &str) -> CrystalClaim {
         CrystalClaim {
             id: id.into(), claim: format!("claim {id}"), theme: "t".into(),
-            citations: vec![Citation { case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), claimed_line: None, citation_type: Default::default() }],
+            citations: vec![Citation { case_id: "m18-01".into(), unit_id: "u-0".into(), quote: "q".into(), claimed_line: None }],
             caveat: None,
         }
     }
@@ -1623,8 +1616,8 @@ mod tests {
     #[test]
     fn triviality_containment_flags_restatement_not_synthesis() {
         let cites = vec![
-            Citation { case_id: "a".into(), unit_id: "u1".into(), quote: "Memory is scarce working memory in systems.".into(), claimed_line: None, citation_type: Default::default() },
-            Citation { case_id: "b".into(), unit_id: "u2".into(), quote: "Context windows are a scarce budget.".into(), claimed_line: None, citation_type: Default::default() },
+            Citation { case_id: "a".into(), unit_id: "u1".into(), quote: "Memory is scarce working memory in systems.".into(), claimed_line: None },
+            Citation { case_id: "b".into(), unit_id: "u2".into(), quote: "Context windows are a scarce budget.".into(), claimed_line: None },
         ];
         // Pure restatement of the quotes → high containment.
         let restated = "Memory is scarce working memory; context windows are a scarce budget.";
@@ -1633,7 +1626,7 @@ mod tests {
         let synthesis = "Independent practitioners converge on treating attention as a rationed resource requiring explicit curation policies.";
         assert!(triviality_containment(synthesis, &cites) < 0.5, "synthesis passes");
         // CJK claims tokenize per character and behave the same way.
-        let cjk_cites = vec![Citation { case_id: "c".into(), unit_id: "u3".into(), quote: "记忆是稀缺资源".into(), claimed_line: None, citation_type: Default::default() }];
+        let cjk_cites = vec![Citation { case_id: "c".into(), unit_id: "u3".into(), quote: "记忆是稀缺资源".into(), claimed_line: None }];
         assert!(triviality_containment("记忆是稀缺资源", &cjk_cites) >= 0.8);
     }
 
@@ -1644,7 +1637,7 @@ mod tests {
         let uid = unit_id(&idx, "m18-01", 0);
         let claim = CrystalClaim {
             id: "c1".into(), claim: "chunks neutral".into(), theme: "x".into(),
-            citations: vec![Citation { case_id: "m18-01".into(), unit_id: uid, quote: "structurally neutral".into(), claimed_line: None, citation_type: Default::default() }],
+            citations: vec![Citation { case_id: "m18-01".into(), unit_id: uid, quote: "structurally neutral".into(), claimed_line: None }],
             caveat: None,
         };
         let cand = CrystalCandidate { items: vec![claim.clone()] };
@@ -1657,60 +1650,5 @@ mod tests {
         assert_eq!(dr.citations[0].quote, "structurally neutral");
         assert_eq!(dr.source_cases, vec!["m18-01"]);
         assert!(dr.claim_key.starts_with("ck-"));
-    }
-
-    #[test]
-    fn durable_citation_carries_citation_type_from_candidate() {
-        use crate::citation_support::CitationType;
-        let claim = CrystalClaim {
-            id: "c1".into(),
-            claim: "linked".into(),
-            theme: "t".into(),
-            citations: vec![Citation {
-                case_id: "m18-01".into(),
-                unit_id: "u-0".into(),
-                quote: "q".into(),
-                claimed_line: None,
-                citation_type: CitationType::ExactLink,
-            }],
-            caveat: None,
-        };
-        let lint = ClaimLint {
-            claim_id: "c1".into(),
-            n_citations: 1,
-            n_grounded: 1,
-            distinct_sources: 1,
-            has_caveat: false,
-            fully_grounded: true,
-            citations: vec![CitationVerdict {
-                case_id: "m18-01".into(),
-                unit_id: "u-0".into(),
-                grounded: true,
-                resolved_line: Some(1),
-                claimed_line_mismatch: false,
-                defect: None,
-            }],
-            merged_cases: vec![],
-            unresolved_cases: vec![],
-        };
-        let score = score_claim(&lint);
-        let strength = ClaimStrengthVerdict {
-            claim_id: "c1".into(),
-            strength: StrengthClass::Supported,
-            evidence_sufficient: true,
-            rationale: "r".into(),
-        };
-        let dr = build_durable_record(&claim, &lint, &score, &strength, FinalClass::Durable, "run-1");
-        assert_eq!(dr.citations[0].citation_type, CitationType::ExactLink);
-        let json = serde_json::to_string(&dr.citations[0]).unwrap();
-        assert!(
-            json.contains(r#""citation_type":"exact_link""#),
-            "non-unknown serializes: {json}"
-        );
-        let legacy: DurableCitation = serde_json::from_str(
-            r#"{"case_id":"m18-01","unit_id":"u-0","quote":"q","resolved_line":null}"#,
-        )
-        .unwrap();
-        assert_eq!(legacy.citation_type, CitationType::Unknown);
     }
 }

@@ -249,7 +249,7 @@ pub fn build_plan(vault: &Path, verdicts_path: &Path) -> Result<ReviewPlan, CliE
                     case_id: c.case_id.clone(),
                     unit_id: c.unit_id.clone(),
                     quote: c.quote.clone(),
-                    claimed_line: None, citation_type: Default::default(),
+                    claimed_line: None,
                 })
                 .collect(),
             // Support is disputed — text↔evidence repair, not a parked insight.
@@ -570,7 +570,7 @@ mod tests {
                     case_id: (*case).into(),
                     unit_id: unit.clone(),
                     quote: quote.clone(),
-                    resolved_line: Some(1), citation_type: Default::default(),
+                    resolved_line: Some(1),
                 })
                 .collect(),
             provenance_score: 0.9,

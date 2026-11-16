@@ -487,7 +487,6 @@ pub fn parse_synth_claims(
                 unit_id: c.unit_id.trim().to_string(),
                 quote: c.quote,
                 claimed_line: None,
-                citation_type: crate::citation_support::CitationType::default(),
             })
             .collect();
         if citations.is_empty() {
@@ -849,7 +848,7 @@ mod tests {
                 case_id: "m18-01".into(),
                 unit_id: uid,
                 quote: "structurally neutral".into(),
-                claimed_line: None, citation_type: Default::default(),
+                claimed_line: None,
             }],
             caveat: None,
         };
@@ -861,7 +860,7 @@ mod tests {
                 case_id: "m18-01".into(),
                 unit_id: "u-nope".into(),
                 quote: "nope".into(),
-                claimed_line: None, citation_type: Default::default(),
+                claimed_line: None,
             }],
             caveat: None,
         };
@@ -883,7 +882,7 @@ mod tests {
             case_id: "m18-01".into(),
             unit_id: "u-1".into(),
             quote: "same quote".into(),
-            claimed_line: None, citation_type: Default::default(),
+            claimed_line: None,
         };
         let first = CrystalClaim {
             id: "memory-b001-1".into(),
@@ -907,7 +906,7 @@ mod tests {
                 case_id: "m18-02".into(),
                 unit_id: "u-2".into(),
                 quote: "other quote".into(),
-                claimed_line: None, citation_type: Default::default(),
+                claimed_line: None,
             }],
             caveat: None,
         };
