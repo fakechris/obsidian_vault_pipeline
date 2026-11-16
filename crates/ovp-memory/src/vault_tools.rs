@@ -4269,7 +4269,7 @@ mod tests {
                 case_id: case_id.into(),
                 unit_id: "unit-1".into(),
                 quote: "verbatim evidence".into(),
-                resolved_line: Some(1), citation_type: Default::default(),
+                resolved_line: Some(1),
             }],
             provenance_score: 0.9,
             provenance_class: ProvenanceClass::Durable,
@@ -4278,9 +4278,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "run-1".into(),
             status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
         }
     }
 

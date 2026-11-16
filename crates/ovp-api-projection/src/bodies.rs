@@ -89,15 +89,6 @@ pub fn theme_pages_body(file: Option<&ThemePagesFile>, records: &[DurableRecord]
                     "claim": r.claim,
                     "strength": r.strength,
                     "sources": r.source_cases,
-                    "origin_source": r.origin_source,
-                    "adoption_timeline": r.adoption_timeline,
-                    "credit_rate": r.credit_rate,
-                    "propagation": (r.origin_source.is_some() || !r.adoption_timeline.is_empty()).then(|| json!({
-                        "origin_case_id": r.origin_source,
-                        "timeline": r.adoption_timeline,
-                        "credit_rate": r.credit_rate,
-                        "adoption_count": r.adoption_timeline.len(),
-                    })),
                 })
             });
         }

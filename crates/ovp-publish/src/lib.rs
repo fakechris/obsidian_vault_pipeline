@@ -145,7 +145,7 @@ pub fn publish(args: &PublishArgs) -> Result<PublishReport, String> {
     )
     .map_err(|e| format!("publish: {e}"))?;
 
-    let portal_summary = ovp_index::portal_summary_from_parts(&args.vault_root, public, &records);
+    let portal_summary = ovp_index::portal_summary_from_parts(public, &records);
     let files = write_api_tree(
         &args.out_dir.join("api"),
         public,
@@ -547,7 +547,7 @@ mod tests {
                 case_id: "case1".into(),
                 unit_id: "u-001".into(),
                 quote: "q".into(),
-                resolved_line: None, citation_type: Default::default(),
+                resolved_line: None,
             }],
             provenance_score: 0.9,
             provenance_class: ProvenanceClass::Durable,
@@ -556,9 +556,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
         }
     }
 

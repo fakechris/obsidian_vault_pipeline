@@ -2072,6 +2072,24 @@ export function themeGroupStorageKey(group: { id: number | null; theme: string }
   return themeGroupKey(group.id, group.theme);
 }
 
+// --------------------------------------------- claim propagation (INV-1882/1883)
+
+/** Later sources that link or credit the origin, out of those whose text
+ * could be classified (`unknown` / missing types are not counted either way). */
+export function propagationCredit(
+  timeline: { citation_type?: string | null }[] | null | undefined,
+): { credited: number; classified: number } {
+  let credited = 0;
+  let classified = 0;
+  for (const e of timeline ?? []) {
+    const ct = e.citation_type ?? 'unknown';
+    if (ct === 'unknown') continue;
+    classified += 1;
+    if (ct === 'exact_link' || ct === 'credit') credited += 1;
+  }
+  return { credited, classified };
+}
+
 // ------------------------------------------------- citation support (INV-1422)
 
 export interface CitationSupportMark {

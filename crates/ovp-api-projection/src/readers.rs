@@ -102,8 +102,6 @@ fn load_active_records_core(
         Err(e) => eprintln!("warning: ignoring themes.json ({e})"),
     }
 
-    ovp_domain::crystal::propagation::overlay_propagation(&mut records);
-
     // Human patch overlay (M37): fold `.ovp/crystal/patches.jsonl` and overlay
     // active human adjustments onto active records. A missing ledger is a
     // no-op; a present-but-corrupt one is an error (see the public loaders
@@ -250,9 +248,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
         };
         let event = StoreEvent {
             op: StoreOp::Write,
@@ -336,9 +331,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
         };
         let event = StoreEvent {
             op: StoreOp::Write,

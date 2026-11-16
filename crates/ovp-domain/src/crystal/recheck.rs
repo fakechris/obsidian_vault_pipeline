@@ -372,7 +372,7 @@ pub fn durable_from_ledger(path: &Path) -> Result<CrystalCandidate, String> {
                     case_id: c.case_id,
                     unit_id: c.unit_id,
                     quote: c.quote,
-                    claimed_line: None, citation_type: Default::default(),
+                    claimed_line: None,
                 })
                 .collect(),
             caveat: None,
@@ -438,7 +438,7 @@ mod tests {
                 case_id: case.into(),
                 unit_id: unit_id.into(),
                 quote: quote.into(),
-                claimed_line: None, citation_type: Default::default(),
+                claimed_line: None,
             }],
             caveat: None,
         }
@@ -455,7 +455,7 @@ mod tests {
             case_id: "new-a".into(),
             unit_id: "u2".into(),
             quote: "gamma".into(),
-            claimed_line: None, citation_type: Default::default(),
+            claimed_line: None,
         });
         // Three packs, two of them one source: still 2 sources, not listed.
         let mut two_sources = one_source.clone();
@@ -464,7 +464,7 @@ mod tests {
             case_id: "other".into(),
             unit_id: "u3".into(),
             quote: "epsilon".into(),
-            claimed_line: None, citation_type: Default::default(),
+            claimed_line: None,
         });
         let durable = CrystalCandidate { items: vec![one_source, two_sources] };
         let sources: SourceIdentities = [
@@ -610,13 +610,13 @@ mod tests {
                         case_id: "2026-08-01_Case-aaa".into(),
                         unit_id: "u-1".into(),
                         quote: "q".into(),
-                        claimed_line: None, citation_type: Default::default(),
+                        claimed_line: None,
                     },
                     Citation {
                         case_id: "2026-08-01_Case-aaa".into(),
                         unit_id: "u-2".into(),
                         quote: "q".into(),
-                        claimed_line: None, citation_type: Default::default(),
+                        claimed_line: None,
                     },
                 ],
                 caveat: None,
@@ -643,13 +643,13 @@ mod tests {
                     case_id: "2026-08-01_New-aaa".into(),
                     unit_id: "u-1".into(),
                     quote: "q".into(),
-                    claimed_line: None, citation_type: Default::default(),
+                    claimed_line: None,
                 },
                 Citation {
                     case_id: "2024-01-01_Old-bbb".into(),
                     unit_id: "u-1".into(),
                     quote: "q".into(),
-                    claimed_line: None, citation_type: Default::default(),
+                    claimed_line: None,
                 },
             ],
             caveat: None,

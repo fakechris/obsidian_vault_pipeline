@@ -85,7 +85,7 @@ fn main() {
                 case_id: format!("case-{src:05}"),
                 unit_id: format!("u-{i}-{c}"),
                 quote: format!("synthetic quote {i}-{c} for scale testing"),
-                resolved_line: Some(10 + c), citation_type: Default::default(),
+                resolved_line: Some(10 + c),
             });
         }
 
@@ -116,9 +116,6 @@ fn main() {
             final_class: FinalClass::Durable,
             run_id: "scale-fixture".into(),
             status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
         };
 
         let event = StoreEvent {

@@ -123,7 +123,7 @@ mod tests {
                     case_id: "a".into(),
                     unit_id: format!("u{i}"),
                     quote: "q".into(),
-                    resolved_line: None, citation_type: Default::default(),
+                    resolved_line: None,
                 })
                 .collect(),
             provenance_score: 1.0,
@@ -133,9 +133,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r".into(),
             status: CrystalStatus::Active,
-        origin_source: None,
-        adoption_timeline: Vec::new(),
-        credit_rate: None,
         };
         serde_json::to_string(&StoreEvent {
             op,

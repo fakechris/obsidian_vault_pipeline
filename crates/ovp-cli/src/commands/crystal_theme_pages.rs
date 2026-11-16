@@ -507,7 +507,7 @@ mod tests {
                     case_id: c.to_string(),
                     unit_id: "u-1".into(),
                     quote: "q".into(),
-                    resolved_line: None, citation_type: Default::default(),
+                    resolved_line: None,
                 })
                 .collect(),
             provenance_score: 0.8,
@@ -517,9 +517,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "run-x".into(),
             status: CrystalStatus::Active,
-            origin_source: None,
-            adoption_timeline: Vec::new(),
-            credit_rate: None,
         }
     }
 

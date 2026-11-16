@@ -1690,7 +1690,6 @@ pub fn theme_counts(records: &[DurableRecord]) -> Vec<(String, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ovp_domain::citation_support::CitationType;
     use ovp_domain::crystal::{CrystalStatus, DurableCitation, FinalClass, ProvenanceClass};
 
     fn rec(
@@ -1714,7 +1713,6 @@ mod tests {
                     unit_id: (*u).into(),
                     quote: format!("quote {u}"),
                     resolved_line: None,
-                    citation_type: CitationType::Unknown,
                 })
                 .collect(),
             provenance_score: prov,
@@ -1724,9 +1722,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
-            origin_source: None,
-            adoption_timeline: Vec::new(),
-            credit_rate: None,
         }
     }
 

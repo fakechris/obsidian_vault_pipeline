@@ -119,19 +119,18 @@ export interface ThemePageData {
   sections_zh_status?: 'fresh' | 'stale' | 'missing' | 'corrupt' | 'paused';
 }
 
-/** One source adopting a claim after the origin (INV-1882 propagation). */
+/** How a later source relates to the claim's origin source (INV-1883).
+ * Absent on the wire = `unknown` (its text could not be read). */
+export type CitationType = 'exact_link' | 'credit' | 'inferred' | 'unknown';
+
+/** One later source carrying a claim (INV-1882 propagation, index model). */
 export interface AdoptionTimelineEntry {
   source_case_id: string;
+  /** The later source's publication date. */
   first_seen_date?: string | null;
+  /** Calendar days after the origin's publication. */
   lag_days?: number | null;
-}
-
-/** Claim propagation metadata from theme-pages or the index model. */
-export interface ClaimPropagation {
-  origin_case_id?: string | null;
-  timeline: AdoptionTimelineEntry[];
-  credit_rate?: number | null;
-  adoption_count?: number;
+  citation_type?: CitationType;
 }
 
 export interface ThemePageClaimInfo {
@@ -141,9 +140,6 @@ export interface ThemePageClaimInfo {
   claim_zh_status?: 'fresh' | 'stale' | 'missing' | 'corrupt' | 'paused';
   strength?: string;
   sources: string[];
-  origin_source?: string | null;
-  adoption_timeline?: AdoptionTimelineEntry[];
-  propagation?: ClaimPropagation | null;
 }
 
 export interface ThemePagesResponse {

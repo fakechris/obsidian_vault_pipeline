@@ -2337,6 +2337,36 @@ html[data-tauri-drag-region] .source-chat-panel {
 .claim-card .claim-meta a {
   font-weight: 500;
 }
+/* Claim propagation (INV-1882/1883): the relation to the origin is drawn as
+   the badge's border — solid = links it, dashed = credits it, none = only
+   the same claim, faint = not read. */
+.propagation-list {
+  list-style: none;
+  margin: 0.15rem 0;
+  padding: 0;
+}
+.propagation-list li {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+.cite-type {
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.cite-exact_link {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.cite-credit {
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+}
+.cite-unknown {
+  opacity: 0.5;
+}
 .topic-overview-caption {
   margin-bottom: 1rem;
 }

@@ -279,7 +279,7 @@ mod tests {
                         case_id: "case-a".into(),
                         unit_id: "unit-1".into(),
                         quote: "Some studies suggest it".into(),
-                        claimed_line: Some(4), citation_type: Default::default(),
+                        claimed_line: Some(4),
                     }],
                     caveat: None,
                 }],

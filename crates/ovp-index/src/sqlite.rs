@@ -29,7 +29,28 @@ use serde_json::{Value, json};
 use crate::evidence::EvidenceModel;
 use crate::model::IndexModel;
 
+/// A layout point is stored as two nullable REAL columns; both or neither.
+fn xy_of(x: Option<f64>, y: Option<f64>) -> Option<[f64; 2]> {
+    Some([x?, y?])
+}
+
+/// `claims.propagation` column payload (v8). Absent = no propagation.
+#[derive(Serialize, serde::Deserialize)]
+struct ClaimPropagationCol {
+    origin_source: String,
+    #[serde(default)]
+    adoption_timeline: Vec<crate::model::AdoptionTimelineEntry>,
+    #[serde(default)]
+    adoption_count: Option<usize>,
+    #[serde(default)]
+    credit_rate: Option<f64>,
+}
+
 const SQLITE_FILE: &str = "read-model.sqlite";
+// v8: claims.propagation (JSON: origin / adoption timeline / credit rate,
+// INV-1882) and sources/claims x,y (precomputed graph layout, INV-1884).
+// Before it the reader dropped those fields — for xy that made every build
+// fail the parity check, so the shadow silently stopped being rebuilt.
 // v7: TWO DDL changes landed in the same version, which is fine because the
 // shadow is rebuilt wholesale on a version mismatch rather than migrated
 // step by step — anything older than v7 rebuilds and gets both:
@@ -39,7 +60,7 @@ const SQLITE_FILE: &str = "read-model.sqlite";
 // bump is MANDATORY for any DDL change: the reader trusts the stored
 // version, so an old shadow without the column would otherwise pass the
 // check and then fail at SELECT time instead of requesting a rebuild.
-const SCHEMA_VERSION: &str = "7";
+const SCHEMA_VERSION: &str = "8";
 /// The FTS analyzer version, stamped into `meta` — index-side and query-side
 /// tokenization MUST match, so any change to [`tokenize_for_fts`] bumps this
 /// and the next build re-tokenizes everything (fresh-file builds make that
@@ -175,7 +196,7 @@ CREATE TABLE sources(
   url TEXT, origin TEXT, rel_path TEXT, date TEXT, content_date TEXT,
   captured_on TEXT, processed_on TEXT, last_run_id TEXT, pack_dir TEXT,
   fail_count INTEGER NOT NULL, last_reason TEXT, annotation TEXT,
-  capture_path TEXT);
+  capture_path TEXT, x REAL, y REAL);
 CREATE INDEX idx_sources_sha ON sources(sha256);
 CREATE INDEX idx_sources_status ON sources(status);
 CREATE INDEX idx_sources_date ON sources(date);
@@ -200,7 +221,7 @@ CREATE TABLE claims(
   claim_id TEXT NOT NULL, claim_key TEXT, claim TEXT NOT NULL, theme TEXT,
   theme_id INTEGER,
   status TEXT NOT NULL, strength TEXT, run_id TEXT, run_date TEXT, lane TEXT,
-  patched_by TEXT);
+  patched_by TEXT, propagation TEXT, x REAL, y REAL);
 CREATE INDEX idx_claims_id ON claims(claim_id);
 CREATE INDEX idx_claims_status ON claims(status);
 CREATE TABLE claim_sources(claim_rowid INTEGER NOT NULL, claim_id TEXT NOT NULL, sha256 TEXT NOT NULL);
@@ -380,8 +401,8 @@ fn build_into(
             .prepare(
                 "INSERT INTO sources(sha256, status, title, author, url, origin, rel_path,
                  date, content_date, captured_on, processed_on, last_run_id, pack_dir,
-                 fail_count, last_reason, annotation, capture_path)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                 fail_count, last_reason, annotation, capture_path, x, y)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             )
             .map_err(|e| format!("prepare sources: {e}"))?;
         let mut tag = tx
@@ -417,6 +438,8 @@ fn build_into(
                 &s.last_reason,
                 &s.annotation,
                 &s.capture_path,
+                s.xy.map(|p| p[0]),
+                s.xy.map(|p| p[1]),
             ])
             .map_err(|e| format!("source {}: {e}", s.sha256))?;
             let rowid = tx.last_insert_rowid();
@@ -497,7 +520,8 @@ fn build_into(
         let mut claim = tx
             .prepare(
                 "INSERT INTO claims(claim_id, claim_key, claim, theme, theme_id, status, strength,
-                 run_id, run_date, lane, patched_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                 run_id, run_date, lane, patched_by, propagation, x, y)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             )
             .map_err(|e| format!("prepare claims: {e}"))?;
         let mut claim_src = tx
@@ -507,8 +531,21 @@ fn build_into(
             .prepare("INSERT INTO claims_fts(rowid, text) VALUES(?1,?2)")
             .map_err(|e| format!("prepare claims_fts: {e}"))?;
         for c in &model.claims {
+            let propagation = c
+                .origin_source
+                .as_ref()
+                .map(|origin| {
+                    serde_json::to_string(&ClaimPropagationCol {
+                        origin_source: origin.clone(),
+                        adoption_timeline: c.adoption_timeline.clone(),
+                        adoption_count: c.adoption_count,
+                        credit_rate: c.credit_rate,
+                    })
+                })
+                .transpose()
+                .map_err(|e| format!("claim {} propagation: {e}", c.claim_id))?;
             claim
-                .execute((
+                .execute(rusqlite::params![
                     &c.claim_id,
                     &c.claim_key,
                     &c.claim,
@@ -520,7 +557,10 @@ fn build_into(
                     &c.run_date,
                     &c.lane,
                     &c.patched_by,
-                ))
+                    &propagation,
+                    c.xy.map(|p| p[0]),
+                    c.xy.map(|p| p[1]),
+                ])
                 .map_err(|e| format!("claim {}: {e}", c.claim_id))?;
             let rowid = tx.last_insert_rowid();
             let fts_text = format!("{} {}", c.claim, c.theme.as_deref().unwrap_or(""));
@@ -930,7 +970,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
         .prepare(
             "SELECT sha256, status, title, author, url, origin, rel_path, date, content_date,
              captured_on, processed_on, last_run_id, pack_dir, fail_count, last_reason,
-             annotation, capture_path
+             annotation, capture_path, x, y
              FROM sources ORDER BY rowid",
         )
         .and_then(|mut st| {
@@ -953,6 +993,8 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                     r.get::<_, Option<String>>(14)?,
                     r.get::<_, Option<String>>(15)?,
                     r.get::<_, Option<String>>(16)?,
+                    r.get::<_, Option<f64>>(17)?,
+                    r.get::<_, Option<f64>>(18)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -985,7 +1027,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                 tags,
                 tags_inferred,
                 tags_implied,
-                xy: None,
+                xy: xy_of(row.17, row.18),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1041,7 +1083,7 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
     let claims = conn
         .prepare(
             "SELECT rowid, claim_id, claim_key, claim, theme, theme_id, status, strength, run_id,
-             run_date, lane, patched_by FROM claims ORDER BY rowid",
+             run_date, lane, patched_by, propagation, x, y FROM claims ORDER BY rowid",
         )
         .and_then(|mut st| {
             st.query_map([], |r| {
@@ -1067,14 +1109,25 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                         xy: None,
                     },
                     r.get::<_, String>(6)?,
+                    r.get::<_, Option<String>>(12)?,
+                    xy_of(r.get(13)?, r.get(14)?),
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()
         })
         .map_err(|e| format!("reading claims: {e}"))?
         .into_iter()
-        .map(|(rowid, mut claim, status)| {
+        .map(|(rowid, mut claim, status, propagation, xy)| {
+            claim.xy = xy;
             claim.status = parse_enum(&status, "claim status")?;
+            if let Some(raw) = propagation {
+                let p: ClaimPropagationCol = serde_json::from_str(&raw)
+                    .map_err(|e| format!("claim {} propagation: {e}", claim.claim_id))?;
+                claim.origin_source = Some(p.origin_source);
+                claim.adoption_timeline = p.adoption_timeline;
+                claim.adoption_count = p.adoption_count;
+                claim.credit_rate = p.credit_rate;
+            }
             claim.sources = sources_by_claim_rowid.remove(&rowid).unwrap_or_default();
             Ok(claim)
         })
@@ -1609,6 +1662,48 @@ mod tests {
                 sampled: 6,
             }
         );
+    }
+
+    #[test]
+    fn claim_propagation_survives_the_sqlite_round_trip() {
+        // Before v8 the reader hard-coded these to None, so a portal serving
+        // from sqlite (the default) never saw propagation (INV-1882).
+        let tmp = test_dir();
+        let mut m = model();
+        m.claims[0].origin_source = Some("case-a".into());
+        m.claims[0].adoption_count = Some(1);
+        m.claims[0].credit_rate = Some(0.0);
+        m.claims[0].adoption_timeline = vec![crate::model::AdoptionTimelineEntry {
+            source_case_id: "case-b".into(),
+            first_seen_date: Some("2026-01-04".into()),
+            lag_days: Some(3),
+            citation_type: ovp_domain::citation_support::CitationType::Inferred,
+        }];
+        let db = tmp.path().join("candidate.sqlite");
+        build_into(&db, &m, None).unwrap();
+        let back = read_index_sqlite_at(&db).unwrap();
+        let c = &back.claims[0];
+        assert_eq!(c.origin_source, m.claims[0].origin_source);
+        assert_eq!(c.adoption_timeline, m.claims[0].adoption_timeline);
+        assert_eq!(c.adoption_count, Some(1));
+        assert_eq!(c.credit_rate, Some(0.0));
+    }
+
+    #[test]
+    fn layout_coordinates_survive_the_sqlite_round_trip() {
+        // Before v8 xy was dropped on read, so EVERY real build failed the
+        // parity check and the shadow silently stopped updating (INV-1884).
+        let tmp = test_dir();
+        let mut m = model();
+        m.sources[0].xy = Some([651.0479920224949, 250.18260734356457]);
+        m.claims[0].xy = Some([1.5, 2.25]);
+        let db = tmp.path().join("layout.sqlite");
+        build_into(&db, &m, None).unwrap();
+        let back = read_index_sqlite_at(&db).unwrap();
+        assert_eq!(back.sources[0].xy, m.sources[0].xy);
+        assert_eq!(back.claims[0].xy, m.claims[0].xy);
+        let (_, parity) = shadow_at(tmp.path(), &m, Some(&evidence())).unwrap();
+        assert_eq!(parity.sources, 1);
     }
 
     #[test]

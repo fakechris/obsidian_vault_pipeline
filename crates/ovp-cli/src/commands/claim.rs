@@ -111,7 +111,7 @@ mod tests {
                 case_id: case.into(),
                 unit_id: "u-1".into(),
                 quote: "verbatim quote".into(),
-                resolved_line: Some(12), citation_type: Default::default(),
+                resolved_line: Some(12),
             }],
             provenance_score: 0.8,
             provenance_class: ProvenanceClass::Durable,
@@ -120,9 +120,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
-            origin_source: None,
-            adoption_timeline: Vec::new(),
-            credit_rate: None,
         }
     }
 

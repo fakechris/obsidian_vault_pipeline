@@ -127,7 +127,7 @@ pub fn build_plan(vault: &Path, today: (i32, u32, u32)) -> Result<RegatePlan, Cl
                     case_id: c.case_id.clone(),
                     unit_id: c.unit_id.clone(),
                     quote: c.quote.clone(),
-                    claimed_line: None, citation_type: Default::default(),
+                    claimed_line: None,
                 })
                 .collect(),
             lane: review_lane(dup.distinct_sources, Some(&verdict)),
@@ -446,7 +446,7 @@ mod tests {
                     case_id: case.into(),
                     unit_id: unit,
                     quote,
-                    resolved_line: Some(1), citation_type: Default::default(),
+                    resolved_line: Some(1),
                 })
                 .collect(),
             provenance_score: 0.9,
@@ -456,9 +456,6 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "run-fixture".into(),
             status: CrystalStatus::Active,
-            origin_source: None,
-            adoption_timeline: Vec::new(),
-            credit_rate: None,
         }
     }
 
@@ -769,7 +766,7 @@ mod tests {
                 case_id: "2026-06-16_B-bbbb0000".into(),
                 unit_id: "u-gone".into(),
                 quote: "Beta".into(),
-                resolved_line: None, citation_type: Default::default(),
+                resolved_line: None,
             });
         }
         std::fs::remove_file(&ledger).unwrap();

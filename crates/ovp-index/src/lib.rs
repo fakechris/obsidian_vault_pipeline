@@ -20,6 +20,7 @@
 pub mod build;
 pub mod evidence;
 pub mod graph_layout;
+pub mod propagation;
 pub mod model;
 pub mod query;
 pub mod score;
@@ -28,11 +29,12 @@ pub mod sqlite;
 pub use build::{
     build_index, build_index_at, build_index_with_progress, failed_reader_attempt,
     last_run_to_model, now_rfc3339, read_index, read_last_run_model, write_index,
-    portal_summary_from_model, portal_summary_from_parts, write_portal_summary,
+    portal_summary_from_parts,
 };
 pub use evidence::{EvidenceModel, build_evidence, evidence_path, read_evidence, write_evidence};
 pub use model::{
-    first_iso_day_in, is_iso_day, run_date_from_run_id, BlockedSource, ClaimRow, ClaimStatus,
+    first_iso_day_in, is_iso_day, run_date_from_run_id, AdoptionTimelineEntry, BlockedSource,
+    ClaimRow, ClaimStatus,
     DAYS_STUCK_AMBER, DAYS_STUCK_RED, INDEX_SCHEMA, IndexModel, LastRunModel, OpsState, PackRow,
     RecentSourceModel, RunRow, RunStats, SourceRow, SourceStatus, StuckSource, Totals,
 };

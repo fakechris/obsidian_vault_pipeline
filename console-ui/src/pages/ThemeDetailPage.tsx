@@ -22,6 +22,7 @@ import {
   filterClaimsByStatus,
   isMiscTheme,
   parsePageBody,
+  propagationCredit,
   readKnowledgeSortPref,
   resolveThemeClaimsSort,
   sortThemeClaims,
@@ -193,25 +194,41 @@ function ClaimPropagation({
 }) {
   const { t } = useI18n();
   if (!claim.origin_source) return null;
-  const origin = byCase.get(claim.origin_source);
-  const originLabel = origin?.title ?? claim.origin_source;
-  const adopted =
-    claim.adoption_count ?? (claim.adoption_timeline?.length ?? 0);
-  const creditPct =
-    claim.credit_rate != null ? Math.round(claim.credit_rate * 100) : null;
+  const timeline = claim.adoption_timeline ?? [];
+  const { credited, classified } = propagationCredit(timeline);
+  const sourceLink = (caseId: string) => {
+    const src = byCase.get(caseId);
+    const label = src?.title ?? caseId;
+    return src ? (
+      <Link to={`/library/${src.sha256}`}>{label}</Link>
+    ) : (
+      <span title={t('theme.legacySource')}>{label}</span>
+    );
+  };
   return (
     <div className="claim-meta claim-propagation">
       <div>
-        {t('theme.propagationOrigin')}{' '}
-        {origin ? (
-          <Link to={`/library/${origin.sha256}`}>{originLabel}</Link>
-        ) : (
-          <span title={t('theme.legacySource')}>{originLabel}</span>
-        )}
+        {t('theme.propagationOrigin')} {sourceLink(claim.origin_source)}
       </div>
-      <div>{t('theme.propagationAdopted', { count: adopted })}</div>
-      {creditPct != null && (
-        <div>{t('theme.propagationCredit', { rate: creditPct })}</div>
+      <div>{t('theme.propagationAdopted', { count: timeline.length })}</div>
+      <ul className="propagation-list">
+        {timeline.map((e) => {
+          const ct = e.citation_type ?? 'unknown';
+          return (
+            <li key={e.source_case_id}>
+              <span className={`cite-type cite-${ct}`}>{t(`theme.cite.${ct}`)}</span>
+              {e.lag_days != null && (
+                <span className="mono">{t('theme.propagationLag', { n: e.lag_days })}</span>
+              )}
+              {sourceLink(e.source_case_id)}
+            </li>
+          );
+        })}
+      </ul>
+      {classified > 0 && (
+        <div title={t('theme.propagationCreditTip')}>
+          {t('theme.propagationCredit', { credited, classified })}
+        </div>
       )}
     </div>
   );

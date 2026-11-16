@@ -943,7 +943,7 @@ mod tests {
                 case_id: "m18-01".into(),
                 unit_id: "u-nope".into(),
                 quote: "nope".into(),
-                claimed_line: None, citation_type: Default::default(),
+                claimed_line: None,
             }],
             caveat: None,
         };
@@ -1427,8 +1427,8 @@ mod tests {
             claim: "Memory and context are treated as a scarce budget across systems.".into(),
             theme: "memory".into(),
             citations: vec![
-                Citation { case_id: "m18-01".into(), unit_id: u1, quote: "scarce working memory in systems".into(), claimed_line: None, citation_type: Default::default() },
-                Citation { case_id: "m18-02".into(), unit_id: u2, quote: "scarce budget for retrieval".into(), claimed_line: None, citation_type: Default::default() },
+                Citation { case_id: "m18-01".into(), unit_id: u1, quote: "scarce working memory in systems".into(), claimed_line: None },
+                Citation { case_id: "m18-02".into(), unit_id: u2, quote: "scarce budget for retrieval".into(), claimed_line: None },
             ],
             caveat: None,
         };

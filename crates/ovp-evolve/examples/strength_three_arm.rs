@@ -124,7 +124,6 @@ fn freeze_item(item: Item, source: &UnitsCatalog) -> Result<Frozen> {
             unit_id: unit.unit_id.clone(),
             quote: c.quote.clone(),
             claimed_line: unit.line,
-            citation_type: Default::default(),
         });
     }
     let candidate = CrystalCandidate {
