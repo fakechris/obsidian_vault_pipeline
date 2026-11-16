@@ -6056,6 +6056,7 @@ mod tests {
                 tags_inferred: Vec::new(),
                 tags_implied: Vec::new(),
                 entities: Vec::new(),
+                xy: None,
             }],
             packs: vec![PackRow {
                 pack_dir: "40-Resources/Reader/good".into(),
@@ -6084,6 +6085,7 @@ mod tests {
             adoption_timeline: Vec::new(),
             adoption_count: None,
             credit_rate: None,
+            xy: None,
             }],
             runs: vec![],
             ops: OpsState::default(),
@@ -7198,6 +7200,7 @@ mod tests {
             tags_inferred: Vec::new(),
             tags_implied: Vec::new(),
             entities: Vec::new(),
+            xy: None,
         }
     }
 
@@ -8580,6 +8583,7 @@ mod tests {
             adoption_timeline: Vec::new(),
             adoption_count: None,
             credit_rate: None,
+            xy: None,
             },
             ovp_index::ClaimRow {
                 claim_id: "m1-02".into(),
@@ -8598,6 +8602,7 @@ mod tests {
             adoption_timeline: Vec::new(),
             adoption_count: None,
             credit_rate: None,
+            xy: None,
             },
         ];
         ovp_index::write_index(&vault, &model).unwrap();

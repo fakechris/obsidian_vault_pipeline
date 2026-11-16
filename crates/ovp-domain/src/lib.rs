@@ -11,6 +11,7 @@ pub mod canonical_slug;
 pub mod concept_registry;
 pub mod evergreen;
 pub mod evergreen_note;
+pub mod graph_layout;
 pub mod interpreted;
 pub mod knowledge_index;
 /// M22 Crystal pre-write gates: citation linter + deterministic provenance

@@ -312,11 +312,25 @@ export default function KnowledgeGraph({
   const anchorsRef = useRef<RadialAnchors | null>(null);
   anchorsRef.current = anchors;
 
+  const hasPrecomputedLayout = useMemo(
+    () => (data?.nodes.length ? data.nodes.every((n) => n.xy != null) : false),
+    [data],
+  );
+  const precomputedRef = useRef(false);
+  precomputedRef.current = hasPrecomputedLayout;
+
   // Fresh node/link objects per dataset (react-force-graph owns their physics).
   const graphData = useMemo(() => {
     if (!data) return { nodes: [] as FGNode[], links: [] };
     const nodes = data.nodes.map((n) => ({ ...n })) as FGNode[];
-    if (anchors) {
+    if (hasPrecomputedLayout) {
+      for (const n of nodes) {
+        if (n.xy) {
+          n.x = n.xy[0];
+          n.y = n.xy[1];
+        }
+      }
+    } else if (anchors) {
       // SEED positions on the packed silhouette instead of random scatter —
       // a force pull alone cannot untangle 400 randomly-initialized nodes
       // out of the central hairball, but from a seeded start it only has to
@@ -345,7 +359,7 @@ export default function KnowledgeGraph({
         weight: e.weight,
       })),
     };
-  }, [data, anchors]);
+  }, [data, anchors, hasPrecomputedLayout]);
 
   // id → neighbor ids, for hover dimming.
   const adjacency = useMemo(() => {
@@ -406,6 +420,14 @@ export default function KnowledgeGraph({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const g = fg as any;
     if (!g?.d3Force) return;
+    if (precomputedRef.current) {
+      g.d3Force('charge', null);
+      g.d3Force('link', null);
+      g.d3Force('collide', null);
+      g.d3Force('cluster', null);
+      g.d3Simulation?.stop();
+      return;
+    }
     // LOCAL repulsion only (distanceMax keeps it from flinging weakly-held
     // nodes across the canvas), roomier links than the old 16 so the center
     // decompresses, and collide with breathing space.
@@ -453,12 +475,20 @@ export default function KnowledgeGraph({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const g = fgRef.current as any;
     if (!g?.d3Force) return;
+    if (precomputedRef.current) {
+      g.d3Force('charge', null);
+      g.d3Force('link', null);
+      g.d3Force('collide', null);
+      g.d3Force('cluster', null);
+      g.d3Simulation?.stop();
+      return;
+    }
     g.d3Force(
       'cluster',
       scope === 'global' && anchors ? radialAnchorForce(anchors, 0.12, 0.2) : null,
     );
     g.d3ReheatSimulation?.();
-  }, [anchors, scope, mode]);
+  }, [anchors, scope, mode, hasPrecomputedLayout]);
 
   /** ~15% alpha variant of a color — the out-of-closure fade for 3D nodes
    * and 2D links, matching drawNode's globalAlpha dim. Handles #rgb/#rrggbb
@@ -792,7 +822,8 @@ export default function KnowledgeGraph({
                 height={dims.h || height}
                 graphData={graphData}
                 backgroundColor="transparent"
-                cooldownTicks={140}
+                warmupTicks={hasPrecomputedLayout ? 0 : undefined}
+                cooldownTicks={hasPrecomputedLayout ? 0 : 140}
                 onEngineStop={() => {
                   if (fittedRef.current) return;
                   fittedRef.current = true;

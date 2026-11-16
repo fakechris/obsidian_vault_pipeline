@@ -157,6 +157,7 @@ mod tests {
             adoption_timeline: Vec::new(),
             adoption_count: None,
             credit_rate: None,
+            xy: None,
             })
             .collect();
         IndexModel {

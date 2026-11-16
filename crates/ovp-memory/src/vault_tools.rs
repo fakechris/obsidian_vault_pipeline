@@ -3876,6 +3876,7 @@ mod tests {
                     adoption_timeline: Vec::new(),
                     adoption_count: None,
                     credit_rate: None,
+            xy: None,
                     },
                 ],
             );
@@ -3934,6 +3935,7 @@ mod tests {
             tags_inferred: vec!["retrieval".into()],
             tags_implied: vec![],
             entities: vec![],
+            xy: None,
         }
     }
 
@@ -3955,6 +3957,7 @@ mod tests {
         adoption_timeline: Vec::new(),
         adoption_count: None,
         credit_rate: None,
+        xy: None,
         }
     }
 
@@ -4656,6 +4659,7 @@ mod tests {
         adoption_timeline: Vec::new(),
         adoption_count: None,
         credit_rate: None,
+        xy: None,
         };
         let model = fixture_model(
             vec![],
