@@ -33,7 +33,8 @@ pub use build::{
 };
 pub use evidence::{EvidenceModel, build_evidence, evidence_path, read_evidence, write_evidence};
 pub use model::{
-    first_iso_day_in, is_iso_day, run_date_from_run_id, BlockedSource, ClaimRow, ClaimStatus,
+    first_iso_day_in, is_iso_day, run_date_from_run_id, AdoptionTimelineEntry, BlockedSource,
+    ClaimRow, ClaimStatus,
     DAYS_STUCK_AMBER, DAYS_STUCK_RED, INDEX_SCHEMA, IndexModel, LastRunModel, OpsState, PackRow,
     RecentSourceModel, RunRow, RunStats, SourceRow, SourceStatus, StuckSource, Totals,
 };

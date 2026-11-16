@@ -183,7 +183,7 @@ impl CreditProbe {
         // Whole URLs only, compared by canonical identity: `/post` must not
         // match `/postscript`, nor one status id a longer one.
         if let Some(exact) = self.exact.as_deref()
-            && url_tokens(text).any(|u| canonical_source_url(u).as_deref() == Some(exact))
+            && url_tokens(text).into_iter().any(|u| canonical_source_url(u).as_deref() == Some(exact))
         {
             return CitationType::ExactLink;
         }
@@ -206,23 +206,49 @@ fn is_distinctive_name(n: &str) -> bool {
     n.split_whitespace().count() >= 2 && n.len() >= 6
 }
 
-/// Every `http(s)://…` token in `text`, cut at whitespace / markdown and
-/// HTML delimiters, with trailing sentence punctuation dropped.
-fn url_tokens(text: &str) -> impl Iterator<Item = &str> {
+/// Every `http(s)://…` token in `text`. A token starts only at a boundary
+/// (so `https://archive.dev/snap/https://x.com/…` is ONE URL, not two), ends
+/// at whitespace or a markdown/HTML delimiter, keeps balanced parentheses
+/// (`…/wiki/Memory_(computing)`) while an unmatched `)` closes a markdown
+/// link, and drops trailing sentence punctuation.
+fn url_tokens(text: &str) -> Vec<&str> {
     // ASCII lowercasing keeps byte offsets, so indices slice `text` directly.
     let lower = text.to_ascii_lowercase();
-    let starts: Vec<usize> = lower
-        .match_indices("http")
-        .filter(|(i, _)| lower[*i..].starts_with("http://") || lower[*i..].starts_with("https://"))
-        .map(|(i, _)| i)
-        .collect();
-    starts.into_iter().map(move |i| {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(off) = lower[from..].find("http") {
+        let i = from + off;
+        let at_scheme = lower[i..].starts_with("http://") || lower[i..].starts_with("https://");
+        let at_boundary = text[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '[' | '<' | '"' | '\'' | '`' | '=' | '|' | '*'));
+        if !(at_scheme && at_boundary) {
+            from = i + 4;
+            continue;
+        }
         let rest = &text[i..];
-        let end = rest
-            .find(|c: char| c.is_whitespace() || matches!(c, ')' | ']' | '>' | '<' | '"' | '\'' | '`'))
-            .unwrap_or(rest.len());
-        rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?'])
-    })
+        let mut depth = 0usize;
+        let mut end = rest.len();
+        for (k, c) in rest.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' if depth > 0 => depth -= 1,
+                ')' => {
+                    end = k;
+                    break;
+                }
+                c if c.is_whitespace() || matches!(c, ']' | '>' | '<' | '"' | '\'' | '`') => {
+                    end = k;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        out.push(rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']));
+        from = i + end.max(4);
+    }
+    out
 }
 
 /// `needle` occurs in `hay` not glued to a longer word or host on either
@@ -415,6 +441,19 @@ mod tests {
         let types: Vec<CitationType> = p.adoptions.iter().map(|a| a.citation_type).collect();
         // `prefix` names the origin's site (a credit), but never its document.
         assert_eq!(types, vec![CitationType::Credit, CitationType::ExactLink]);
+    }
+
+    #[test]
+    fn url_tokens_keep_balanced_parens_and_skip_embedded_urls() {
+        assert_eq!(
+            url_tokens("[ref](https://en.wikipedia.org/wiki/Memory_(computing)) and more"),
+            vec!["https://en.wikipedia.org/wiki/Memory_(computing)"]
+        );
+        assert_eq!(
+            url_tokens("see https://archive.dev/snap/https://x.com/a/status/1."),
+            vec!["https://archive.dev/snap/https://x.com/a/status/1"]
+        );
+        assert_eq!(url_tokens("<https://a.dev/x>, (https://b.dev/y)"), vec!["https://a.dev/x", "https://b.dev/y"]);
     }
 
     #[test]

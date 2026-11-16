@@ -89,6 +89,7 @@ impl PublicView {
         for c in m.claims.iter_mut() {
             c.run_id = None;
             c.sources.retain(|s| public_cases.contains(s));
+            scrub_propagation(c, &public_cases);
         }
         m.claims.retain(|c| !c.sources.is_empty());
 
@@ -125,6 +126,35 @@ impl PublicView {
     pub fn into_model(self) -> IndexModel {
         self.model
     }
+}
+
+/// Propagation (INV-1882) names cases and their publication dates, so it is
+/// scrubbed to the public case universe like `sources`. A private origin
+/// drops the whole projection (re-electing a public "origin" would claim a
+/// chronology the private source contradicts); a public origin keeps only
+/// public later sources, with count and credit rate recomputed over them.
+fn scrub_propagation(c: &mut ovp_index::ClaimRow, public_cases: &std::collections::HashSet<String>) {
+    use ovp_domain::citation_support::CitationType;
+    let origin_public = c.origin_source.as_ref().is_some_and(|o| public_cases.contains(o));
+    if origin_public {
+        c.adoption_timeline.retain(|e| public_cases.contains(&e.source_case_id));
+    }
+    if !origin_public || c.adoption_timeline.is_empty() {
+        c.origin_source = None;
+        c.adoption_timeline.clear();
+        c.adoption_count = None;
+        c.credit_rate = None;
+        return;
+    }
+    let classified =
+        c.adoption_timeline.iter().filter(|e| e.citation_type != CitationType::Unknown).count();
+    let credited = c
+        .adoption_timeline
+        .iter()
+        .filter(|e| matches!(e.citation_type, CitationType::ExactLink | CitationType::Credit))
+        .count();
+    c.adoption_count = Some(c.adoption_timeline.len());
+    c.credit_rate = (classified > 0).then(|| credited as f64 / classified as f64);
 }
 
 #[cfg(test)]
@@ -269,6 +299,45 @@ mod tests {
         assert_eq!(m.totals.needs_content, 0);
         assert_eq!(m.totals.claims_caveated, 0);
         assert_eq!(m.totals.claims_durable, 1);
+    }
+
+    #[test]
+    fn propagation_never_names_private_cases() {
+        use ovp_domain::citation_support::CitationType;
+        use ovp_index::AdoptionTimelineEntry;
+        let entry = |case: &str, ct| AdoptionTimelineEntry {
+            source_case_id: case.into(),
+            first_seen_date: Some("2026-01-05".into()),
+            lag_days: Some(4),
+            citation_type: ct,
+        };
+        let mut m = model();
+        m.packs.push(pack("case2", "aaa"));
+        // d1: public origin, one public + one private later source.
+        m.claims[0].origin_source = Some("case".into());
+        m.claims[0].adoption_timeline =
+            vec![entry("orphan", CitationType::ExactLink), entry("case2", CitationType::Inferred)];
+        m.claims[0].adoption_count = Some(2);
+        m.claims[0].credit_rate = Some(0.5);
+        // d2: private origin.
+        let mut d2 = claim("d2", ClaimStatus::Durable);
+        d2.origin_source = Some("orphan".into());
+        d2.adoption_timeline = vec![entry("case", CitationType::Credit)];
+        d2.adoption_count = Some(1);
+        d2.credit_rate = Some(1.0);
+        m.claims.push(d2);
+
+        let pv = PublicView::from_model(&m);
+        let json = serde_json::to_string(pv.model()).unwrap();
+        assert!(!json.contains("orphan"), "private case leaked: {json}");
+        let d1 = pv.model().claims.iter().find(|c| c.claim_id == "d1").unwrap();
+        assert_eq!(d1.origin_source.as_deref(), Some("case"));
+        assert_eq!(d1.adoption_timeline.len(), 1);
+        assert_eq!(d1.adoption_count, Some(1));
+        assert_eq!(d1.credit_rate, Some(0.0), "recomputed over public sources only");
+        let d2 = pv.model().claims.iter().find(|c| c.claim_id == "d2").unwrap();
+        assert!(d2.origin_source.is_none() && d2.adoption_timeline.is_empty());
+        assert!(d2.credit_rate.is_none() && d2.adoption_count.is_none());
     }
 
     #[test]

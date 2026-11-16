@@ -17,12 +17,17 @@ use std::path::Path;
 
 use ovp_domain::crystal::propagation::{compute_propagation, SourceFacts};
 use ovp_domain::units::read_source_from_path;
+use ovp_domain::vault_layout::{lifecycle_moved_path, VaultLayout};
+use ovp_domain::SourceKind;
 
 use crate::model::{AdoptionTimelineEntry, ClaimRow, ClaimStatus, PackRow, SourceRow};
 
 /// What one source note contributes, read once per build.
 struct NoteFacts {
     published: Option<String>,
+    /// A paper's byline (`source_authors`), which the article `author`
+    /// field does not carry.
+    authors: Option<String>,
     body: String,
 }
 
@@ -35,19 +40,33 @@ fn note<'a>(
     notes
         .entry(rel.to_string())
         .or_insert_with(|| {
-            let doc = read_source_from_path(&vault_root.join(rel)).ok()?;
-            // A paper's own publication metadata beats the clipping's
-            // top-level `published` (which may be the clip day).
-            let paper_day = match &doc.source_kind {
-                ovp_domain::source_doc::SourceKind::Paper(meta) => meta.published.as_deref(),
-                ovp_domain::source_doc::SourceKind::Article => None,
+            // Same lifecycle-move fallback as attach_tags: a processed
+            // source's recorded raw-inbox path may have moved to 03-Processed.
+            let recorded = vault_root.join(rel);
+            let path = if recorded.is_file() {
+                recorded
+            } else {
+                lifecycle_moved_path(vault_root, &VaultLayout::new(), rel, Some(&s.sha256))?
             };
-            let published = paper_day
-                .or(doc.published.as_deref())
-                .and_then(|p| p.get(..10))
-                .filter(|d| crate::model::is_iso_day(d))
+            let doc = read_source_from_path(&path).ok()?;
+            // A paper's own publication metadata beats the clipping's
+            // top-level `published` (which may be the clip day) — but only
+            // when it is a real day; otherwise fall through to `published`.
+            let (paper_day, paper_authors) = match &doc.source_kind {
+                SourceKind::Paper(meta) => (meta.published.as_deref(), meta.authors.join(", ")),
+                SourceKind::Article => (None, String::new()),
+            };
+            let published = [paper_day, doc.published.as_deref()]
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p.get(..10))
+                .find(|d| crate::model::is_iso_day(d))
                 .map(str::to_string);
-            Some(NoteFacts { published, body: doc.body_markdown })
+            Some(NoteFacts {
+                published,
+                authors: (!paper_authors.is_empty()).then_some(paper_authors),
+                body: doc.body_markdown,
+            })
         })
         .as_ref()
 }
@@ -94,7 +113,7 @@ pub fn attach_propagation(
                     identity: s.sha256.clone(),
                     published: facts.and_then(|f| f.published.clone()).filter(|_| !pinboard),
                     url: s.url.clone(),
-                    author: s.author.clone(),
+                    author: s.author.clone().or_else(|| facts.and_then(|f| f.authors.clone())),
                 })
             })
             .collect();
@@ -224,6 +243,31 @@ mod tests {
         assert_eq!(attach_propagation(dir.path(), &mut claims, &sources, &packs), 1);
         assert_eq!(claims[0].origin_source.as_deref(), Some("case-p"));
         assert_eq!(claims[0].adoption_timeline[0].lag_days, Some(31));
+    }
+
+    #[test]
+    fn reads_notes_moved_from_raw_inbox_and_falls_back_from_a_bad_paper_date() {
+        let dir = tempfile::tempdir().unwrap();
+        // a: recorded in 01-Raw, actually archived under 03-Processed.
+        let moved = dir.path().join("50-Inbox/03-Processed/2026-01");
+        std::fs::create_dir_all(&moved).unwrap();
+        write_note(&moved, "a-0123abcd.md", "2026-01-01", "x");
+        // b: a paper whose own date is junk — the top-level published counts.
+        std::fs::write(
+            dir.path().join("b.md"),
+            "---\ntitle: \"P\"\nsource: \"https://arxiv.org/abs/1\"\npublished: 2026-01-04\n\
+             source_type: arxiv-paper\narxiv_id: \"1\"\nsource_published_at: unknown\n---\nBody.\n",
+        )
+        .unwrap();
+        let sources = vec![
+            source("sha-a", "2026-01-01", "https://a.dev/post", "50-Inbox/01-Raw/2026-01/a-0123abcd.md"),
+            source("sha-b", "2026-01-04", "https://arxiv.org/abs/1", "b.md"),
+        ];
+        let packs = vec![pack("case-a", "sha-a"), pack("case-b", "sha-b")];
+        let mut claims = vec![claim(ClaimStatus::Durable, &["case-b", "case-a"])];
+        assert_eq!(attach_propagation(dir.path(), &mut claims, &sources, &packs), 1);
+        assert_eq!(claims[0].origin_source.as_deref(), Some("case-a"));
+        assert_eq!(claims[0].adoption_timeline[0].lag_days, Some(3));
     }
 
     #[test]
