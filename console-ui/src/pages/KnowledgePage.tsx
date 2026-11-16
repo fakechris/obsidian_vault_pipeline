@@ -11,8 +11,9 @@
  * so the hash resolves through the model and forwards to
  * /knowledge/theme/:t#<claim_id> where the card scrolls into view. */
 import { Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import KnowledgeGraph from '../components/KnowledgeGraph';
+import { Sparkline } from '../components/Sparkline';
 // Terrain pulls in three.js (~500KB) — load it only when the Terrain tab is
 // selected so it stays out of the initial portal bundle.
 const KnowledgeTerrain = lazy(() => import('../components/KnowledgeTerrain'));
@@ -28,6 +29,9 @@ import {
   sortThemeWall,
   sourceDaysByCase,
   themesFromPortalSummary,
+  SPARKLINE_DAYS,
+  sparklinesByThemeGroup,
+  themeGroupStorageKey,
   themeRoute,
   themeSourceBadge,
   themeWall,
@@ -44,7 +48,13 @@ import { useModel } from '../model';
 type View = 'list' | 'graph' | 'terrain';
 type Persp = 'claim' | 'source';
 
-function ThemeCard({ group }: { group: ThemeGroup }) {
+function ThemeCard({
+  group,
+  activity,
+}: {
+  group: ThemeGroup;
+  activity?: number[];
+}) {
   const { t } = useI18n();
   const active = group.durable + group.caveated;
   const pct = active > 0 ? Math.round((group.durable / active) * 100) : 0;
@@ -61,6 +71,12 @@ function ThemeCard({ group }: { group: ThemeGroup }) {
             : group.theme || t('knowledge.untitledTheme')}
         </span>
         <span className="theme-card-count mono">
+          <Sparkline
+            data={activity ?? []}
+            width={72}
+            height={18}
+            title={t('knowledge.sparklineTitle')}
+          />
           {t('knowledge.claimCount', { n: group.total })}
         </span>
       </div>
@@ -222,13 +238,19 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
         : { wallKey: key, wallDir: dir },
     );
   };
+  const sourceDays = useMemo(() => sourceDaysByCase(model), [model]);
+  const themeActivity = useMemo(
+    () =>
+      sparklinesByThemeGroup(
+        model.claims,
+        model.built_at ?? undefined,
+        SPARKLINE_DAYS,
+        sourceDays,
+      ),
+    [model, sourceDays],
+  );
   const wall = sortThemeWall(
-    themeWall(
-      model.claims,
-      themes,
-      caseCanonicalIds(model),
-      sourceDaysByCase(model),
-    ),
+    themeWall(model.claims, themes, caseCanonicalIds(model), sourceDays),
     sortKey,
     sortDir,
   );
@@ -337,6 +359,7 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
               <ThemeCard
                 key={g.id != null ? `id:${g.id}` : g.theme || '(untitled)'}
                 group={g}
+                activity={themeActivity.get(themeGroupStorageKey(g))}
               />
             ))}
           </div>
