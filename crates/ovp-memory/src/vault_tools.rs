@@ -3872,6 +3872,10 @@ mod tests {
                         run_date: None,
                         lane: Some("review".into()),
                         patched_by: None,
+                    origin_source: None,
+                    adoption_timeline: Vec::new(),
+                    adoption_count: None,
+                    credit_rate: None,
                     },
                 ],
             );
@@ -3947,6 +3951,10 @@ mod tests {
             run_date: None,
             lane: None,
             patched_by: None,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        adoption_count: None,
+        credit_rate: None,
         }
     }
 
@@ -4267,6 +4275,9 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "run-1".into(),
             status: CrystalStatus::Active,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        credit_rate: None,
         }
     }
 
@@ -4641,6 +4652,10 @@ mod tests {
             run_date: None,
             lane: None,
             patched_by: None,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        adoption_count: None,
+        credit_rate: None,
         };
         let model = fixture_model(
             vec![],

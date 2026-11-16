@@ -1059,6 +1059,10 @@ fn read_index_sqlite_at(path: &Path) -> Result<IndexModel, String> {
                         run_date: r.get(9)?,
                         lane: r.get(10)?,
                         patched_by: r.get(11)?,
+                        origin_source: None,
+                        adoption_timeline: Vec::new(),
+                        adoption_count: None,
+                        credit_rate: None,
                     },
                     r.get::<_, String>(6)?,
                 ))
@@ -1532,6 +1536,10 @@ mod tests {
                 run_date: None,
                 lane: None,
                 patched_by: None,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            adoption_count: None,
+            credit_rate: None,
             }],
             runs: vec![crate::model::RunRow {
                 run_id: "daily-2026-08-02".into(),

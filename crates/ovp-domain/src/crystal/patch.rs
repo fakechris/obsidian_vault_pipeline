@@ -1230,6 +1230,9 @@ mod tests {
                 final_class: crate::crystal::FinalClass::Durable,
                 run_id: "r1".into(),
                 status: crate::crystal::CrystalStatus::Active,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            credit_rate: None,
             }
         }
 

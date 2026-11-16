@@ -188,6 +188,10 @@ mod tests {
             run_date: None,
             lane: None,
             patched_by: None,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        adoption_count: None,
+        credit_rate: None,
         }
     }
 

@@ -6080,6 +6080,10 @@ mod tests {
                 run_date: None,
                 lane: None,
                 patched_by: None,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            adoption_count: None,
+            credit_rate: None,
             }],
             runs: vec![],
             ops: OpsState::default(),
@@ -6300,6 +6304,9 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        credit_rate: None,
         };
         let events = [
             StoreEvent {
@@ -8070,6 +8077,9 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r".into(),
             status: CrystalStatus::Active,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        credit_rate: None,
         };
         let records = vec![record("ck-a", "dup"), record("ck-b", "dup"), record("ck-c", "uniq")];
         // A real (fixture-built) index: agent_citations only reads sources.
@@ -8566,6 +8576,10 @@ mod tests {
                 run_date: None,
                 lane: None,
                 patched_by: None,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            adoption_count: None,
+            credit_rate: None,
             },
             ovp_index::ClaimRow {
                 claim_id: "m1-02".into(),
@@ -8580,6 +8594,10 @@ mod tests {
                 run_date: None,
                 lane: None,
                 patched_by: None,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            adoption_count: None,
+            credit_rate: None,
             },
         ];
         ovp_index::write_index(&vault, &model).unwrap();

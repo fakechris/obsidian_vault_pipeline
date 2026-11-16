@@ -501,6 +501,10 @@ mod tests {
                     run_date: None,
                     lane: None,
                     patched_by: None,
+                origin_source: None,
+                adoption_timeline: Vec::new(),
+                adoption_count: None,
+                credit_rate: None,
                 },
                 ClaimRow {
                     claim_id: "c02".into(),
@@ -515,6 +519,10 @@ mod tests {
                     run_date: None,
                     lane: None,
                     patched_by: None,
+                origin_source: None,
+                adoption_timeline: Vec::new(),
+                adoption_count: None,
+                credit_rate: None,
                 },
             ],
             runs: vec![RunRow {

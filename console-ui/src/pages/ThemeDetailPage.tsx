@@ -184,6 +184,39 @@ function TopicOverview({
   );
 }
 
+function ClaimPropagation({
+  claim,
+  byCase,
+}: {
+  claim: ClaimRow;
+  byCase: Map<string, SourceRow>;
+}) {
+  const { t } = useI18n();
+  if (!claim.origin_source) return null;
+  const origin = byCase.get(claim.origin_source);
+  const originLabel = origin?.title ?? claim.origin_source;
+  const adopted =
+    claim.adoption_count ?? (claim.adoption_timeline?.length ?? 0);
+  const creditPct =
+    claim.credit_rate != null ? Math.round(claim.credit_rate * 100) : null;
+  return (
+    <div className="claim-meta claim-propagation">
+      <div>
+        {t('theme.propagationOrigin')}{' '}
+        {origin ? (
+          <Link to={`/library/${origin.sha256}`}>{originLabel}</Link>
+        ) : (
+          <span title={t('theme.legacySource')}>{originLabel}</span>
+        )}
+      </div>
+      <div>{t('theme.propagationAdopted', { count: adopted })}</div>
+      {creditPct != null && (
+        <div>{t('theme.propagationCredit', { rate: creditPct })}</div>
+      )}
+    </div>
+  );
+}
+
 function ClaimSources({
   claim,
   byCase,
@@ -286,6 +319,7 @@ function ClaimCard({
       </div>
       <div className="claim-text">{text}</div>
       <ClaimSources claim={claim} byCase={byCase} />
+      <ClaimPropagation claim={claim} byCase={byCase} />
     </div>
   );
 }

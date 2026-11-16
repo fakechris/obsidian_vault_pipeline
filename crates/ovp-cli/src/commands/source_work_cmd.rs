@@ -390,6 +390,9 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "run-test".into(),
             status: CrystalStatus::Active,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            credit_rate: None,
         }
     }
 

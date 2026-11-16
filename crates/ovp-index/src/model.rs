@@ -324,6 +324,23 @@ pub struct ClaimRow {
     /// When modified by a Human Patch Record (M37), the active patch ID (e.g. `hp-...`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patched_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adoption_timeline: Vec<AdoptionTimelineEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adoption_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdoptionTimelineEntry {
+    pub source_case_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_seen_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lag_days: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

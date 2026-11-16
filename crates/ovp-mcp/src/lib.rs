@@ -2525,6 +2525,9 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        credit_rate: None,
         }
     }
 
@@ -3998,6 +4001,10 @@ Line 5: End of specification.";
                 run_date: None,
                 lane: None,
                 patched_by: None,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            adoption_count: None,
+            credit_rate: None,
             }],
             runs: vec![],
             ops: ovp_index::OpsState::default(),
@@ -4378,6 +4385,10 @@ Line 5: End of specification.";
                 run_date: None,
                 lane: None,
                 patched_by: None,
+            origin_source: None,
+            adoption_timeline: Vec::new(),
+            adoption_count: None,
+            credit_rate: None,
             }],
             runs: vec![],
             ops: ovp_index::OpsState::default(),
