@@ -546,6 +546,9 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        credit_rate: None,
         }
     }
 
@@ -608,6 +611,10 @@ mod tests {
                     run_date: None,
                     lane: None,
                     patched_by: None,
+                origin_source: None,
+                adoption_timeline: Vec::new(),
+                adoption_count: None,
+                credit_rate: None,
                 },
                 ClaimRow {
                     claim_id: "id-2".into(),
@@ -622,6 +629,10 @@ mod tests {
                     run_date: None,
                     lane: Some("review".into()),
                     patched_by: None,
+                origin_source: None,
+                adoption_timeline: Vec::new(),
+                adoption_count: None,
+                credit_rate: None,
                 },
             ],
             runs: vec![],

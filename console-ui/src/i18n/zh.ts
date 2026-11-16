@@ -488,6 +488,9 @@ export const zh: Record<keyof typeof en, string> = {
   'theme.zhPartialOverview':
     '主张中文部分就绪；主题综述段落仍是英文（尚无 theme_pages_zh）。',
   'theme.switchToEn': '切换界面到 EN',
+  'theme.propagationOrigin': '起源：',
+  'theme.propagationAdopted': '采纳来源：{count} 个',
+  'theme.propagationCredit': '溯源率：{rate}%',
   'theme.citedSources': '来源：',
   'theme.legacySource': '旧源——该 vault 中没有对应的详情页。',
   'theme.strength': '强度',

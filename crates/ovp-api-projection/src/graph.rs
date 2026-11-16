@@ -1670,6 +1670,9 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r1".into(),
             status: CrystalStatus::Active,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        credit_rate: None,
         }
     }
 
@@ -2365,6 +2368,10 @@ mod tests {
             run_date: None,
             lane: None,
             patched_by: None,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        adoption_count: None,
+        credit_rate: None,
         });
         let resp = theme_subgraph(&records, Some(&model), "gamma").unwrap();
         let ids: Vec<&str> = resp.nodes.iter().map(|n| n.id.as_str()).collect();

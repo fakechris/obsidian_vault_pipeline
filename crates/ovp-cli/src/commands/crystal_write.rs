@@ -374,6 +374,18 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
         .into_iter()
         .filter(|r| r.status == ovp_domain::crystal::CrystalStatus::Active)
         .collect();
+    {
+        let mut scratch = active_records.clone();
+        scratch.extend(new_records.iter().cloned());
+        ovp_domain::crystal::propagation::overlay_propagation(&mut scratch);
+        for pending in &mut new_records {
+            if let Some(stamped) = scratch.iter().find(|s| s.claim_key == pending.claim_key) {
+                pending.origin_source = stamped.origin_source.clone();
+                pending.adoption_timeline = stamped.adoption_timeline.clone();
+                pending.credit_rate = stamped.credit_rate;
+            }
+        }
+    }
     let mut appended = 0usize;
     let mut appended_records = Vec::new();
     let mut appended_lines = String::new();

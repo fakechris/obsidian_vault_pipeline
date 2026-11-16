@@ -512,6 +512,9 @@ export const en = {
   'theme.zhPartialOverview':
     'Claim zh is partial; topic-overview sections are still English (no theme_pages_zh yet).',
   'theme.switchToEn': 'Switch UI to EN',
+  'theme.propagationOrigin': 'Origin:',
+  'theme.propagationAdopted': 'Adopted by: {count} sources',
+  'theme.propagationCredit': 'Credit rate: {rate}%',
   'theme.citedSources': 'Sources:',
   'theme.legacySource': 'Legacy source — no detail page in this vault.',
   'theme.strength': 'strength',

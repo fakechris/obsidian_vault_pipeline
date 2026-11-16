@@ -133,6 +133,9 @@ mod tests {
             final_class: FinalClass::Durable,
             run_id: "r".into(),
             status: CrystalStatus::Active,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        credit_rate: None,
         };
         serde_json::to_string(&StoreEvent {
             op,

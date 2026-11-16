@@ -116,6 +116,9 @@ fn main() {
             final_class: FinalClass::Durable,
             run_id: "scale-fixture".into(),
             status: CrystalStatus::Active,
+        origin_source: None,
+        adoption_timeline: Vec::new(),
+        credit_rate: None,
         };
 
         let event = StoreEvent {

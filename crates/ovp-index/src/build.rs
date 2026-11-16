@@ -987,13 +987,19 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
     let mut claims = Vec::new();
 
     let events: Vec<StoreEvent> = read_jsonl_strict(&store.join("ledger.jsonl"))?;
-    for rec in fold_ledger(&events) {
+    let mut ledger_records = fold_ledger(&events);
+    ovp_domain::crystal::propagation::overlay_propagation(&mut ledger_records);
+    for rec in ledger_records {
         let status = match rec.status {
             CrystalStatus::Active => ClaimStatus::Durable,
             CrystalStatus::Superseded => ClaimStatus::Superseded,
             CrystalStatus::Retracted => ClaimStatus::Retracted,
             _ => continue,
         };
+        let adoption_count = rec
+            .origin_source
+            .as_ref()
+            .map(|_| rec.adoption_timeline.len());
         claims.push(ClaimRow {
             claim_id: rec.claim_id.clone(),
             claim_key: Some(rec.claim_key.clone()),
@@ -1007,6 +1013,18 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             run_date: run_date_from_run_id(&rec.run_id),
             lane: None,
             patched_by: None,
+            origin_source: rec.origin_source.clone(),
+            adoption_timeline: rec
+                .adoption_timeline
+                .iter()
+                .map(|e| crate::model::AdoptionTimelineEntry {
+                    source_case_id: e.source_case_id.clone(),
+                    first_seen_date: e.first_seen_date.clone(),
+                    lag_days: e.lag_days,
+                })
+                .collect(),
+            adoption_count,
+            credit_rate: rec.credit_rate,
         });
     }
 
@@ -1040,6 +1058,10 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
                 run_date: None,
                 lane: enum_str(&entry.lane),
                 patched_by: None,
+                origin_source: None,
+                adoption_timeline: Vec::new(),
+                adoption_count: None,
+                credit_rate: None,
             });
         }
     }

@@ -28,6 +28,9 @@ fn setup_test_vault(root: &Path) {
         final_class: FinalClass::Durable,
         run_id: "r1".into(),
         status: ovp_domain::crystal::CrystalStatus::Active,
+    origin_source: None,
+    adoption_timeline: Vec::new(),
+    credit_rate: None,
     };
     let event = StoreEvent {
         op: StoreOp::Write,
