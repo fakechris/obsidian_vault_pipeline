@@ -14,6 +14,7 @@ pub mod decision;
 pub mod fixture;
 pub mod key;
 pub mod openai;
+pub mod provider;
 pub mod reply;
 pub mod request;
 pub mod usage;
@@ -28,6 +29,7 @@ pub use client::{
 };
 pub use fixture::FixtureModelClient;
 pub use key::request_key;
+pub use provider::{LLM_NOT_CONFIGURED, LlmProvider, resolve_api_key};
 pub use reply::{ExecutableToolCall, ModelReply, ReplyBlock, StopReason, Usage};
 pub use request::{AssistantBlock, ModelMessage, ModelRequest, ToolDef, ToolResultBlock};
 pub use usage::UsageRow;
@@ -38,6 +40,6 @@ pub use anthropic::AnthropicBlockingClient;
 pub use openai::OpenAiBlockingClient;
 #[cfg(feature = "anthropic")]
 pub use live::{
-    LLM_NOT_CONFIGURED, LiveClientConfig, LiveHttpClient, LlmProvider, build_recording_live_client,
-    build_recording_live_client_bounded, resolve_api_key,
+    LiveClientConfig, LiveHttpClient, build_recording_live_client,
+    build_recording_live_client_bounded,
 };

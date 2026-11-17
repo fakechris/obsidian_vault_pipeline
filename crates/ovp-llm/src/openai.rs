@@ -405,20 +405,26 @@ mod live {
     }
 
     impl OpenAiBlockingClient {
+        /// One POST. `deadline` (when set) caps this request below the
+        /// client timeout, so a resend never extends the caller's wall-clock
+        /// bound (`build_recording_live_client_bounded`).
         fn send(
             &self,
             request: &ModelRequest,
             body: &serde_json::Value,
+            deadline: Option<std::time::Duration>,
         ) -> Result<ModelReply, CallError> {
             let started = std::time::Instant::now();
-            let resp = match self
+            let mut builder = self
                 .http
                 .post(&self.base_url)
                 .bearer_auth(&self.api_key)
                 .header("content-type", "application/json")
-                .json(body)
-                .send()
-            {
+                .json(body);
+            if let Some(d) = deadline {
+                builder = builder.timeout(d);
+            }
+            let resp = match builder.send() {
                 Ok(resp) => resp,
                 Err(e) => {
                     let err = CallError::Transport { detail: format!("send: {e}") };
@@ -470,10 +476,13 @@ mod live {
             if self.omit_temperature {
                 body.as_object_mut().expect("json object").remove("temperature");
             }
-            match self.send(request, &body) {
+            let started = std::time::Instant::now();
+            match self.send(request, &body, None) {
                 // Reasoning models accept only the default temperature: drop
                 // it once, remember, and resend (wire-only — cassette keys
-                // hash the ModelRequest, not this body).
+                // hash the ModelRequest, not this body). The resend shares
+                // the ORIGINAL timeout budget: no time left → the original
+                // error stands.
                 Err(e) if body.get("temperature").is_some() && rejects_temperature(&e) => {
                     eprintln!(
                         "ovp-llm: {} rejects `temperature`; omitting it for this client",
@@ -481,7 +490,18 @@ mod live {
                     );
                     self.omit_temperature = true;
                     body.as_object_mut().expect("json object").remove("temperature");
-                    self.send(request, &body)
+                    let deadline = match self.timeout_secs {
+                        0 => None, // no timeout configured
+                        secs => {
+                            let left = std::time::Duration::from_secs(secs)
+                                .saturating_sub(started.elapsed());
+                            if left.is_zero() {
+                                return Err(e);
+                            }
+                            Some(left)
+                        }
+                    };
+                    self.send(request, &body, deadline)
                 }
                 other => other,
             }

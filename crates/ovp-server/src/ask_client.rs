@@ -17,23 +17,14 @@ pub use ovp_llm::LLM_NOT_CONFIGURED;
 #[cfg(not(feature = "anthropic"))]
 pub const LLM_NOT_CONFIGURED: &str = "llm_not_configured";
 
-/// Whether a non-empty `ANTHROPIC_API_KEY` is available from the process
-/// environment or `<vault>/.ovp/providers.toml`. Used by `/api/settings`
+/// Whether the SELECTED provider's API key (`ANTHROPIC_API_KEY`, or
+/// `OPENAI_API_KEY` under `OVP_LLM_PROVIDER=openai`) is available from the
+/// process environment or `<vault>/.ovp/providers.toml` — the same lookup and
+/// key choice the live builder uses. Used by `/api/settings`
 /// (`llm_configured`) so the System page reflects the product config surface.
 pub fn api_key_configured(vault_root: &Path) -> bool {
-    if std::env::var("ANTHROPIC_API_KEY")
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false)
-    {
-        return true;
-    }
-    match ovp_domain::providers::read_providers_file(vault_root) {
-        Ok(map) => map
-            .get("ANTHROPIC_API_KEY")
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false),
-        Err(_) => false,
-    }
+    let file = ovp_domain::providers::read_providers_file(vault_root).unwrap_or_default();
+    ovp_llm::resolve_api_key(provider_lookup(&file)).is_ok()
 }
 
 /// Live-transport factory for ask: `Some` when built with `--features
@@ -106,7 +97,6 @@ fn build_ask_client_bounded(
 
 /// Env-over-file lookup matching `apply_providers_env` semantics without
 /// mutating the process environment.
-#[cfg(feature = "anthropic")]
 fn provider_lookup(
     file: &std::collections::BTreeMap<String, String>,
 ) -> impl Fn(&str) -> Option<String> + '_ {
@@ -158,6 +148,20 @@ mod tests {
         std::fs::write(
             vault.join(".ovp/providers.toml"),
             "[env]\nANTHROPIC_API_KEY = \"sk-from-file\"\n",
+        )
+        .unwrap();
+        assert!(api_key_configured(&vault));
+        // OpenAI selected: a leftover Anthropic key is NOT readiness …
+        std::fs::write(
+            vault.join(".ovp/providers.toml"),
+            "[env]\nANTHROPIC_API_KEY = \"sk-from-file\"\nOVP_LLM_PROVIDER = \"openai\"\n",
+        )
+        .unwrap();
+        assert!(!api_key_configured(&vault));
+        // … and the OpenAI key alone is.
+        std::fs::write(
+            vault.join(".ovp/providers.toml"),
+            "[env]\nOVP_LLM_PROVIDER = \"openai\"\nOPENAI_API_KEY = \"sk-oai\"\n",
         )
         .unwrap();
         assert!(api_key_configured(&vault));
