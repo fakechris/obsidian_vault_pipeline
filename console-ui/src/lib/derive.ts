@@ -2058,12 +2058,17 @@ export function localDayOf(ts: string | null | undefined): string | undefined {
 }
 
 /** The day a source ENTERED the system: its first intake-ledger day.
- * Sources processed before the intake ledger existed (pre 2026-06-15) have
- * none, and their processing day is the closest stand-in; the content day
- * (published / bookmark) is the last resort. Unlike `sourceDay`, a later
- * re-run never moves it. */
+ * Sources older than the intake ledger (pre 2026-06-15) have none; their
+ * note is named `YYYY-MM-DD_…` after the day they came in, which never
+ * changes. `processed_on` is NOT a fallback: it is the LAST daily attempt,
+ * so a re-run would move an old source into the current week. The content
+ * day (published / bookmark) is the last resort. */
 export function sourceEntryDay(src: SourceRow): string | null {
-  return src.captured_on ?? src.processed_on ?? src.content_date ?? null;
+  if (src.captured_on) return src.captured_on;
+  const name = (src.rel_path ?? '').split('/').pop() ?? '';
+  const named = name.slice(0, 10);
+  if (isIsoDay(named)) return named;
+  return src.content_date ?? null;
 }
 
 /** case id → { source identity, entry day }. Two case ids for the same
