@@ -459,19 +459,19 @@ fn carry_ids(
         .collect()
 }
 
-/// Up to `LABEL_SAMPLE_CLAIMS` active claims per published community id:
-/// each claim goes where the portal shows it — the community holding most
-/// of its cited packs, ties to the LOWER id (`ThemesFile::majority_community`)
-/// — most-cited first, then by claim_key. A missing or unreadable ledger
-/// means no claims; labeling still works from titles.
-fn claims_by_community(store: &Path, community_of: &BTreeMap<&str, i64>) -> BTreeMap<i64, Vec<String>> {
+/// Up to `LABEL_SAMPLE_CLAIMS` active claims per published community id,
+/// in the wording the portal shows (human text patches applied — the same
+/// reader the portal uses): each claim goes where the portal shows it — the
+/// community holding most of its cited packs, ties to the LOWER id
+/// (`ThemesFile::majority_community`) — most-cited first, then by
+/// claim_key. No ledger means no claims; labeling still works from titles.
+fn claims_by_community(
+    vault_root: &Path,
+    layout: &VaultLayout,
+    community_of: &BTreeMap<&str, i64>,
+) -> BTreeMap<i64, Vec<String>> {
     let mut out: BTreeMap<i64, Vec<(usize, String, String)>> = BTreeMap::new();
-    let events = crate::commands::crystal_write::read_ledger(&store.join("ledger.jsonl"))
-        .unwrap_or_default();
-    for rec in ovp_domain::crystal::fold_ledger(&events) {
-        if rec.status != ovp_domain::crystal::CrystalStatus::Active {
-            continue;
-        }
+    for rec in ovp_api_projection::readers::load_active_records(vault_root, layout) {
         let mut votes: BTreeMap<i64, usize> = BTreeMap::new();
         for case in &rec.source_cases {
             if let Some(&c) = community_of.get(case.as_str()) {
@@ -651,7 +651,7 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
         ClientKind::Replay => None,
     };
     let claims = match live_client {
-        Some(_) => claims_by_community(&store, &community_of),
+        Some(_) => claims_by_community(&args.vault_root, &layout, &community_of),
         None => BTreeMap::new(),
     };
     let mut renamed = 0usize;
@@ -1276,5 +1276,48 @@ mod tests {
         assert_eq!(second.packs["2026-06-05_quant-c"], quant_id);
         assert_eq!(second.packs["2026-06-01_mem-a"], first.packs["2026-06-01_mem-a"]);
         assert_eq!(second.label_prompt, None, "replay labels are keyword labels");
+    }
+
+    #[test]
+    fn label_claims_use_the_human_patched_wording() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let store = vault.join(".ovp/crystal");
+        std::fs::create_dir_all(&store).unwrap();
+        let rec = |id: &str, text: &str, cases: &[&str]| {
+            serde_json::json!({"op": "write", "record": {
+                "claim_key": format!("k-{id}"), "claim_id": id, "claim": text, "theme": "t",
+                "source_cases": cases, "citations": [], "provenance_score": 1.0,
+                "provenance_class": "durable", "strength": "supported",
+                "strength_rationale": "ok", "final_class": "durable",
+                "run_id": "r", "status": "active"}})
+            .to_string()
+        };
+        std::fs::write(
+            store.join("ledger.jsonl"),
+            format!(
+                "{}\n{}\n",
+                rec("c01", "Original wording.", &["case-a", "case-b"]),
+                // tie between t003 and t001 → the lower id, as the portal shows it
+                rec("c02", "Tied claim.", &["case-c", "case-a"]),
+            ),
+        )
+        .unwrap();
+        let patch = ovp_domain::crystal::HumanPatchRecord::new_apply(
+            "c01",
+            None,
+            "Original wording.",
+            "Corrected wording.",
+            None,
+            None,
+            "operator:test",
+            "fix",
+            Some("2026-06-09T10:00:00Z".into()),
+        );
+        ovp_domain::crystal::append_patch_record(&store.join("patches.jsonl"), &patch).unwrap();
+        let community_of = BTreeMap::from([("case-a", 3), ("case-b", 3), ("case-c", 1)]);
+        let got = claims_by_community(vault, &VaultLayout::new(), &community_of);
+        assert_eq!(got[&3], vec!["Corrected wording.".to_string()]);
+        assert_eq!(got[&1], vec!["Tied claim.".to_string()]);
     }
 }
