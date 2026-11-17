@@ -80,7 +80,12 @@ pub fn body_usage_tokens(json_body: &str) -> (Option<u32>, Option<u32>) {
             .and_then(|n| n.as_u64())
             .map(|n| n as u32)
     };
-    (pick("input_tokens"), pick("output_tokens"))
+    // Anthropic: input/output_tokens; OpenAI Chat Completions:
+    // prompt/completion_tokens.
+    (
+        pick("input_tokens").or_else(|| pick("prompt_tokens")),
+        pick("output_tokens").or_else(|| pick("completion_tokens")),
+    )
 }
 
 /// Shard file for a timestamp: `<ledger_dir>/llm-usage-YYYY-MM.jsonl`.

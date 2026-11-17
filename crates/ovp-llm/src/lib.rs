@@ -1,6 +1,7 @@
 //! OVP Next effect boundary: a synchronous `ModelClient` trait plus three
-//! impls — fixture (in-memory), cached (file-backed), and (post-C9) live
-//! `AnthropicBlockingClient` behind the `anthropic` feature.
+//! impls — fixture (in-memory), cached (file-backed), and live HTTP clients
+//! (`AnthropicBlockingClient`, `OpenAiBlockingClient`) behind the `anthropic`
+//! feature (which only gates `reqwest`).
 //!
 //! Provider-neutral on purpose. `ovp-domain::LLMInvoker` maps domain
 //! types (`PromptRequest` / `ModelResponse`) onto this crate's wire types
@@ -12,6 +13,7 @@ pub mod client;
 pub mod decision;
 pub mod fixture;
 pub mod key;
+pub mod openai;
 pub mod reply;
 pub mod request;
 pub mod usage;
@@ -33,7 +35,9 @@ pub use usage::UsageRow;
 #[cfg(feature = "anthropic")]
 pub use anthropic::AnthropicBlockingClient;
 #[cfg(feature = "anthropic")]
+pub use openai::OpenAiBlockingClient;
+#[cfg(feature = "anthropic")]
 pub use live::{
-    LLM_NOT_CONFIGURED, LiveClientConfig, build_recording_live_client,
+    LLM_NOT_CONFIGURED, LiveClientConfig, LiveHttpClient, LlmProvider, build_recording_live_client,
     build_recording_live_client_bounded, resolve_api_key,
 };

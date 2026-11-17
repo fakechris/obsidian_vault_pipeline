@@ -52,8 +52,13 @@ fn build_live_client(cache_dir: &Path, usage_ledger: Option<&Path>) -> Result<Bo
 
     let cfg = LiveClientConfig::from_env()
         .map_err(|e| CliError::Io(format!("live provider config: {e}")))?;
-    let key = resolve_api_key(|k| std::env::var(k).ok())
-        .map_err(|e| CliError::Io(format!("anthropic client: {e}")))?;
+    let key = resolve_api_key(|k| std::env::var(k).ok()).map_err(|e| {
+        CliError::Io(format!(
+            "live client: {e} — set {} (provider: {:?})",
+            cfg.provider.api_key_var(),
+            cfg.provider
+        ))
+    })?;
     build_recording_live_client(&key, &cfg, cache_dir, ARTICLE_PROMPT_ID, usage_ledger)
         .map_err(CliError::Io)
 }

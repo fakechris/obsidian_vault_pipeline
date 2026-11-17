@@ -1,0 +1,27 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "llm_provider-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.llm_provider",
+  "hypothesis": "RUNTIME surface: the only live client spoke Anthropic Messages (Anthropic-compatible endpoints such as MiniMax). When that provider's quota ran out (2026-11-17, MiniMax 'Token Plan' limit), every scheduled job (daily, crystallize, themes) and Ask had no fallback, although the operator holds an OpenAI key with budget. v1 adds `OVP_LLM_PROVIDER=openai`, an OpenAI Responses API client selected at the shared builder (`build_recording_live_client[_bounded]`, `resolve_api_key`), so every call site switches together with no per-job code. Responses, not Chat Completions: a live probe showed gpt-6-luna on /v1/chat/completions rejects function tools while reasoning is on. Behaviors: `store:false`; `strict:false` function tools; one-shot automatic `temperature` drop when the model rejects it (reasoning models accept only the default); `max_output_tokens` exhaustion with no answer → retryable BudgetExhausted; `insufficient_quota` not retried. Predicted: with the provider set to openai, live jobs and Ask run on gpt-6-luna with the same retry/cassette/usage-metering behavior as the Anthropic path; with it unset, behavior is byte-identical to before.",
+  "predicted_delta": {
+    "operational_reliability": "a second provider the operator can switch to without code changes when one provider's quota or availability fails",
+    "cost_efficiency": "cassette keys hash the provider-neutral ModelRequest, so recorded replies stay valid across a provider switch; wire-only retries (temperature drop) cost one rejected request per process"
+  },
+  "guardrails": {
+    "default_unchanged": "OVP_LLM_PROVIDER unset or `anthropic` → the same AnthropicBlockingClient with the same knobs; ANTHROPIC_* parsing/validation unchanged",
+    "key_isolation": "the OpenAI path reads only OPENAI_API_KEY; an Anthropic key is never sent to OpenAI (test: api_key_follows_the_provider)",
+    "fail_loud_config": "an unknown OVP_LLM_PROVIDER or an OPENAI_BASE_URL not ending in /responses is a startup error",
+    "child_env_scrub": "scheduler children re-read providers.toml: OVP_LLM_PROVIDER / OPENAI_API_KEY / OPENAI_BASE_URL are scrubbed from the inherited env like the Anthropic keys",
+    "tool_protocol": "the same validate_tool_protocol guard runs before the wire for both providers"
+  },
+  "eval_plan": {
+    "replay_set": "ovp-llm unit tests for the pure Responses mapping (body shape, function_call / function_call_output items, commentary/reasoning skipping, budget exhaustion, error-code classification, temperature rejection) and config/key resolution; ignored live smoke test `tests/openai_live.rs` (text + full tool round trip) passed against gpt-6-luna; real-vault `crystal-themes --client live --dry-run` completed with 33 model calls on gpt-6-luna",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Remove OVP_LLM_PROVIDER from providers.toml (or set it to `anthropic`) — no code change. Code rollback is one revert: openai.rs, the provider enum/builder in live.rs, the usage-token fallback, and three env-scrub keys.",
+  "ablation_required": false
+}

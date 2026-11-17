@@ -271,6 +271,13 @@
       "current_version": "v1",
       "file": "crates/ovp-cli/src/commands/crystal_themes.rs",
       "quality_buckets": ["operational_reliability", "cost_efficiency"]
+    },
+    {
+      "id": "runtime.llm_provider",
+      "surface": "runtime",
+      "current_version": "v1",
+      "file": "crates/ovp-llm/src/live.rs",
+      "quality_buckets": ["operational_reliability", "cost_efficiency"]
     }
   ]
 }
