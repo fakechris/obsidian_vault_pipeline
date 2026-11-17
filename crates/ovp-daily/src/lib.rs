@@ -45,7 +45,7 @@ pub use heartbeat::{
 pub use ledger::{
     append_daily_record, append_pipeline_event, append_retry_grants, effective_failures,
     failed_counts, read_daily_ledger, read_retry_grants, succeeded_hashes, DailyRunRecord,
-    PipelineLogEvent, RetryGrant, RunStatus, DAILY_SCHEMA, RETRY_GRANTS_FILE, RETRY_GRANT_SCHEMA,
+    PipelineLogEvent, RetryGrant, RunStatus, DAILY_SCHEMA, RETRY_GRANTS_DIR, RETRY_GRANT_SCHEMA,
 };
 pub use report::{
     write_run_report, CostReport, IntakeSummary, PinboardSummary, ReaderSummary, RunReport,

@@ -6948,19 +6948,19 @@ mod tests {
             cards: 0,
             reason: Some("provider error rate_limit_error".into()),
         };
-        for sha in ["blocked1", "blocked1", "blocked1", "failed1"] {
+        for sha in ["b10c4ed1", "b10c4ed1", "b10c4ed1", "fa11ed01"] {
             ovp_daily::append_daily_record(&ledger, &fail(sha)).unwrap();
         }
         let st = state(vault.clone(), None);
         let post = |body: &str| body_json(dispatch(&st, Method::Post, "/api/attention/retry", body));
 
-        let v = post(r#"{"shas":["blocked1","failed1","unknown"],"reason":"quota restored"}"#);
+        let v = post(r#"{"shas":["b10c4ed1","fa11ed01","0000beef"],"reason":"quota restored"}"#);
         assert_eq!(v["granted"], 1);
-        assert_eq!(v["skipped"], serde_json::json!(["failed1", "unknown"]));
+        assert_eq!(v["skipped"], serde_json::json!(["fa11ed01", "0000beef"]));
         let grants = ovp_daily::read_retry_grants(&vault);
-        assert_eq!(grants.get("blocked1"), Some(&3));
+        assert_eq!(grants.get("b10c4ed1"), Some(&3));
         // Already re-admitted → no longer blocked → a second click is a no-op.
-        let v = post(r#"{"shas":["blocked1"]}"#);
+        let v = post(r#"{"shas":["b10c4ed1"]}"#);
         assert_eq!(v["granted"], 0);
 
         assert_eq!(

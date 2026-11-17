@@ -1,0 +1,26 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "daily_retry_grants-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.daily_retry_grants",
+  "hypothesis": "RUNTIME surface: a source that fails MAX_FAILURES_BEFORE_BLOCKED (3) times is blocked and skipped by plan_daily until `daily --retry-blocked`, which re-admits EVERY blocked source. When an external cause blocks a batch (2026-11: 20 sources blocked by a spent MiniMax token plan), the operator had no portal path back and no way to re-admit only the recoverable ones — the global flag would also re-run content failures that fail again and burn calls. v1 adds per-source retry grants (`.ovp/retry-grants/`, one create-once file per grant) recording the failure count at grant time; plan_daily and the index count only failures after the latest grant (`effective_failures`). The portal grants a whole cause-group (quota / network / provider) at once. Predicted: granted sources are planned on the next daily run with a fresh count, everything else stays blocked, and three new failures block a source again.",
+  "predicted_delta": {
+    "operational_reliability": "externally-caused blocks are recoverable from the portal, scoped to the affected cause group, without re-running content failures",
+    "cost_efficiency": "no calls spent re-running extraction failures that the global --retry-blocked would include"
+  },
+  "guardrails": {
+    "block_still_bites": "grants reset the count, not the cap: three new failures block the source again (integration test)",
+    "ledger_untouched": "daily-runs.jsonl format unchanged; older binaries ignore the grants directory",
+    "cross_app_writes": "one create-once file per grant (macOS app-provenance: other apps may create but not modify files); deterministic names make a repeat grant a no-op",
+    "fail_open_reads": "an unreadable/malformed grant file is skipped; worst case one source stays blocked"
+  },
+  "eval_plan": {
+    "replay_set": "ovp-daily unit + integration tests (grant → planned with fresh count → re-blocked after 3 failures), ovp-index test (granted source leaves Attention, history kept), server endpoint test; real-vault clone: 20 quota-blocked sources granted, `daily --dry-run` planned exactly those 20 with the other 30 still blocked",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Delete `.ovp/retry-grants/` (sources return to their pre-grant state); code rollback is one revert.",
+  "ablation_required": false
+}
