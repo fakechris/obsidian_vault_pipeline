@@ -2233,6 +2233,19 @@ export interface LlmProfileForm {
   model: string;
   apiKey: string;
   noProxy: boolean;
+  /** LLM variables the form has no field for (`OVP_LLM_MAX_TOKENS`,
+   * `OVP_LLM_TIMEOUT_SECS`), carried through unchanged so saving a setup
+   * never silently drops them. */
+  extra?: Record<string, string>;
+}
+
+/** LLM variables without a form field — kept verbatim by `llmProfileSet`. */
+export const LLM_EXTRA_KEYS = ['OVP_LLM_MAX_TOKENS', 'OVP_LLM_TIMEOUT_SECS'] as const;
+
+export function llmExtraOf(env: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of LLM_EXTRA_KEYS) if (env[k]) out[k] = env[k];
+  return out;
 }
 
 /** The `set` payload for a profile save: the chosen provider's variables,
@@ -2241,6 +2254,7 @@ export interface LlmProfileForm {
 export function llmProfileSet(form: LlmProfileForm): Record<string, string> {
   const openai = form.provider === 'openai';
   return {
+    ...(form.extra ?? {}),
     OVP_LLM_PROVIDER: openai ? 'openai' : '',
     OPENAI_API_KEY: openai ? form.apiKey : '',
     OPENAI_BASE_URL: openai ? form.baseUrl : '',

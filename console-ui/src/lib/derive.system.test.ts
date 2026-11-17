@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  llmExtraOf,
   attentionGroupKey,
   attentionGroups,
   llmProfileSet,
@@ -77,6 +78,21 @@ describe('System page helpers', () => {
       '',
       '1',
     ]);
+  });
+
+  it('saving a setup keeps the LLM variables the form has no field for', () => {
+    const live = { OVP_LLM_MODEL: 'm', OVP_LLM_MAX_TOKENS: '24000', OVP_LLM_TIMEOUT_SECS: '300', GITHUB_TOKEN: 'x' };
+    const set = llmProfileSet({
+      provider: 'anthropic',
+      baseUrl: '',
+      model: 'm',
+      apiKey: 'k',
+      noProxy: false,
+      extra: llmExtraOf(live),
+    });
+    expect(set.OVP_LLM_MAX_TOKENS).toBe('24000');
+    expect(set.OVP_LLM_TIMEOUT_SECS).toBe('300');
+    expect(set.GITHUB_TOKEN).toBeUndefined();
   });
 
   it('derives unique profile ids from labels', () => {

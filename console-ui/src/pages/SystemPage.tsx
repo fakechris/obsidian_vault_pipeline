@@ -36,6 +36,7 @@ import {
   SYSTEM_TABS,
   attentionGroups,
   attentionSources,
+  llmExtraOf,
   llmProfileSet,
   llmSetupSummary,
   profileIdFor,
@@ -326,6 +327,10 @@ function RunNowSection() {
 /** Built-in provider presets. `anthropic` = Anthropic-Messages-compatible
  * endpoints (base_url is the FULL /messages endpoint); `openai` = the OpenAI
  * Responses API (empty base_url = the official endpoint). */
+/** Presets the legacy single-setup form (servers without saved setups) can
+ * store — it writes Anthropic-compatible variables only. */
+const LEGACY_PRESETS = () => PROVIDER_PRESETS.filter((p) => p.provider === 'anthropic');
+
 const PROVIDER_PRESETS: {
   id: string;
   label: string;
@@ -376,6 +381,8 @@ const PROVIDER_PRESETS: {
 interface ProfileDraft {
   /** null = a new profile (id derived from the label on save). */
   id: string | null;
+  /** LLM variables without a field here, carried through verbatim. */
+  extra: Record<string, string>;
   label: string;
   preset: string;
   provider: LlmProviderKind;
@@ -394,6 +401,7 @@ function draftFromEnv(id: string | null, label: string, env: Record<string, stri
     )?.id ?? 'custom';
   return {
     id,
+    extra: llmExtraOf(env),
     label,
     preset,
     provider: sum.provider,
@@ -645,7 +653,7 @@ function ProviderSection({ onSaved }: { onSaved?: () => void }) {
         setModel(env.OVP_LLM_MODEL ?? '');
         setApiKey(env.ANTHROPIC_API_KEY ?? '');
         setNoProxy(env.OVP_LLM_NO_PROXY === '1' || env.OVP_LLM_NO_PROXY === 'true');
-        const match = PROVIDER_PRESETS.find((pr) => pr.base_url === url && pr.id !== 'custom');
+        const match = LEGACY_PRESETS().find((pr) => pr.base_url === url && pr.id !== 'custom');
         setPreset(match?.id ?? (url ? 'custom' : 'anthropic'));
         setLoaded(true);
       })
@@ -659,7 +667,7 @@ function ProviderSection({ onSaved }: { onSaved?: () => void }) {
 
   const onPreset = (id: string) => {
     setPreset(id);
-    const p = PROVIDER_PRESETS.find((pr) => pr.id === id);
+    const p = LEGACY_PRESETS().find((pr) => pr.id === id);
     if (p && p.id !== 'custom') {
       setBaseUrl(p.base_url);
       if (p.model) setModel(p.model);
@@ -690,7 +698,7 @@ function ProviderSection({ onSaved }: { onSaved?: () => void }) {
         <label>
           {t('providers.preset')}
           <select value={preset} onChange={(e) => onPreset(e.target.value)}>
-            {PROVIDER_PRESETS.map((p) => (
+            {LEGACY_PRESETS().map((p) => (
               <option key={p.id} value={p.id}>
                 {p.label}
               </option>
@@ -1067,17 +1075,21 @@ export default function SystemPage() {
           <ConceptsSection />
         </>
       ) : (
-        <ModelGate loading={loading} error={error}>
-          {model && tab === 'overview' && <OverviewSection model={model} go={go} />}
-          {model && tab === 'runs' && (
+        <>
+          {/* Run now + live activity must work with NO index — starting a
+              run is how a missing index gets rebuilt (codex P2). */}
+          {tab === 'runs' && (
             <>
               <RunNowSection />
               <RunActivitySection />
-              <RunsSection model={model} />
             </>
           )}
-          {model && tab === 'attention' && <AttentionSection model={model} />}
-        </ModelGate>
+          <ModelGate loading={loading} error={error}>
+            {model && tab === 'overview' && <OverviewSection model={model} go={go} />}
+            {model && tab === 'runs' && <RunsSection model={model} />}
+            {model && tab === 'attention' && <AttentionSection model={model} />}
+          </ModelGate>
+        </>
       )}
     </>
   );
