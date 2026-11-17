@@ -3,6 +3,7 @@ import {
   computeBarHeights,
   recentIsoDayRange,
   sparklineHasActivity,
+  localDayOf,
   sparklinesByThemeGroup,
 } from '../../lib/derive';
 import type { ClaimRow } from '../../lib/types';
@@ -66,5 +67,13 @@ describe('sparkline derive helpers', () => {
     const map = sparklinesByThemeGroup(claims, '2026-01-14', 2, null);
     expect(map.get('i1')).toEqual([2, 0]);
     expect(map.get('i2')).toEqual([1, 1]);
+  });
+
+  it('localDayOf reads built_at in the viewer timezone', () => {
+    expect(localDayOf('2026-01-14')).toBe('2026-01-14');
+    expect(localDayOf(undefined)).toBeUndefined();
+    const d = new Date('2026-11-17T00:07:18Z');
+    const want = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    expect(localDayOf('2026-11-17T00:07:18Z')).toBe(want);
   });
 });

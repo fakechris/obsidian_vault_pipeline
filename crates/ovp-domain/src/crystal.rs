@@ -665,7 +665,17 @@ pub struct CrystalRunEntry {
 pub fn parse_run_log(text: &str) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for line in text.lines() {
-        if let Ok(e) = serde_json::from_str::<CrystalRunEntry>(line) {
+        let Ok(e) = serde_json::from_str::<CrystalRunEntry>(line) else {
+            continue;
+        };
+        // A junk date must not claim the key ahead of a later valid one.
+        let b = e.date.as_bytes();
+        let iso = b.len() == 10
+            && b.iter().enumerate().all(|(i, c)| match i {
+                4 | 7 => *c == b'-',
+                _ => c.is_ascii_digit(),
+            });
+        if iso {
             for key in e.claim_keys {
                 out.entry(key).or_insert_with(|| e.date.clone());
             }
@@ -1188,6 +1198,7 @@ mod tests {
         // still follow the claims each line actually appended.
         let text = "{\"run_id\":\"run-a\",\"date\":\"2026-11-11\",\"claim_keys\":[\"k1\"]}\n\
                     not json\n\
+                    {\"run_id\":\"run-b\",\"date\":\"\",\"claim_keys\":[\"k2\"]}\n\
                     {\"run_id\":\"run-a\",\"date\":\"2026-11-15\",\"claim_keys\":[\"k2\",\"k1\"]}\n";
         let m = parse_run_log(text);
         assert_eq!(m.get("k1").map(String::as_str), Some("2026-11-11"));

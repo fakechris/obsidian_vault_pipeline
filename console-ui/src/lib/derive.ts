@@ -2043,6 +2043,20 @@ export function recentIsoDayRange(days: number, endDay?: string | null): string[
   return out;
 }
 
+/** The viewer's local calendar day of an RFC 3339 instant. Run dates are
+ * written as the operator's local day while `built_at` is UTC, so a UTC
+ * window end would drop that day's claims between local and UTC midnight.
+ * A bare `YYYY-MM-DD` is already a day and passes through untouched. */
+export function localDayOf(ts: string | null | undefined): string | undefined {
+  if (!ts) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return ts;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts.slice(0, 10);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
 /** Claims added per rolling 7-day bucket over the last `weeks` weeks, the
  * last bucket ending on `builtAt`'s day. */
 export function sparklinesByThemeGroup(
@@ -2051,7 +2065,7 @@ export function sparklinesByThemeGroup(
   weeks: number,
   sourceDays: Map<string, string> | null,
 ): Map<string, number[]> {
-  const range = recentIsoDayRange(weeks * 7, builtAt?.slice(0, 10) ?? builtAt);
+  const range = recentIsoDayRange(weeks * 7, localDayOf(builtAt));
   const out = new Map<string, number[]>();
   for (const c of activeClaims(claims)) {
     const key = themeGroupKey(c.theme_id ?? null, c.theme ?? '');
