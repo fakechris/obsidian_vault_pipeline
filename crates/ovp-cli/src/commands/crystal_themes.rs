@@ -386,6 +386,21 @@ fn reused_name(
     Some((c.label.clone(), c.label_zh.clone()))
 }
 
+/// The lowest id a fresh community may take: the previous file's persisted
+/// high-water mark, or past every id it lists — whichever is higher. A
+/// legacy file (no `next_id`) thus still protects its highest id when that
+/// community retires in the very run that first writes the mark.
+fn id_floor(prev: &ThemesFile) -> i64 {
+    let past_listed = prev
+        .communities
+        .iter()
+        .map(|c| c.id)
+        .chain(prev.packs.values().copied())
+        .max()
+        .map_or(0, |m| m.max(-1) + 1);
+    prev.next_id.unwrap_or(0).max(past_listed)
+}
+
 /// How one freshly clustered community relates to the previous themes.json.
 #[derive(Debug, Clone, PartialEq)]
 struct Carry {
@@ -617,7 +632,7 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
             }
         }
     }
-    let floor = prev.as_ref().and_then(|p| p.next_id).unwrap_or(0);
+    let floor = prev.as_ref().map_or(0, id_floor);
     let carry = carry_ids(&new_sets, &prev_sets, floor);
     let docs_ref = &docs;
     let carry_ref = &carry;
@@ -1153,6 +1168,29 @@ mod tests {
         let survivors = BTreeMap::from([(0, set(&["a", "b", "c"]))]);
         let next = carry_ids(&[set(&["a", "b", "c"]), set(&["z"])], &survivors, 6);
         assert_eq!((next[0].id, next[1].id), (0, 6));
+    }
+
+    #[test]
+    fn a_legacy_file_keeps_its_highest_id_retired() {
+        let mut legacy = themes_file(LabelsProvenance::Llm);
+        let c = |id| ThemeCommunity {
+            id,
+            label: String::new(),
+            label_zh: String::new(),
+            keywords: vec![],
+            size: 1,
+        };
+        legacy.communities = vec![c(0), c(1)];
+        assert_eq!(id_floor(&legacy), 2, "no next_id: past every listed id");
+        legacy.next_id = Some(7);
+        assert_eq!(id_floor(&legacy), 7, "the persisted mark wins when higher");
+        // t001 retires in this run and nothing new appears: the written mark
+        // must still be 2, so a later run cannot reuse id 1.
+        legacy.next_id = None;
+        let floor = id_floor(&legacy);
+        let carry = carry_ids(&[set(&["a"])], &BTreeMap::from([(0, set(&["a"])), (1, set(&["b"]))]), floor);
+        let written = carry.iter().map(|c| c.id + 1).max().unwrap_or(0).max(floor);
+        assert_eq!(written, 2);
     }
 
     #[test]
