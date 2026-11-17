@@ -2057,26 +2057,60 @@ export function localDayOf(ts: string | null | undefined): string | undefined {
   return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
-/** Claims added per rolling 7-day bucket over the last `weeks` weeks, the
- * last bucket ending on `builtAt`'s day. */
+/** The day a source ENTERED the system: its first intake-ledger day.
+ * Sources processed before the intake ledger existed (pre 2026-06-15) have
+ * none, and their processing day is the closest stand-in; the content day
+ * (published / bookmark) is the last resort. Unlike `sourceDay`, a later
+ * re-run never moves it. */
+export function sourceEntryDay(src: SourceRow): string | null {
+  return src.captured_on ?? src.processed_on ?? src.content_date ?? null;
+}
+
+/** case id → { source identity, entry day }. Two case ids for the same
+ * bytes share the sha, so a theme counts that source once. */
+export function sourceEntriesByCase(
+  model: IndexModel,
+): Map<string, { id: string; day: string }> {
+  const out = new Map<string, { id: string; day: string }>();
+  for (const [caseId, src] of sourcesByCase(model)) {
+    const day = sourceEntryDay(src);
+    if (day) out.set(caseId, { id: src.sha256, day });
+  }
+  return out;
+}
+
+/** Per theme: distinct cited sources that ENTERED the system in each
+ * rolling 7-day bucket of the last `weeks` weeks (last bucket ends on
+ * `builtAt`'s local day). Counts reading activity, not crystallize runs —
+ * those are weekly batches and back-fills that would show as fake spikes.
+ * A source appears once it is cited by an active claim of the theme, in
+ * the week it was captured. */
 export function sparklinesByThemeGroup(
   claims: ClaimRow[],
   builtAt: string | undefined,
   weeks: number,
-  sourceDays: Map<string, string> | null,
+  entries: Map<string, { id: string; day: string }>,
 ): Map<string, number[]> {
   const range = recentIsoDayRange(weeks * 7, localDayOf(builtAt));
+  const seen = new Map<string, Set<string>>();
   const out = new Map<string, number[]>();
   for (const c of activeClaims(claims)) {
     const key = themeGroupKey(c.theme_id ?? null, c.theme ?? '');
     let buckets = out.get(key);
-    if (!buckets) {
+    let ids = seen.get(key);
+    if (!buckets || !ids) {
       buckets = new Array(Math.max(0, weeks)).fill(0);
+      ids = new Set();
       out.set(key, buckets);
+      seen.set(key, ids);
     }
-    const day = claimDay(c, sourceDays);
-    const idx = day && isIsoDay(day) ? range.indexOf(day) : -1;
-    if (idx >= 0) buckets[Math.floor(idx / 7)] += 1;
+    for (const caseId of c.sources) {
+      const e = entries.get(caseId);
+      if (!e || ids.has(e.id)) continue;
+      ids.add(e.id);
+      const idx = range.indexOf(e.day);
+      if (idx >= 0) buckets[Math.floor(idx / 7)] += 1;
+    }
   }
   return out;
 }
