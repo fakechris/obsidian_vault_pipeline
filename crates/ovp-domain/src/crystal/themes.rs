@@ -12,7 +12,7 @@
 //!   exists (replacing the retired hardcoded keyword buckets).
 //!
 //! Labels are presentation-only: deterministic c-TF-IDF keywords are the
-//! stable auditable layer, the optional bilingual LLM name (`theme_label/v2`)
+//! stable auditable layer, the optional bilingual LLM name (`theme_label/v3`)
 //! sits on top.
 
 use std::collections::BTreeMap;
@@ -33,9 +33,13 @@ pub const UNCLASSIFIED_THEME: &str = "Unclassified";
 
 const THEME_LABEL_TEMPLATE: &str = include_str!("../../prompts/theme_label.md");
 /// Cassette namespace + version marker for the bilingual labeling stage.
-pub const THEME_LABEL_PROMPT_ID: &str = "theme_label/v2";
+pub const THEME_LABEL_PROMPT_ID: &str = "theme_label/v3";
 const LABEL_MODEL: &str = "claude-sonnet-4-6";
-const LABEL_MAX_TOKENS: u32 = 300;
+/// Output ceiling for one label. Reasoning models (gpt-6-luna) spend part of
+/// it on hidden reasoning before the ~30-token JSON answer: at 300 the v3
+/// request (with the names already in use) was cut off mid-string. A
+/// ceiling, not a cost — billed tokens stay what the model actually uses.
+const LABEL_MAX_TOKENS: u32 = 2000;
 
 /// Clustering parameters, recorded for reproducibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -58,7 +62,7 @@ pub enum LabelsProvenance {
     /// Deterministic c-TF-IDF keyword labels (the offline default).
     #[default]
     Keyword,
-    /// Bilingual model-named labels (`--client live`, `theme_label/v2`).
+    /// Bilingual model-named labels (`--client live`, `theme_label/v3`).
     Llm,
 }
 
@@ -301,7 +305,7 @@ pub fn clusters_date_ordered(catalog: &UnitsCatalog, cap: usize) -> Vec<Cluster>
         .collect()
 }
 
-// ---- Bilingual label model stage (`theme_label/v2`) ----
+// ---- Bilingual label model stage (`theme_label/v3`) ----
 
 /// Build the labeling `ModelRequest` for one community: its c-TF-IDF
 /// keywords, member titles sampled across the whole community (not just its
@@ -312,6 +316,7 @@ pub fn theme_label_request(
     keywords: &[String],
     sample_titles: &[String],
     sample_claims: &[String],
+    taken_names: &[String],
 ) -> ModelRequest {
     let marker = "## Community";
     let (system, _) = THEME_LABEL_TEMPLATE
@@ -329,6 +334,12 @@ pub fn theme_label_request(
         user.push_str("\nClaims shown under this theme:\n");
         for c in sample_claims {
             user.push_str(&format!("- {c}\n"));
+        }
+    }
+    if !taken_names.is_empty() {
+        user.push_str("\nNames already used by OTHER themes (yours must be clearly different):\n");
+        for n in taken_names {
+            user.push_str(&format!("- {n}\n"));
         }
     }
     ModelRequest {
@@ -558,14 +569,16 @@ mod tests {
             &["memory".into(), "agent".into()],
             &["Agent memory systems".into()],
             &["Agents persist state in files.".into()],
+            &["AI Agent Tools".into()],
         );
-        assert_eq!(req.cache_namespace.as_deref(), Some("theme_label/v2"));
-        assert!(req.system.as_deref().unwrap().contains("theme_label/v2"));
+        assert_eq!(req.cache_namespace.as_deref(), Some("theme_label/v3"));
+        assert!(req.system.as_deref().unwrap().contains("theme_label/v3"));
         let ModelMessage::User { content } = &req.messages[0] else {
             panic!()
         };
         assert!(content.contains("memory, agent"));
         assert!(content.contains("Agent memory systems"));
+        assert!(content.contains("OTHER themes") && content.contains("- AI Agent Tools"));
 
         let (label, zh) =
             parse_theme_label(r#"{"label":"Agent memory","label_zh":"智能体记忆"}"#).unwrap();

@@ -842,11 +842,11 @@ enum Cmd {
         #[arg(long)]
         vault_root: PathBuf,
         /// `replay` (default) labels communities from their keywords; `live`
-        /// adds one cached bilingual theme_label/v2 LLM call per community
+        /// adds one cached bilingual theme_label/v3 LLM call per community
         /// whose membership changed (stable communities keep their name).
         #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
         client: ClientKindArg,
-        /// Cassette root for theme_label/v2. Default:
+        /// Cassette root for theme_label/v3. Default:
         /// `<vault-root>/.ovp/cassettes/crystal`.
         #[arg(long)]
         cache_dir: Option<PathBuf>,

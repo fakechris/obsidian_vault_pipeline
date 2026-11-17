@@ -15,8 +15,8 @@ main repo (994-doc real-corpus sweep).
 | graph | non-mutual kNN, k=10, cosine ≥ 0.5, weight = cosine | `crystal-themes` flags (defaults) |
 | communities | Louvain, resolution 1.5, seed 42, singletons → Unclassified | same |
 | keywords | c-TF-IDF over the CJK-aware search tokenizer, top 10 | `ovp_embed::ctfidf` + `ovp_index::score::tokenize_for_search` |
-| labels | offline = top-3 keyword join; `--client live` = one cached `theme_label/v2` call per community (bilingual) fed 12 member titles spread from core to edge + up to 5 of the theme's claims | `ovp-domain/prompts/theme_label.md` |
-| identity across reruns | a new community inherits the id of the previous one it overlaps most (Jaccard ≥ 0.3, greedy one-to-one); fresh ids go past every old id; it keeps the old NAME without a model call when Jaccard ≥ 0.6 and the names came from the current prompt. `--dry-run` prints kept / renamed / new / retired without writing | `crystal_themes::carry_ids`, `reused_name` |
+| labels | offline = top-3 keyword join; `--client live` = one cached `theme_label/v3` call per community (bilingual), biggest first, fed 12 member titles spread from core to edge + up to 5 of the theme's claims + every name already in use (each new name must be distinct) | `ovp-domain/prompts/theme_label.md` |
+| identity across reruns | a new community inherits the id of the previous one it overlaps most (Jaccard ≥ 0.2, greedy one-to-one — measured: real splits keep their main successor at 0.28–0.30, spurious pairs stay ≤ 0.17); fresh ids go past every old id; it keeps the old NAME without a model call when Jaccard ≥ 0.6 and the names came from the current prompt. `--dry-run` prints kept / renamed / new / retired without writing | `crystal_themes::carry_ids`, `reused_name` |
 
 ## Validation table (production ONNX artifacts, spike's own sweep harness)
 

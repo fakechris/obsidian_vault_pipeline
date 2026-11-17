@@ -10,7 +10,7 @@
 //!     → Louvain communities (resolution 1.5, pinned seed)
 //!     → per-community c-TF-IDF keywords (the CJK-aware search tokenizer)
 //!     → labels: keyword-derived offline; `--client live` adds one cached
-//!       bilingual `theme_label/v2` call per community whose
+//!       bilingual `theme_label/v3` call per community whose
 //!       membership moved (ids + stable names carry over from the last run)
 //!     → `.ovp/crystal/themes.json` (rebuildable projection — never ledger
 //!       state; claims are NEVER re-synthesized to re-theme).
@@ -74,7 +74,13 @@ const LABEL_SAMPLE_CLAIMS: usize = 5;
 /// A new community inherits a previous community's id when their member
 /// sets overlap at least this much (Jaccard). Keeps theme URLs, theme pages
 /// and synthesis cluster keys (`t{id:03}`) stable across weekly reclusters.
-const INHERIT_ID_JACCARD: f64 = 0.3;
+///
+/// 0.2, not 0.3: on the real vault (11-17, 2102 → 2426 packs) the three
+/// largest "retired" communities had all SPLIT, each with one clear main
+/// successor at J = 0.28 / 0.29 / 0.30 — just under 0.3, so they lost their
+/// ids. The next-best candidates sat at ≤ 0.17, so 0.2 keeps the real
+/// successors without inventing matches.
+const INHERIT_ID_JACCARD: f64 = 0.2;
 /// …and keeps the previous NAME (no model call) when membership barely
 /// moved. Below this the community is renamed from its current members.
 const KEEP_LABEL_JACCARD: f64 = 0.6;
@@ -82,7 +88,7 @@ const KEEP_LABEL_JACCARD: f64 = 0.6;
 pub struct CrystalThemesArgs {
     pub vault_root: PathBuf,
     pub client_kind: ClientKind,
-    /// Cassette root for `theme_label/v2`. Default:
+    /// Cassette root for `theme_label/v3`. Default:
     /// `<vault-root>/.ovp/cassettes/crystal` (shared with crystal-synth).
     pub cache_dir: Option<PathBuf>,
     /// Recompute even when themes.json matches the current input set.
@@ -655,29 +661,49 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
         None => BTreeMap::new(),
     };
     let mut renamed = 0usize;
-    for (idx, ms) in members.iter().enumerate() {
-        let kw = keywords[idx].clone();
-        let fallback = keyword_label(&kw);
-        let kept = reused_name(prev.as_ref(), requested_labels, &carry[idx]);
-        let (label, label_zh) = match (kept, live_client.as_mut()) {
-            (Some(names), _) => names,
-            (None, Some(client)) => {
-                let titles = spread_titles(&docs, &vectors, ms);
+    // Names are chosen one community at a time, biggest first, and every
+    // name already in use (kept or just chosen) is shown to the model so a
+    // new one must be distinguishable — v2 named each community alone and
+    // produced thirteen near-identical "AI Agent …" names.
+    let kept: Vec<Option<(String, String)>> = carry
+        .iter()
+        .map(|c| reused_name(prev.as_ref(), requested_labels, c))
+        .collect();
+    let mut taken: Vec<String> = kept.iter().flatten().map(|(l, _)| l.clone()).collect();
+    let mut order: Vec<usize> = (0..members.len()).collect();
+    order.sort_by(|&a, &b| members[b].len().cmp(&members[a].len()).then(a.cmp(&b)));
+    let mut named: Vec<Option<(String, String)>> = kept.clone();
+    for &idx in &order {
+        if named[idx].is_some() {
+            continue;
+        }
+        let kw = &keywords[idx];
+        let names = match live_client.as_mut() {
+            Some(client) => {
+                let titles = spread_titles(&docs, &vectors, &members[idx]);
                 let no_claims = Vec::new();
                 let sample = claims.get(&carry[idx].id).unwrap_or(&no_claims);
-                let req = theme_label_request(&kw, &titles, sample);
+                let req = theme_label_request(kw, &titles, sample, &taken);
                 let (parsed, _log, _raw) =
                     call_and_parse(client.as_mut(), &req, "theme-label", parse_theme_label)?;
                 renamed += 1;
                 parsed
             }
-            (None, None) => (fallback.clone(), fallback.clone()),
+            None => {
+                let fallback = keyword_label(kw);
+                (fallback.clone(), fallback)
+            }
         };
+        taken.push(names.0.clone());
+        named[idx] = Some(names);
+    }
+    for (idx, ms) in members.iter().enumerate() {
+        let (label, label_zh) = named[idx].take().expect("every community named");
         communities.push(ThemeCommunity {
             id: carry[idx].id,
             label,
             label_zh,
-            keywords: kw,
+            keywords: keywords[idx].clone(),
             size: ms.len(),
         });
     }

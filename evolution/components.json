@@ -113,7 +113,7 @@
     {
       "id": "prompt.theme_label",
       "surface": "prompt",
-      "current_version": "v2",
+      "current_version": "v3",
       "file": "crates/ovp-domain/prompts/theme_label.md",
       "quality_buckets": [
         "card_quality"
@@ -268,7 +268,7 @@
     {
       "id": "runtime.theme_identity",
       "surface": "runtime",
-      "current_version": "v1",
+      "current_version": "v2",
       "file": "crates/ovp-cli/src/commands/crystal_themes.rs",
       "quality_buckets": ["operational_reliability", "cost_efficiency"]
     },

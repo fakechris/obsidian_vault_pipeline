@@ -1,0 +1,23 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "theme_identity-v2",
+  "base_version": "v1",
+  "target_version": "v2",
+  "surface": "runtime",
+  "component": "runtime.theme_identity",
+  "hypothesis": "v1 carried a theme id across reclusters at member Jaccard >= 0.3. Measured on the real vault (2102 -> 2426 packs, 11-17): the three largest communities that v1 'retired' (t000 n=171, t001 n=170, t011 n=79) had each SPLIT, with one clear main successor at J = 0.28 / 0.30 / 0.29 — just under the bar — while the next-best candidate for every community sat at J <= 0.17. Lowering the bar to 0.2 keeps those successors' ids (and their theme URLs / pages / synthesis keys) without creating spurious matches. Predicted: on the same recluster, t000/t001/t011 carry over instead of retiring; no community matches a predecessor below J = 0.2.",
+  "predicted_delta": {
+    "operational_reliability": "fewer retired theme ids per weekly recluster; the largest themes keep their links through a split"
+  },
+  "guardrails": {
+    "one_to_one": "unchanged greedy one-to-one matching; a split still gives the id to ONE successor only",
+    "no_reuse": "retired ids still never reused (next_id high-water mark)"
+  },
+  "eval_plan": {
+    "replay_set": "membership comparison of the 09-27 themes.json vs a fresh recluster of a vault clone (overlap table in the PR); unit tests for carry_ids",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Set INHERIT_ID_JACCARD back to 0.3.",
+  "ablation_required": false
+}
