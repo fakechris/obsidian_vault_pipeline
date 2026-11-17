@@ -253,6 +253,35 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Append `{run_id, date, claim_keys}` (operator-local day) to the store's
+/// run log. Display metadata only: the ledger write has already succeeded,
+/// so a failure here warns instead of failing (and stranding) the run.
+fn record_run_date(
+    store: &std::path::Path,
+    run_id: &str,
+    claim_keys: Vec<String>,
+    holds_vault_lock: bool,
+) {
+    let entry = ovp_domain::crystal::CrystalRunEntry {
+        run_id: run_id.to_string(),
+        date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+        claim_keys,
+    };
+    let path = store.join(ovp_domain::crystal::RUN_LOG_FILE);
+    let result = serde_json::to_string(&entry)
+        .map_err(|e| e.to_string())
+        .and_then(|line| {
+            ovp_domain::jsonl::append_batch(&path, &format!("{line}\n"), holds_vault_lock)
+                .map_err(|e| e.to_string())
+        });
+    if let Err(e) = result {
+        eprintln!(
+            "  warning: claims written but run date not logged ({}): {e}",
+            path.display()
+        );
+    }
+}
+
 /// Shared durable-write core: run the FULL pre-write gate over already-loaded
 /// inputs and, only if durable-eligible, append `Durable` claims to the store
 /// (idempotent by `claim_key`), record caveated/reject in `review.json`, and
@@ -466,6 +495,12 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
     // lock — a diagnostic store has none, and another writer may share it.
     ovp_domain::jsonl::append_batch(&ledger_path, &appended_lines, holds_vault_lock)
         .map_err(|e| CliError::Io(format!("appending ledger {}: {e}", ledger_path.display())))?;
+    // The run's day lives only here (run_id is a content hash). Logged only
+    // when the run actually appended, after the ledger write succeeded.
+    if appended > 0 {
+        let keys = appended_records.iter().map(|r| r.claim_key.clone()).collect();
+        record_run_date(&store, &run_id, keys, holds_vault_lock);
+    }
 
     // --- Render current state + review. ---
     let state = fold_ledger(&events);

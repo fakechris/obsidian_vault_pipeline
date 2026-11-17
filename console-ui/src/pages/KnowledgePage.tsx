@@ -29,7 +29,7 @@ import {
   sortThemeWall,
   sourceDaysByCase,
   themesFromPortalSummary,
-  SPARKLINE_DAYS,
+  SPARKLINE_WEEKS,
   sparklinesByThemeGroup,
   themeGroupStorageKey,
   themeRoute,
@@ -244,7 +244,7 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
       sparklinesByThemeGroup(
         model.claims,
         model.built_at ?? undefined,
-        SPARKLINE_DAYS,
+        SPARKLINE_WEEKS,
         sourceDays,
       ),
     [model, sourceDays],

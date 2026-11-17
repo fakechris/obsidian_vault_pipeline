@@ -1046,6 +1046,11 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
     let mut claims = Vec::new();
 
     let events: Vec<StoreEvent> = read_jsonl_strict(&store.join("ledger.jsonl"))?;
+    // run_ids are content hashes; the run log (keyed by claim_key) is where
+    // a write's day lives. Absent or unreadable → a date in the run_id.
+    let run_days = std::fs::read_to_string(store.join(ovp_domain::crystal::RUN_LOG_FILE))
+        .map(|t| ovp_domain::crystal::parse_run_log(&t))
+        .unwrap_or_default();
     for rec in fold_ledger(&events) {
         let status = match rec.status {
             CrystalStatus::Active => ClaimStatus::Durable,
@@ -1063,7 +1068,11 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             sources: rec.source_cases.clone(),
             strength: enum_str(&rec.strength),
             run_id: Some(rec.run_id.clone()),
-            run_date: run_date_from_run_id(&rec.run_id),
+            run_date: run_days
+                .get(&rec.claim_key)
+                .filter(|d| is_iso_day(d))
+                .cloned()
+                .or_else(|| run_date_from_run_id(&rec.run_id)),
             lane: None,
             patched_by: None,
             origin_source: None,

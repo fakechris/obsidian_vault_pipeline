@@ -3,6 +3,7 @@ import {
   computeBarHeights,
   recentIsoDayRange,
   sparklineHasActivity,
+  localDayOf,
   sparklinesByThemeGroup,
 } from '../../lib/derive';
 import type { ClaimRow } from '../../lib/types';
@@ -27,7 +28,7 @@ describe('sparkline derive helpers', () => {
     ]);
   });
 
-  it('sparklinesByThemeGroup buckets by theme id', () => {
+  it('sparklinesByThemeGroup buckets by theme id into rolling weeks', () => {
     const claims: ClaimRow[] = [
       {
         claim_id: 'a',
@@ -57,8 +58,22 @@ describe('sparkline derive helpers', () => {
         run_date: '2026-01-03',
       },
     ];
-    const map = sparklinesByThemeGroup(claims, '2026-01-03', 3, null);
-    expect(map.get('i1')).toEqual([0, 2, 0]);
-    expect(map.get('i2')).toEqual([0, 0, 1]);
+    // Two weeks ending 2026-01-14: 01-02 falls in week 0, 01-03 too; a
+    // claim dated 01-14 lands in the last bucket, one before the window not at all.
+    claims.push(
+      { ...claims[2], claim_id: 'd', run_date: '2026-01-14' },
+      { ...claims[2], claim_id: 'e', run_date: '2025-12-31' },
+    );
+    const map = sparklinesByThemeGroup(claims, '2026-01-14', 2, null);
+    expect(map.get('i1')).toEqual([2, 0]);
+    expect(map.get('i2')).toEqual([1, 1]);
+  });
+
+  it('localDayOf reads built_at in the viewer timezone', () => {
+    expect(localDayOf('2026-01-14')).toBe('2026-01-14');
+    expect(localDayOf(undefined)).toBeUndefined();
+    const d = new Date('2026-11-17T00:07:18Z');
+    const want = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    expect(localDayOf('2026-11-17T00:07:18Z')).toBe(want);
   });
 });

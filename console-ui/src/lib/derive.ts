@@ -2014,7 +2014,9 @@ export interface ScheduleJobLike {
 
 // -------------------------------------------- portal visualizations (INV-1886)
 
-export const SPARKLINE_DAYS = 30;
+/** Theme-card sparkline: one bar per rolling week. Crystallize runs weekly,
+ * so per-day bars over 30 days showed a single spike and read as noise. */
+export const SPARKLINE_WEEKS = 12;
 
 export function computeBarHeights(data: number[], maxHeight: number): number[] {
   if (data.length === 0 || maxHeight <= 0) return [];
@@ -2041,29 +2043,40 @@ export function recentIsoDayRange(days: number, endDay?: string | null): string[
   return out;
 }
 
-function bumpBucket(buckets: number[], range: string[], day: string): void {
-  if (!isIsoDay(day)) return;
-  const idx = range.indexOf(day);
-  if (idx >= 0) buckets[idx] += 1;
+/** The viewer's local calendar day of an RFC 3339 instant. Run dates are
+ * written as the operator's local day while `built_at` is UTC, so a UTC
+ * window end would drop that day's claims between local and UTC midnight.
+ * A bare `YYYY-MM-DD` is already a day and passes through untouched. */
+export function localDayOf(ts: string | null | undefined): string | undefined {
+  if (!ts) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return ts;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts.slice(0, 10);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
+/** Claims added per rolling 7-day bucket over the last `weeks` weeks, the
+ * last bucket ending on `builtAt`'s day. */
 export function sparklinesByThemeGroup(
   claims: ClaimRow[],
   builtAt: string | undefined,
-  days: number,
+  weeks: number,
   sourceDays: Map<string, string> | null,
 ): Map<string, number[]> {
-  const range = recentIsoDayRange(days, builtAt?.slice(0, 10) ?? builtAt);
+  const range = recentIsoDayRange(weeks * 7, localDayOf(builtAt));
   const out = new Map<string, number[]>();
   for (const c of activeClaims(claims)) {
     const key = themeGroupKey(c.theme_id ?? null, c.theme ?? '');
     let buckets = out.get(key);
     if (!buckets) {
-      buckets = new Array(range.length).fill(0);
+      buckets = new Array(Math.max(0, weeks)).fill(0);
       out.set(key, buckets);
     }
     const day = claimDay(c, sourceDays);
-    if (day) bumpBucket(buckets, range, day);
+    const idx = day && isIsoDay(day) ? range.indexOf(day) : -1;
+    if (idx >= 0) buckets[Math.floor(idx / 7)] += 1;
   }
   return out;
 }
