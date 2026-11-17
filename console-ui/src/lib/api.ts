@@ -333,20 +333,29 @@ export async function saveProviders(set: Record<string, string>): Promise<void> 
 /** Re-admit blocked sources (Attention → "retry this group"): the next daily
  * run plans them again with a fresh failure count. Non-blocked hashes are
  * skipped server-side and reported. */
+/** The endpoint's per-request bound; bigger groups go in batches. */
+const RETRY_BATCH = 500;
+
 export async function retryAttention(
   shas: string[],
   reason: string,
 ): Promise<{ granted: number; skipped: string[] }> {
-  const resp = await fetch('/api/attention/retry', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ shas, reason }),
-  });
-  const body = (await resp.json().catch(() => null)) as
-    | { granted?: number; skipped?: string[]; error?: string }
-    | null;
-  if (!resp.ok) throw new Error(body?.error ?? `retry failed (${resp.status})`);
-  return { granted: body?.granted ?? 0, skipped: body?.skipped ?? [] };
+  let granted = 0;
+  const skipped: string[] = [];
+  for (let i = 0; i < shas.length; i += RETRY_BATCH) {
+    const resp = await fetch('/api/attention/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shas: shas.slice(i, i + RETRY_BATCH), reason }),
+    });
+    const body = (await resp.json().catch(() => null)) as
+      | { granted?: number; skipped?: string[]; error?: string }
+      | null;
+    if (!resp.ok) throw new Error(body?.error ?? `retry failed (${resp.status})`);
+    granted += body?.granted ?? 0;
+    skipped.push(...(body?.skipped ?? []));
+  }
+  return { granted, skipped };
 }
 
 export function fetchSettings(): Promise<SettingsPayload> {
