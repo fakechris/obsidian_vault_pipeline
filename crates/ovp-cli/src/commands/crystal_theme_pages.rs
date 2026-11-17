@@ -491,6 +491,7 @@ mod tests {
             ],
             labels_provenance: Default::default(),
             label_prompt: None,
+            next_id: None,
         }
     }
 

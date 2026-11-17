@@ -124,6 +124,12 @@ pub struct ThemesFile {
     /// every theme once instead of being masked by label carry-over.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_prompt: Option<String>,
+    /// Allocation high-water mark: the next community id never used before.
+    /// Retired ids vanish from `communities`, so without this a later run
+    /// would hand a retired id (and its theme URL) to unrelated content.
+    /// Additive: absent in older files → derived from the surviving ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_id: Option<i64>,
 }
 
 impl ThemesFile {
@@ -397,6 +403,7 @@ mod tests {
             ],
             labels_provenance: LabelsProvenance::Keyword,
             label_prompt: None,
+            next_id: None,
         }
     }
 

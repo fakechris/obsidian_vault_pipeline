@@ -125,6 +125,7 @@ fn main() {
         // The old bucket descriptions were hand-written, not model-named.
         labels_provenance: LabelsProvenance::Keyword,
         label_prompt: None,
+        next_id: None,
     };
     std::fs::write(
         fixture.join("themes.json"),

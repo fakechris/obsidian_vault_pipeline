@@ -398,9 +398,14 @@ struct Carry {
 /// Map each new community (by member case ids) to a previous one: greedy
 /// one-to-one by descending Jaccard, ties broken by new index then old id
 /// (deterministic). Pairs below `INHERIT_ID_JACCARD` do not inherit; those
-/// communities get fresh ids above every previous id, so a retired id is
+/// communities get fresh ids from `floor` (the previous file's high-water
+/// mark) or past every previous id, whichever is higher, so a retired id is
 /// never reused for different content.
-fn carry_ids(new: &[std::collections::BTreeSet<&str>], prev: &BTreeMap<i64, std::collections::BTreeSet<&str>>) -> Vec<Carry> {
+fn carry_ids(
+    new: &[std::collections::BTreeSet<&str>],
+    prev: &BTreeMap<i64, std::collections::BTreeSet<&str>>,
+    floor: i64,
+) -> Vec<Carry> {
     let mut pairs: Vec<(f64, usize, i64)> = Vec::new();
     for (n, ns) in new.iter().enumerate() {
         for (&o, os) in prev {
@@ -427,7 +432,7 @@ fn carry_ids(new: &[std::collections::BTreeSet<&str>], prev: &BTreeMap<i64, std:
         taken.insert(o);
         out[n] = Some(Carry { id: o, prev: Some((o, j)) });
     }
-    let mut next = prev.keys().copied().max().map_or(0, |m| m.max(-1) + 1);
+    let mut next = prev.keys().copied().max().map_or(0, |m| m.max(-1) + 1).max(floor);
     out.into_iter()
         .map(|c| {
             c.unwrap_or_else(|| {
@@ -439,19 +444,20 @@ fn carry_ids(new: &[std::collections::BTreeSet<&str>], prev: &BTreeMap<i64, std:
         .collect()
 }
 
-/// Up to `LABEL_SAMPLE_CLAIMS` active claims per new community: each claim
-/// goes to the community holding most of its cited packs (ties → lower
-/// community index), most-cited first, then by claim_key. A missing or
-/// unreadable ledger means no claims — labeling still works from titles.
-fn claims_by_community(store: &Path, community_of: &BTreeMap<&str, usize>, n: usize) -> Vec<Vec<String>> {
-    let mut out: Vec<Vec<(usize, String, String)>> = vec![Vec::new(); n];
+/// Up to `LABEL_SAMPLE_CLAIMS` active claims per published community id:
+/// each claim goes where the portal shows it — the community holding most
+/// of its cited packs, ties to the LOWER id (`ThemesFile::majority_community`)
+/// — most-cited first, then by claim_key. A missing or unreadable ledger
+/// means no claims; labeling still works from titles.
+fn claims_by_community(store: &Path, community_of: &BTreeMap<&str, i64>) -> BTreeMap<i64, Vec<String>> {
+    let mut out: BTreeMap<i64, Vec<(usize, String, String)>> = BTreeMap::new();
     let events = crate::commands::crystal_write::read_ledger(&store.join("ledger.jsonl"))
         .unwrap_or_default();
     for rec in ovp_domain::crystal::fold_ledger(&events) {
         if rec.status != ovp_domain::crystal::CrystalStatus::Active {
             continue;
         }
-        let mut votes: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut votes: BTreeMap<i64, usize> = BTreeMap::new();
         for case in &rec.source_cases {
             if let Some(&c) = community_of.get(case.as_str()) {
                 *votes.entry(c).or_insert(0) += 1;
@@ -460,12 +466,14 @@ fn claims_by_community(store: &Path, community_of: &BTreeMap<&str, usize>, n: us
         let Some((&c, _)) = votes.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0))) else {
             continue;
         };
-        out[c].push((rec.source_cases.len(), rec.claim_key.clone(), rec.claim.clone()));
+        out.entry(c)
+            .or_default()
+            .push((rec.source_cases.len(), rec.claim_key.clone(), rec.claim.clone()));
     }
     out.into_iter()
-        .map(|mut v| {
+        .map(|(id, mut v)| {
             v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-            v.into_iter().take(LABEL_SAMPLE_CLAIMS).map(|(_, _, c)| c).collect()
+            (id, v.into_iter().take(LABEL_SAMPLE_CLAIMS).map(|(_, _, c)| c).collect())
         })
         .collect()
 }
@@ -609,12 +617,16 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
             }
         }
     }
-    let carry = carry_ids(&new_sets, &prev_sets);
+    let floor = prev.as_ref().and_then(|p| p.next_id).unwrap_or(0);
+    let carry = carry_ids(&new_sets, &prev_sets, floor);
     let docs_ref = &docs;
-    let community_of: BTreeMap<&str, usize> = members
+    let carry_ref = &carry;
+    let community_of: BTreeMap<&str, i64> = members
         .iter()
         .enumerate()
-        .flat_map(|(c, ms)| ms.iter().map(move |&m| (docs_ref[m].case_id.as_str(), c)))
+        .flat_map(|(c, ms)| {
+            ms.iter().map(move |&m| (docs_ref[m].case_id.as_str(), carry_ref[c].id))
+        })
         .collect();
 
     // ---- Labels ----
@@ -624,8 +636,8 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
         ClientKind::Replay => None,
     };
     let claims = match live_client {
-        Some(_) => claims_by_community(&store, &community_of, n_communities),
-        None => vec![Vec::new(); n_communities],
+        Some(_) => claims_by_community(&store, &community_of),
+        None => BTreeMap::new(),
     };
     let mut renamed = 0usize;
     for (idx, ms) in members.iter().enumerate() {
@@ -636,7 +648,9 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
             (Some(names), _) => names,
             (None, Some(client)) => {
                 let titles = spread_titles(&docs, &vectors, ms);
-                let req = theme_label_request(&kw, &titles, &claims[idx]);
+                let no_claims = Vec::new();
+                let sample = claims.get(&carry[idx].id).unwrap_or(&no_claims);
+                let req = theme_label_request(&kw, &titles, sample);
                 let (parsed, _log, _raw) =
                     call_and_parse(client.as_mut(), &req, "theme-label", parse_theme_label)?;
                 renamed += 1;
@@ -672,6 +686,7 @@ pub fn run(args: CrystalThemesArgs) -> Result<(), CliError> {
         labels_provenance: requested_labels,
         label_prompt: (requested_labels == LabelsProvenance::Llm)
             .then(|| THEME_LABEL_PROMPT_ID.to_string()),
+        next_id: Some(carry.iter().map(|c| c.id + 1).max().unwrap_or(0).max(floor)),
     };
     if args.client_kind == ClientKind::Live {
         println!("  {renamed} theme(s) named by the model, the rest kept their name");
@@ -899,6 +914,7 @@ mod tests {
             communities: Vec::new(),
             labels_provenance: labels,
             label_prompt: None,
+            next_id: None,
         }
     }
 
@@ -1122,7 +1138,7 @@ mod tests {
             set(&["c", "q", "r", "s"]), // the other half of t000: too little overlap
             set(&["z"]),
         ];
-        let carry = carry_ids(&new, &prev);
+        let carry = carry_ids(&new, &prev, 0);
         assert_eq!(carry[0].id, 1);
         assert_eq!(carry[1].id, 0);
         assert!((carry[1].prev.unwrap().1 - 2.0 / 3.0).abs() < 1e-9);
@@ -1130,8 +1146,13 @@ mod tests {
         assert_eq!((carry[2].id, carry[2].prev), (6, None));
         assert_eq!((carry[3].id, carry[3].prev), (7, None));
         // First run: no previous file → 0..n in clustering order.
-        let first = carry_ids(&new, &BTreeMap::new());
+        let first = carry_ids(&new, &BTreeMap::new(), 0);
         assert_eq!(first.iter().map(|c| c.id).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        // The highest id (t005) retired in an earlier run and is gone from
+        // the file; the persisted high-water mark still keeps it unused.
+        let survivors = BTreeMap::from([(0, set(&["a", "b", "c"]))]);
+        let next = carry_ids(&[set(&["a", "b", "c"]), set(&["z"])], &survivors, 6);
+        assert_eq!((next[0].id, next[1].id), (0, 6));
     }
 
     #[test]
@@ -1200,6 +1221,7 @@ mod tests {
         let path = vault.join(".ovp/crystal/themes.json");
         let first = ThemesFile::load(&path).unwrap().unwrap();
         let quant_id = first.packs["2026-06-03_quant-a"];
+        assert_eq!(first.next_id, Some(2), "high-water mark persisted");
 
         // A third market doc arrives; dry-run writes nothing.
         let (id, title, body) = ("2026-06-05_quant-c", "Market making", "market quant polymarket spread");
