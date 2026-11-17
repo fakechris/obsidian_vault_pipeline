@@ -4,9 +4,10 @@ import {
   recentIsoDayRange,
   sparklineHasActivity,
   localDayOf,
+  sourceEntryDay,
   sparklinesByThemeGroup,
 } from '../../lib/derive';
-import type { ClaimRow } from '../../lib/types';
+import type { ClaimRow, SourceRow } from '../../lib/types';
 
 describe('sparkline derive helpers', () => {
   it('computeBarHeights scales to maxHeight', () => {
@@ -28,45 +29,65 @@ describe('sparkline derive helpers', () => {
     ]);
   });
 
-  it('sparklinesByThemeGroup buckets by theme id into rolling weeks', () => {
-    const claims: ClaimRow[] = [
-      {
-        claim_id: 'a',
-        claim: 'one',
-        status: 'durable',
-        sources: [],
-        theme: 'T1',
-        theme_id: 1,
-        run_date: '2026-01-02',
-      },
-      {
-        claim_id: 'b',
-        claim: 'two',
-        status: 'durable',
-        sources: [],
-        theme: 'T1',
-        theme_id: 1,
-        run_date: '2026-01-02',
-      },
-      {
-        claim_id: 'c',
-        claim: 'three',
-        status: 'durable',
-        sources: [],
-        theme: 'T2',
-        theme_id: 2,
-        run_date: '2026-01-03',
-      },
+  it('sparklinesByThemeGroup counts distinct sources by the week they entered', () => {
+    const claim = (id: string, theme: number, sources: string[]): ClaimRow => ({
+      claim_id: id,
+      claim: id,
+      status: 'durable',
+      sources,
+      theme: `T${theme}`,
+      theme_id: theme,
+      // A crystallize date must NOT drive the chart.
+      run_date: '2026-01-14',
+    });
+    const claims = [
+      claim('a', 1, ['case-x', 'case-y']),
+      claim('b', 1, ['case-x', 'case-x2']), // case-x2 = same bytes as case-x
+      claim('c', 2, ['case-y', 'case-old']),
     ];
-    // Two weeks ending 2026-01-14: 01-02 falls in week 0, 01-03 too; a
-    // claim dated 01-14 lands in the last bucket, one before the window not at all.
-    claims.push(
-      { ...claims[2], claim_id: 'd', run_date: '2026-01-14' },
-      { ...claims[2], claim_id: 'e', run_date: '2025-12-31' },
-    );
-    const map = sparklinesByThemeGroup(claims, '2026-01-14', 2, null);
-    expect(map.get('i1')).toEqual([2, 0]);
-    expect(map.get('i2')).toEqual([1, 1]);
+    const entries = new Map([
+      ['case-x', { id: 'sha-x', day: '2026-01-02' }],
+      ['case-x2', { id: 'sha-x', day: '2026-01-02' }],
+      ['case-y', { id: 'sha-y', day: '2026-01-10' }],
+      ['case-old', { id: 'sha-old', day: '2025-12-01' }],
+    ]);
+    const map = sparklinesByThemeGroup(claims, '2026-01-14', 2, entries);
+    expect(map.get('i1')).toEqual([1, 1]);
+    expect(map.get('i2')).toEqual([0, 1]);
+  });
+
+  it('sourceEntryDay prefers the intake day and never the re-run day', () => {
+    const src = (o: Partial<SourceRow>): SourceRow =>
+      ({ sha256: 's', status: 'processed', ...o }) as SourceRow;
+    expect(
+      sourceEntryDay(
+        src({
+          captured_on: '2026-09-01',
+          processed_on: '2026-11-15',
+          content_date: '2026-08-01',
+        }),
+      ),
+    ).toBe('2026-09-01');
+    // Pre-intake-ledger source re-run on 11-15: stays in its filename week.
+    expect(
+      sourceEntryDay(
+        src({
+          rel_path: '50-Inbox/03-Processed/2026-05/2026-05-04_Some note.md',
+          processed_on: '2026-11-15',
+          content_date: '2026-04-30',
+        }),
+      ),
+    ).toBe('2026-05-04');
+    expect(
+      sourceEntryDay(
+        src({
+          rel_path: 'x/Untitled.md',
+          processed_on: '2026-11-15',
+          content_date: '2026-03-30',
+        }),
+      ),
+    ).toBe('2026-03-30');
+    expect(sourceEntryDay(src({ processed_on: '2026-11-15' }))).toBeNull();
   });
 
   it('localDayOf reads built_at in the viewer timezone', () => {

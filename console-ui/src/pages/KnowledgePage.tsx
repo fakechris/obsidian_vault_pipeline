@@ -30,6 +30,7 @@ import {
   sourceDaysByCase,
   themesFromPortalSummary,
   SPARKLINE_WEEKS,
+  sourceEntriesByCase,
   sparklinesByThemeGroup,
   themeGroupStorageKey,
   themeRoute,
@@ -239,15 +240,16 @@ function KnowledgeBody({ model }: { model: IndexModel }) {
     );
   };
   const sourceDays = useMemo(() => sourceDaysByCase(model), [model]);
+  const sourceEntries = useMemo(() => sourceEntriesByCase(model), [model]);
   const themeActivity = useMemo(
     () =>
       sparklinesByThemeGroup(
         model.claims,
         model.built_at ?? undefined,
         SPARKLINE_WEEKS,
-        sourceDays,
+        sourceEntries,
       ),
-    [model, sourceDays],
+    [model, sourceEntries],
   );
   const wall = sortThemeWall(
     themeWall(model.claims, themes, caseCanonicalIds(model), sourceDays),

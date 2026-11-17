@@ -445,7 +445,7 @@ export const zh: Record<keyof typeof en, string> = {
   'knowledge.empty': '结晶库还没有主张——对源运行结晶流程以构建知识层。',
   'knowledge.untitledTheme': '（无主题）',
   'knowledge.claimCount': '{n} 条主张',
-  'knowledge.sparklineTitle': '近 12 周每周新增主张',
+  'knowledge.sparklineTitle': '近 12 周每周新读入的来源（被本主题引用）',
   'knowledge.ratioLine': '持久 {durable} · 存疑 {caveated}',
   'knowledge.sourceCount': '{n} 个来源',
   'knowledge.sourceCountTip':
