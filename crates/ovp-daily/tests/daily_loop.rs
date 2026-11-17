@@ -204,6 +204,34 @@ fn failed_source_is_recorded_stays_retryable_then_blocks() {
     // Operator override retries it.
     let work = plan_daily(&inbox, root, &ledger, true).unwrap();
     assert_eq!(work.todo.len(), 1);
+
+    // A per-source retry grant (portal Attention → "retry this group")
+    // re-admits exactly this source with a fresh count, without the global
+    // override; failing 3 more times blocks it again.
+    let sha = work.todo[0].sha256.clone();
+    ovp_daily::append_retry_grants(
+        root,
+        &[ovp_daily::RetryGrant {
+            schema: ovp_daily::RETRY_GRANT_SCHEMA.into(),
+            source_sha256: sha,
+            failures_before: 3,
+            granted_at: "2026-11-17T00:00:00Z".into(),
+            reason: Some("quota restored".into()),
+        }],
+    )
+    .unwrap();
+    let work = plan_daily(&inbox, root, &ledger, false).unwrap();
+    assert_eq!(work.todo.len(), 1, "granted source is planned again");
+    assert_eq!(work.todo[0].prior_failures, 0, "count restarts after the grant");
+    for _ in 0..3 {
+        let ledger = read_daily_ledger(&ledger_path).unwrap();
+        let work = plan_daily(&inbox, root, &ledger, false).unwrap();
+        let mut factory = factory_for(vec!["not json".into(), "{}".into(), "{}".into()]);
+        run_daily(&cfg(root), &work, &mut factory).unwrap();
+    }
+    let ledger = read_daily_ledger(&ledger_path).unwrap();
+    let work = plan_daily(&inbox, root, &ledger, false).unwrap();
+    assert_eq!(work.blocked.len(), 1, "three new failures block it again");
 }
 
 #[test]

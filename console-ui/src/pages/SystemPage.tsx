@@ -23,6 +23,7 @@ import {
   fetchPublishStatus,
   fetchRunNowStatus,
   fetchSettings,
+  retryAttention,
   saveLlmProfile,
   saveProviders,
   startPublish,
@@ -34,6 +35,7 @@ import {
 } from '../lib/api';
 import {
   SYSTEM_TABS,
+  attentionGroupRetryable,
   attentionGroups,
   attentionSources,
   llmExtraOf,
@@ -135,26 +137,79 @@ function RunsSection({ model }: { model: IndexModel }) {
 function AttentionSection({ model }: { model: IndexModel }) {
   const { t } = useI18n();
   const groups = useMemo(() => attentionGroups(attentionSources(model)), [model]);
+  // Per-group retry outcome: granted count, or an error message.
+  const [retried, setRetried] = useState<Record<string, { granted?: number; error?: string }>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [runNote, setRunNote] = useState<string | null>(null);
+
+  const onRetry = (key: string, shas: string[]) => {
+    setBusy(key);
+    retryAttention(shas, `portal: retry group ${key}`)
+      .then((r) => {
+        setRetried((m) => ({ ...m, [key]: { granted: r.granted } }));
+        // The server rebuilt the index; reload so the group shrinks.
+        window.dispatchEvent(new Event('ovp:model-refresh'));
+      })
+      .catch((e: Error) => setRetried((m) => ({ ...m, [key]: { error: e.message } })))
+      .finally(() => setBusy(null));
+  };
+  const onRunNow = () => {
+    setRunNote(null);
+    startRunNow('daily')
+      .then(() => setRunNote(t('system.attentionRunStarted')))
+      .catch((e: Error) => setRunNote(e.message));
+  };
+
   return (
     <div className="section">
       <h2>{t('system.attentionTitle')}</h2>
+      {Object.values(retried).some((r) => (r.granted ?? 0) > 0) && (
+        <p className="sm">
+          {t('system.attentionRequeued')}{' '}
+          <button type="button" className="linkish" onClick={onRunNow}>
+            {t('system.attentionRunNow')}
+          </button>
+          {runNote && <span className="muted"> — {runNote}</span>}
+        </p>
+      )}
       {groups.length === 0 ? (
         <EmptyState>
           <p>{t('system.attentionEmpty')}</p>
         </EmptyState>
       ) : (
-        groups.map((g) => (
-          <details className="attention-group" key={g.key}>
-            <summary>
-              <strong>{t(`system.attentionGroup.${g.key}`)}</strong>
-              <span className="muted"> · {g.sources.length}</span>
-              <span className="sm muted"> — {t(`system.attentionGroupHint.${g.key}`)}</span>
-            </summary>
-            {g.sources.map((s) => (
-              <AttentionCard source={s} key={`${s.sha256}-${s.status}`} />
-            ))}
-          </details>
-        ))
+        groups.map((g) => {
+          const blocked = g.sources.filter((s) => s.status === 'blocked');
+          const outcome = retried[g.key];
+          return (
+            <details className="attention-group" key={g.key}>
+              <summary>
+                <strong>{t(`system.attentionGroup.${g.key}`)}</strong>
+                <span className="muted"> · {g.sources.length}</span>
+                <span className="sm muted"> — {t(`system.attentionGroupHint.${g.key}`)}</span>
+                {/* On the summary row so it is usable without expanding;
+                    preventDefault keeps the click from toggling the group. */}
+                {attentionGroupRetryable(g.key) && blocked.length > 0 && (
+                  <button
+                    type="button"
+                    className="publish-btn attention-retry"
+                    disabled={busy === g.key}
+                    title={t('system.attentionRetryHint')}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onRetry(g.key, blocked.map((s) => s.sha256));
+                    }}
+                  >
+                    {t('system.attentionRetry', { n: blocked.length })}
+                  </button>
+                )}
+              </summary>
+              {outcome?.error && <p className="sm warn">{outcome.error}</p>}
+              {g.sources.map((s) => (
+                <AttentionCard source={s} key={`${s.sha256}-${s.status}`} />
+              ))}
+            </details>
+          );
+        })
       )}
       <p className="tiny muted">
         {t('system.doctorHint')} <code className="mono">ovp2 doctor</code>

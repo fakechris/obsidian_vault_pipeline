@@ -847,6 +847,11 @@ export const en = {
   'providers.saveCurrent': 'Save the current setup',
   'providers.addProfile': '+ Add a setup',
   'providers.switchNote': 'Scheduled jobs use a switch at their next start, Ask at the next question — no restart.',
+  'system.attentionRetry': 'Retry these {n}',
+  'system.attentionRetryHint': 'they go back into the queue for the next daily run',
+  'system.attentionRequeued': 'Back in the queue — the next daily run (every 4h) picks them up.',
+  'system.attentionRunNow': 'Run daily now',
+  'system.attentionRunStarted': 'started; watch the Runs tab',
   'providers.title': 'LLM Provider',
   'providers.help':
     'Which model endpoint the pipeline uses (stored in .ovp/providers.toml; keys are masked once saved).',

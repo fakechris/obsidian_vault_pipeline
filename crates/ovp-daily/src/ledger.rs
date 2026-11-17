@@ -90,9 +90,111 @@ pub fn failed_counts(records: &[DailyRunRecord]) -> HashMap<String, usize> {
     counts
 }
 
+/// Vault-relative directory of retry grants — ONE create-once file per grant.
+///
+/// Not an appended log: the vault is written by both terminal-spawned
+/// processes and the desktop app, and macOS binds a created file to its
+/// creator app (`com.apple.provenance`), EPERMing any other app that modifies
+/// it. Creating NEW files is always allowed (same scheme as the portal's
+/// attention acks). One file per grant also means a torn write damages that
+/// grant alone, never the others.
+pub const RETRY_GRANTS_DIR: &str = ".ovp/retry-grants";
+pub const RETRY_GRANT_SCHEMA: &str = "ovp.retry_grant/v1";
+
+/// "Give this blocked source another round": the operator (portal Attention)
+/// re-admits a source after fixing what blocked it — a spent model quota, a
+/// network outage. Its failures UP TO `failures_before` stop counting toward
+/// the block; new failures count from zero again.
+///
+/// Kept apart from `daily-runs.jsonl`: an older binary must keep parsing the
+/// run ledger (one unknown record kind fails the whole ledger), and simply
+/// ignores this directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryGrant {
+    pub schema: String,
+    pub source_sha256: String,
+    /// Total recorded failures at grant time (the new zero point).
+    pub failures_before: usize,
+    pub granted_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// sha → the highest granted zero point. Missing directory → empty.
+/// Unreadable or malformed files are skipped: a bad grant must never stop the
+/// daily loop (the worst case is one source staying blocked).
+pub fn read_retry_grants(vault_root: &Path) -> HashMap<String, usize> {
+    let mut out: HashMap<String, usize> = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(vault_root.join(RETRY_GRANTS_DIR)) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let Ok(bytes) = std::fs::read(entry.path()) else { continue };
+        if let Ok(g) = serde_json::from_slice::<RetryGrant>(&bytes) {
+            let e = out.entry(g.source_sha256).or_insert(0);
+            *e = (*e).max(g.failures_before);
+        }
+    }
+    out
+}
+
+/// Write each grant as a new file `<sha>-<failures_before>.json`. The name is
+/// deterministic, so re-granting at the same zero point is a no-op rather than
+/// a duplicate. Only hex shas are accepted (they become file names).
+pub fn append_retry_grants(vault_root: &Path, grants: &[RetryGrant]) -> Result<(), String> {
+    let dir = vault_root.join(RETRY_GRANTS_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    for g in grants {
+        if g.source_sha256.is_empty() || !g.source_sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("`{}` is not a source hash", g.source_sha256));
+        }
+        let path = dir.join(format!("{}-{}.json", g.source_sha256, g.failures_before));
+        let body = serde_json::to_vec_pretty(g).map_err(|e| format!("serializing grant: {e}"))?;
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                use std::io::Write;
+                f.write_all(&body)
+                    .and_then(|_| f.sync_all())
+                    .map_err(|e| format!("writing {}: {e}", path.display()))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("creating {}: {e}", path.display())),
+        }
+    }
+    Ok(())
+}
+
+/// Failures that count toward the block: those after the latest grant.
+pub fn effective_failures(total: usize, granted: Option<usize>) -> usize {
+    total.saturating_sub(granted.unwrap_or(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_grants_reset_the_block_count_and_tolerate_junk() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = |sha: &str, n| RetryGrant {
+            schema: RETRY_GRANT_SCHEMA.into(),
+            source_sha256: sha.into(),
+            failures_before: n,
+            granted_at: "2026-11-17T00:00:00Z".into(),
+            reason: None,
+        };
+        append_retry_grants(dir.path(), &[g("aa", 3), g("aa", 5), g("bb", 3), g("bb", 3)]).unwrap();
+        // A torn / foreign file is skipped without losing the others.
+        std::fs::write(dir.path().join(RETRY_GRANTS_DIR).join("junk.json"), b"{\"sch\xff").unwrap();
+        assert_eq!(std::fs::read_dir(dir.path().join(RETRY_GRANTS_DIR)).unwrap().count(), 4, "bb@3 written once");
+        assert!(append_retry_grants(dir.path(), &[g("../x", 1)]).is_err(), "only hex hashes name files");
+        let grants = read_retry_grants(dir.path());
+        assert_eq!(grants.get("aa"), Some(&5), "latest/highest zero point wins");
+        assert_eq!(effective_failures(5, grants.get("aa").copied()), 0);
+        assert_eq!(effective_failures(4, grants.get("bb").copied()), 1, "new failures count again");
+        assert_eq!(effective_failures(3, None), 3);
+        assert!(read_retry_grants(&dir.path().join("nope")).is_empty());
+    }
 
     fn rec(hash: &str, status: RunStatus) -> DailyRunRecord {
         DailyRunRecord {

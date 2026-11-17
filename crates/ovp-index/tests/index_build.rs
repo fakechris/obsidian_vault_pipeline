@@ -1198,3 +1198,31 @@ fn claims_take_their_run_day_from_the_run_log() {
     assert_eq!(day("k1").as_deref(), Some("2026-11-15"));
     assert_eq!(day("k2"), None, "a hash run_id with no log entry stays undated");
 }
+
+#[test]
+fn a_retry_grant_takes_a_blocked_source_out_of_attention() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let fx = build_fixture_vault(root);
+    let before = build_index(root, "2026-06-09", None).unwrap();
+    let row = |m: &ovp_index::IndexModel| {
+        m.sources.iter().find(|s| s.sha256 == fx.blocked_sha).unwrap().clone()
+    };
+    let blocked = row(&before);
+    assert_eq!(blocked.status, SourceStatus::Blocked);
+
+    ovp_daily::append_retry_grants(
+        root,
+        &[ovp_daily::RetryGrant {
+            schema: ovp_daily::RETRY_GRANT_SCHEMA.into(),
+            source_sha256: fx.blocked_sha.clone(),
+            failures_before: blocked.fail_count,
+            granted_at: "2026-06-10T00:00:00Z".into(),
+            reason: None,
+        }],
+    )
+    .unwrap();
+    let after = row(&build_index(root, "2026-06-10", None).unwrap());
+    assert_eq!(after.status, SourceStatus::Failed, "queued for retry, not blocked");
+    assert_eq!(after.fail_count, blocked.fail_count, "history is kept");
+}

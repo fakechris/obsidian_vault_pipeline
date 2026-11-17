@@ -278,6 +278,13 @@
       "current_version": "v1",
       "file": "crates/ovp-llm/src/live.rs",
       "quality_buckets": ["operational_reliability", "cost_efficiency"]
+    },
+    {
+      "id": "runtime.daily_retry_grants",
+      "surface": "runtime",
+      "current_version": "v1",
+      "file": "crates/ovp-daily/src/ledger.rs",
+      "quality_buckets": ["operational_reliability", "cost_efficiency"]
     }
   ]
 }

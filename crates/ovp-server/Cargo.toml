@@ -29,6 +29,8 @@ ovp-memory = { path = "../ovp-memory" }
 ovp-llm = { path = "../ovp-llm" }
 ovp-publish = { path = "../ovp-publish" }
 ovp-scheduler = { path = "../ovp-scheduler" }
+# Retry grants (Attention → "retry this group") read the daily ledger.
+ovp-daily = { path = "../ovp-daily" }
 serde.workspace = true
 serde_json.workspace = true
 chrono = { workspace = true }
@@ -36,4 +38,3 @@ tiny_http = "0.12"
 
 [dev-dependencies]
 tempfile.workspace = true
-ovp-daily = { path = "../ovp-daily" }
