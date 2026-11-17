@@ -2225,6 +2225,10 @@ html[data-tauri-drag-region] .source-chat-panel {
   font-size: var(--ovp-text-xs);
   color: var(--muted);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  /* keeps the weekly sparkline off the claim count */
+  gap: 8px;
 }
 /* durable ratio bar: green (--c-3) share over a gold (--c-4) caveated rest —
    the same semantic palette as the status pills (DS extension #2). */
