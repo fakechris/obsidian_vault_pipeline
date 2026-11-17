@@ -20,7 +20,7 @@ export function Sparkline({
   if (!sparklineHasActivity(data)) return null;
 
   const barWidth = width / data.length;
-  const gap = Math.max(0.5, barWidth * 0.1);
+  const gap = Math.max(1, barWidth * 0.2);
   const heights = computeBarHeights(data, height);
 
   return (
@@ -35,7 +35,9 @@ export function Sparkline({
     >
       {title ? <title>{title}</title> : null}
       {data.map((v, i) => {
-        const barHeight = heights[i] ?? 0;
+        // Empty buckets still draw a 1px baseline, so a lone bar reads as
+        // "one active week out of N" rather than a stray tick.
+        const barHeight = Math.max(heights[i] ?? 0, 1);
         return (
           <rect
             key={i}
@@ -44,7 +46,7 @@ export function Sparkline({
             width={Math.max(0, barWidth - gap)}
             height={barHeight}
             fill={color}
-            opacity={v > 0 ? 0.85 : 0.12}
+            opacity={v > 0 ? 0.85 : 0.3}
           />
         );
       })}

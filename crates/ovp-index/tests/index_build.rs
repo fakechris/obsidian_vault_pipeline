@@ -1165,3 +1165,36 @@ fn human_patch_drift_skips_overlay_and_corrupt_ledger_fails_loudly() {
     let err = build_index(root, "2026-06-09", None).unwrap_err();
     assert!(err.contains("human patch ledger"), "{err}");
 }
+
+#[test]
+fn claims_take_their_run_day_from_the_run_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let store = root.join(".ovp/crystal");
+    std::fs::create_dir_all(&store).unwrap();
+    let rec = |key: &str, run: &str| {
+        serde_json::json!({"op": "write", "record": {
+            "claim_key": key, "claim_id": key, "claim": key, "theme": "t",
+            "source_cases": ["case-a"], "citations": [], "provenance_score": 1.0,
+            "provenance_class": "durable", "strength": "supported",
+            "strength_rationale": "ok", "final_class": "durable",
+            "run_id": run, "status": "active"}})
+        .to_string()
+    };
+    std::fs::write(
+        store.join("ledger.jsonl"),
+        format!("{}\n{}\n", rec("k1", "run-8afec032"), rec("k2", "run-0000hash")),
+    )
+    .unwrap();
+    std::fs::write(
+        store.join("runs.jsonl"),
+        "{\"run_id\":\"run-8afec032\",\"date\":\"2026-11-15\"}\n",
+    )
+    .unwrap();
+    let model = build_index(root, "2026-11-16", None).unwrap();
+    let day = |k: &str| {
+        model.claims.iter().find(|c| c.claim_id == k).unwrap().run_date.clone()
+    };
+    assert_eq!(day("k1").as_deref(), Some("2026-11-15"));
+    assert_eq!(day("k2"), None, "a hash run_id with no log entry stays undated");
+}

@@ -466,7 +466,7 @@ export const en = {
     'No claims in the crystal store yet — crystallize sources to build the knowledge layer.',
   'knowledge.untitledTheme': '(no theme)',
   'knowledge.claimCount': '{n} claims',
-  'knowledge.sparklineTitle': 'Claims added per day, last 30 days',
+  'knowledge.sparklineTitle': 'Claims added per week, last 12 weeks',
   'knowledge.ratioLine': 'durable {durable} · caveated {caveated}',
   'knowledge.sourceCount': '{n} sources',
   'knowledge.sourceCountTip':

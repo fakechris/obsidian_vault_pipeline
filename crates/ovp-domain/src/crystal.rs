@@ -641,6 +641,35 @@ pub struct DurableRecord {
     pub status: CrystalStatus,
 }
 
+/// File name (inside the crystal store) of the run-date log.
+pub const RUN_LOG_FILE: &str = "runs.jsonl";
+
+/// One line of the store's `runs.jsonl`: the local day a write run appended
+/// records. `run_id`s are content hashes (`default_run_id`), so this log is
+/// the only place a run's date lives; the index reads it to date claims.
+/// Kept beside the ledger instead of inside `DurableRecord` so the ledger
+/// schema stays untouched and old runs can be back-filled without
+/// rewriting append-only history. The first entry for a `run_id` wins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrystalRunEntry {
+    pub run_id: String,
+    /// `YYYY-MM-DD`, operator-local.
+    pub date: String,
+}
+
+/// Parse `runs.jsonl` text into `run_id → date`, first entry winning.
+/// Lenient: a malformed line is skipped — a missing date only degrades a
+/// chart, so it must never fail an index build.
+pub fn parse_run_log(text: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for line in text.lines() {
+        if let Ok(e) = serde_json::from_str::<CrystalRunEntry>(line) {
+            out.entry(e.run_id).or_insert(e.date);
+        }
+    }
+    out
+}
+
 /// One append-only ledger event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoreEvent {
@@ -1148,6 +1177,18 @@ mod tests {
     use super::*;
     use crate::source_doc::SourceDoc;
     use crate::units::validate;
+
+    #[test]
+    fn run_log_keeps_the_first_date_and_skips_junk() {
+        let text = "{\"run_id\":\"run-a\",\"date\":\"2026-11-11\"}\n\
+                    not json\n\
+                    {\"run_id\":\"run-a\",\"date\":\"2026-11-20\"}\n\
+                    {\"run_id\":\"run-b\",\"date\":\"2026-11-15\"}\n";
+        let m = parse_run_log(text);
+        assert_eq!(m.get("run-a").map(String::as_str), Some("2026-11-11"));
+        assert_eq!(m.get("run-b").map(String::as_str), Some("2026-11-15"));
+        assert_eq!(m.len(), 2);
+    }
 
     /// Build accepted Units for a one-case grounding index from a body + quotes.
     fn index_for(case_id: &str, body: &str, quotes: &[&str]) -> GroundingIndex {

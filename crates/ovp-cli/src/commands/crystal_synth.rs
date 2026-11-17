@@ -1364,6 +1364,11 @@ mod tests {
         let ledger = std::fs::read_to_string(store.join("ledger.jsonl")).unwrap();
         let lines1 = ledger.lines().filter(|l| !l.trim().is_empty()).count();
         assert_eq!(lines1, 1, "exactly one durable claim written");
+        // The run that appended logs its day; run_id itself carries none.
+        let run_log = std::fs::read_to_string(store.join("runs.jsonl")).unwrap();
+        let runs = ovp_domain::crystal::parse_run_log(&run_log);
+        assert_eq!(runs.len(), 1);
+        assert!(runs.values().all(|d| d.len() == 10 && d.as_bytes()[4] == b'-'));
 
         // Turn on the separate typed observer with an intentionally missing replay
         // cassette. The real Crystal path must still write the same ledger.
@@ -1379,6 +1384,11 @@ mod tests {
         assert_eq!(
             lines2, 1,
             "re-run appends nothing (idempotent by claim_key)"
+        );
+        assert_eq!(
+            std::fs::read_to_string(store.join("runs.jsonl")).unwrap(),
+            run_log,
+            "a run that appended nothing logs no date"
         );
 
         // INV-1422: the citation-support shadow, writing into a fresh store,

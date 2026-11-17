@@ -2014,7 +2014,9 @@ export interface ScheduleJobLike {
 
 // -------------------------------------------- portal visualizations (INV-1886)
 
-export const SPARKLINE_DAYS = 30;
+/** Theme-card sparkline: one bar per rolling week. Crystallize runs weekly,
+ * so per-day bars over 30 days showed a single spike and read as noise. */
+export const SPARKLINE_WEEKS = 12;
 
 export function computeBarHeights(data: number[], maxHeight: number): number[] {
   if (data.length === 0 || maxHeight <= 0) return [];
@@ -2041,29 +2043,26 @@ export function recentIsoDayRange(days: number, endDay?: string | null): string[
   return out;
 }
 
-function bumpBucket(buckets: number[], range: string[], day: string): void {
-  if (!isIsoDay(day)) return;
-  const idx = range.indexOf(day);
-  if (idx >= 0) buckets[idx] += 1;
-}
-
+/** Claims added per rolling 7-day bucket over the last `weeks` weeks, the
+ * last bucket ending on `builtAt`'s day. */
 export function sparklinesByThemeGroup(
   claims: ClaimRow[],
   builtAt: string | undefined,
-  days: number,
+  weeks: number,
   sourceDays: Map<string, string> | null,
 ): Map<string, number[]> {
-  const range = recentIsoDayRange(days, builtAt?.slice(0, 10) ?? builtAt);
+  const range = recentIsoDayRange(weeks * 7, builtAt?.slice(0, 10) ?? builtAt);
   const out = new Map<string, number[]>();
   for (const c of activeClaims(claims)) {
     const key = themeGroupKey(c.theme_id ?? null, c.theme ?? '');
     let buckets = out.get(key);
     if (!buckets) {
-      buckets = new Array(range.length).fill(0);
+      buckets = new Array(Math.max(0, weeks)).fill(0);
       out.set(key, buckets);
     }
     const day = claimDay(c, sourceDays);
-    if (day) bumpBucket(buckets, range, day);
+    const idx = day && isIsoDay(day) ? range.indexOf(day) : -1;
+    if (idx >= 0) buckets[Math.floor(idx / 7)] += 1;
   }
   return out;
 }

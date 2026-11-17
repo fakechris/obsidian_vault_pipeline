@@ -253,6 +253,23 @@ pub fn run(args: CrystalWriteArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Append `{run_id, date}` (operator-local day) to the store's run log.
+fn record_run_date(
+    store: &std::path::Path,
+    run_id: &str,
+    holds_vault_lock: bool,
+) -> Result<(), CliError> {
+    let entry = ovp_domain::crystal::CrystalRunEntry {
+        run_id: run_id.to_string(),
+        date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+    };
+    let mut line = serde_json::to_string(&entry).map_err(|e| CliError::Io(e.to_string()))?;
+    line.push('\n');
+    let path = store.join(ovp_domain::crystal::RUN_LOG_FILE);
+    ovp_domain::jsonl::append_batch(&path, &line, holds_vault_lock)
+        .map_err(|e| CliError::Io(format!("appending run log {}: {e}", path.display())))
+}
+
 /// Shared durable-write core: run the FULL pre-write gate over already-loaded
 /// inputs and, only if durable-eligible, append `Durable` claims to the store
 /// (idempotent by `claim_key`), record caveated/reject in `review.json`, and
@@ -466,6 +483,11 @@ pub fn write_durable(inputs: WriteInputs) -> Result<WriteOutcome, CliError> {
     // lock — a diagnostic store has none, and another writer may share it.
     ovp_domain::jsonl::append_batch(&ledger_path, &appended_lines, holds_vault_lock)
         .map_err(|e| CliError::Io(format!("appending ledger {}: {e}", ledger_path.display())))?;
+    // The run's day lives only here (run_id is a content hash). Logged only
+    // when the run actually appended, after the ledger write succeeded.
+    if appended > 0 {
+        record_run_date(&store, &run_id, holds_vault_lock)?;
+    }
 
     // --- Render current state + review. ---
     let state = fold_ledger(&events);
