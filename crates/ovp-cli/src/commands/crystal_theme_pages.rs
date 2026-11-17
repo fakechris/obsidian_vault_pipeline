@@ -490,6 +490,7 @@ mod tests {
                 },
             ],
             labels_provenance: Default::default(),
+            label_prompt: None,
         }
     }
 

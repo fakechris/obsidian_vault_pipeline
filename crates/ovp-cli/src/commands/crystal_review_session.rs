@@ -1113,6 +1113,7 @@ mod tests {
                 size: packs.iter().filter(|(_, c)| *c == 0).count(),
             }],
             labels_provenance: LabelsProvenance::Keyword,
+            label_prompt: None,
         }
     }
 

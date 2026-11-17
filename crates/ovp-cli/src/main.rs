@@ -842,10 +842,11 @@ enum Cmd {
         #[arg(long)]
         vault_root: PathBuf,
         /// `replay` (default) labels communities from their keywords; `live`
-        /// adds one cached bilingual theme_label/v1 LLM call per community.
+        /// adds one cached bilingual theme_label/v2 LLM call per community
+        /// whose membership changed (stable communities keep their name).
         #[arg(long, value_enum, default_value_t = ClientKindArg::Replay)]
         client: ClientKindArg,
-        /// Cassette root for theme_label/v1. Default:
+        /// Cassette root for theme_label/v2. Default:
         /// `<vault-root>/.ovp/cassettes/crystal`.
         #[arg(long)]
         cache_dir: Option<PathBuf>,
@@ -864,6 +865,10 @@ enum Cmd {
         /// Louvain shuffle seed (pinned for reproducibility).
         #[arg(long, default_value_t = 42)]
         seed: u64,
+        /// Compute and print the old → new theme table (ids carried over,
+        /// names kept / renamed / new / retired) without writing themes.json.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// PRODUCT — weave each theme's ACTIVE durable claims into a grounded
     /// topic page (.ovp/crystal/theme_pages.json): claims grouped by majority
@@ -2349,6 +2354,7 @@ fn main() -> ExitCode {
             cosine_threshold,
             resolution,
             seed,
+            dry_run,
         } => {
             use commands::client::ClientKind;
             use commands::crystal_themes::CrystalThemesArgs;
@@ -2365,6 +2371,7 @@ fn main() -> ExitCode {
                 cosine_threshold,
                 resolution,
                 seed,
+                dry_run,
             })
         }
         Cmd::CrystalThemePages { vault_root, client, cache_dir, refresh, min_claims } => {

@@ -40,7 +40,7 @@ pub mod synth;
 pub mod select;
 
 /// Semantic display themes: the `themes.json` projection schema + helpers
-/// (majority-label lookup, synthesis grouping, bilingual `theme_label/v1`
+/// (majority-label lookup, synthesis grouping, bilingual `theme_label/v2`
 /// model stage). Rebuildable projection; never baked into the ledger.
 pub mod theme_pages;
 pub mod themes;
