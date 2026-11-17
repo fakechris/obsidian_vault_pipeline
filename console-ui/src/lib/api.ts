@@ -330,6 +330,25 @@ export async function saveProviders(set: Record<string, string>): Promise<void> 
   }
 }
 
+/** Re-admit blocked sources (Attention → "retry this group"): the next daily
+ * run plans them again with a fresh failure count. Non-blocked hashes are
+ * skipped server-side and reported. */
+export async function retryAttention(
+  shas: string[],
+  reason: string,
+): Promise<{ granted: number; skipped: string[] }> {
+  const resp = await fetch('/api/attention/retry', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shas, reason }),
+  });
+  const body = (await resp.json().catch(() => null)) as
+    | { granted?: number; skipped?: string[]; error?: string }
+    | null;
+  if (!resp.ok) throw new Error(body?.error ?? `retry failed (${resp.status})`);
+  return { granted: body?.granted ?? 0, skipped: body?.skipped ?? [] };
+}
+
 export function fetchSettings(): Promise<SettingsPayload> {
   return fetchJson<SettingsPayload>(STATIC_MODE ? `${API}/settings.json` : '/api/settings');
 }

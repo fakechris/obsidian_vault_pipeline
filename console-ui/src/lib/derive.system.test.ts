@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  attentionGroupRetryable,
   llmExtraOf,
   attentionGroupKey,
   attentionGroups,
@@ -41,6 +42,13 @@ describe('System page helpers', () => {
     );
     expect(attentionGroupKey(src('blocked', 'provider error api_error: input new'))).toBe('provider');
     expect(attentionGroupKey(src('blocked', 'something new'))).toBe('other');
+  });
+
+  it('offers a retry only where another round can help', () => {
+    expect(['quota', 'network', 'provider'].every((k) => attentionGroupRetryable(k as never))).toBe(true);
+    expect(attentionGroupRetryable('extraction')).toBe(false);
+    expect(attentionGroupRetryable('needs_content')).toBe(false);
+    expect(attentionGroupRetryable('other')).toBe(false);
   });
 
   it('orders groups by size and keeps members in input order', () => {

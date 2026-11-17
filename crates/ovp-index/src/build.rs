@@ -361,6 +361,10 @@ fn build_sources(
     // Daily attempts override intake state (later lifecycle stage). Records
     // are in append order, so the last one per hash wins.
     let mut fail_counts: HashMap<String, usize> = HashMap::new();
+    // Operator retry grants (portal Attention): failures before a grant no
+    // longer count toward Blocked — the same rule `plan_daily` applies, so a
+    // re-admitted source shows as Failed/queued, not as needing attention.
+    let retry_grants = ovp_daily::read_retry_grants(vault_root);
     for rec in &daily {
         let entry = rows
             .entry(rec.source_sha256.clone())
@@ -396,7 +400,11 @@ fn build_sources(
                 // content re-failing implies a re-run that the dedup gate
                 // would normally prevent).
                 if entry.status != SourceStatus::Processed {
-                    entry.status = if *n >= MAX_FAILURES_BEFORE_BLOCKED {
+                    let counted = ovp_daily::effective_failures(
+                        *n,
+                        retry_grants.get(&rec.source_sha256).copied(),
+                    );
+                    entry.status = if counted >= MAX_FAILURES_BEFORE_BLOCKED {
                         SourceStatus::Blocked
                     } else {
                         SourceStatus::Failed

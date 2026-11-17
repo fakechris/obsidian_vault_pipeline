@@ -43,8 +43,9 @@ pub use heartbeat::{
     LAST_RUN_SCHEMA, RECENT_RING_CAP,
 };
 pub use ledger::{
-    append_daily_record, append_pipeline_event, failed_counts, read_daily_ledger,
-    succeeded_hashes, DailyRunRecord, PipelineLogEvent, RunStatus, DAILY_SCHEMA,
+    append_daily_record, append_pipeline_event, append_retry_grants, effective_failures,
+    failed_counts, read_daily_ledger, read_retry_grants, succeeded_hashes, DailyRunRecord,
+    PipelineLogEvent, RetryGrant, RunStatus, DAILY_SCHEMA, RETRY_GRANTS_FILE, RETRY_GRANT_SCHEMA,
 };
 pub use report::{
     write_run_report, CostReport, IntakeSummary, PinboardSummary, ReaderSummary, RunReport,
@@ -175,6 +176,7 @@ pub fn plan_daily(
 ) -> Result<DailyWork, String> {
     let done = succeeded_hashes(records);
     let failures = failed_counts(records);
+    let grants = read_retry_grants(vault_root);
     let mut seen_this_run: HashSet<String> = HashSet::new();
     let mut work = DailyWork::default();
     for path in scan_inbox(inbox)? {
@@ -182,7 +184,11 @@ pub fn plan_daily(
             std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
         let sha256 = hex_sha256(&bytes);
         let rel = rel_to(vault_root, &path);
-        let prior_failures = failures.get(&sha256).copied().unwrap_or(0);
+        // Failures before an operator retry grant no longer count.
+        let prior_failures = effective_failures(
+            failures.get(&sha256).copied().unwrap_or(0),
+            grants.get(&sha256).copied(),
+        );
         let item = DailyItem { path, rel, sha256: sha256.clone(), prior_failures };
         if done.contains(&sha256) || !seen_this_run.insert(sha256) {
             work.skipped.push(item);

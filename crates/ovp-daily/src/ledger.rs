@@ -90,9 +90,86 @@ pub fn failed_counts(records: &[DailyRunRecord]) -> HashMap<String, usize> {
     counts
 }
 
+/// Vault-relative path of the retry-grant log.
+pub const RETRY_GRANTS_FILE: &str = ".ovp/retry-grants.jsonl";
+pub const RETRY_GRANT_SCHEMA: &str = "ovp.retry_grant/v1";
+
+/// "Give this blocked source another round": the operator (portal Attention)
+/// re-admits a source after fixing what blocked it — a spent model quota, a
+/// network outage. Its failures UP TO `failures_before` stop counting toward
+/// the block; new failures count from zero again.
+///
+/// A separate append-only file, not a new `daily-runs.jsonl` record kind: an
+/// older binary must keep parsing the run ledger (one unknown variant fails
+/// the whole ledger), and simply ignores this file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryGrant {
+    pub schema: String,
+    pub source_sha256: String,
+    /// Total recorded failures at grant time (the new zero point).
+    pub failures_before: usize,
+    pub granted_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// sha → the highest granted zero point. Missing file → empty. Malformed
+/// lines are skipped: a bad grant line must never stop the daily loop (the
+/// worst case is a source staying blocked).
+pub fn read_retry_grants(vault_root: &Path) -> HashMap<String, usize> {
+    let mut out: HashMap<String, usize> = HashMap::new();
+    let Ok(raw) = std::fs::read_to_string(vault_root.join(RETRY_GRANTS_FILE)) else {
+        return out;
+    };
+    for line in raw.lines() {
+        if let Ok(g) = serde_json::from_str::<RetryGrant>(line) {
+            let e = out.entry(g.source_sha256).or_insert(0);
+            *e = (*e).max(g.failures_before);
+        }
+    }
+    out
+}
+
+pub fn append_retry_grants(vault_root: &Path, grants: &[RetryGrant]) -> Result<(), String> {
+    let path = vault_root.join(RETRY_GRANTS_FILE);
+    for g in grants {
+        append_jsonl(&path, g)?;
+    }
+    Ok(())
+}
+
+/// Failures that count toward the block: those after the latest grant.
+pub fn effective_failures(total: usize, granted: Option<usize>) -> usize {
+    total.saturating_sub(granted.unwrap_or(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_grants_reset_the_block_count_and_tolerate_junk() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = |sha: &str, n| RetryGrant {
+            schema: RETRY_GRANT_SCHEMA.into(),
+            source_sha256: sha.into(),
+            failures_before: n,
+            granted_at: "2026-11-17T00:00:00Z".into(),
+            reason: None,
+        };
+        append_retry_grants(dir.path(), &[g("a", 3), g("a", 5), g("b", 3)]).unwrap();
+        std::fs::write(
+            dir.path().join(RETRY_GRANTS_FILE),
+            std::fs::read_to_string(dir.path().join(RETRY_GRANTS_FILE)).unwrap() + "not json\n",
+        )
+        .unwrap();
+        let grants = read_retry_grants(dir.path());
+        assert_eq!(grants.get("a"), Some(&5), "latest/highest zero point wins");
+        assert_eq!(effective_failures(5, grants.get("a").copied()), 0);
+        assert_eq!(effective_failures(4, grants.get("b").copied()), 1, "new failures count again");
+        assert_eq!(effective_failures(3, None), 3);
+        assert!(read_retry_grants(&dir.path().join("nope")).is_empty());
+    }
 
     fn rec(hash: &str, status: RunStatus) -> DailyRunRecord {
         DailyRunRecord {

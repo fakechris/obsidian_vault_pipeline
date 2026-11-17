@@ -4201,3 +4201,8 @@ button.linkish:hover {
 .overview-list dd {
   margin-bottom: 0.6rem;
 }
+.attention-group .attention-retry {
+  margin-left: 0.75rem;
+  padding: 0.15rem 0.7rem;
+  font-size: var(--ovp-text-xs);
+}

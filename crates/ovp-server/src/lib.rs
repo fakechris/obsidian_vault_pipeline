@@ -955,6 +955,7 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
                 || p == "/api/index/rebuild"
                 || p == "/api/schedule/features"
                 || p == "/api/attention/ack"
+                || p == "/api/attention/retry"
                 || p == "/api/providers"
                 || p.starts_with("/api/providers/")
                 || (p.starts_with("/api/source/") && p.ends_with("/tags"))
@@ -1110,6 +1111,7 @@ fn dispatch(
         }
         (Method::Post, "/api/schedule/run") => handle_run_start(state, body),
         (Method::Post, "/api/attention/ack") => handle_attention_ack(state, body),
+        (Method::Post, "/api/attention/retry") => handle_attention_retry(state, body),
         (Method::Get, "/api/providers") => handle_providers_get(state),
         (Method::Post, "/api/providers") => handle_providers_set(state, body),
         (Method::Post, "/api/providers/profiles") => handle_profile_save(state, body),
@@ -2366,6 +2368,63 @@ fn attention_ack_path(dir: &Path, sha: &str, status: &str) -> std::path::PathBuf
         .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' })
         .collect();
     dir.join(format!("{sha}-{safe}.json"))
+}
+
+/// `POST /api/attention/retry` `{shas: [...], reason?}` — give blocked
+/// sources another round (portal Attention → "retry this group"). Appends a
+/// retry grant per source that is BLOCKED right now (failures at the retry
+/// cap since its last grant), with the current failure count as the new zero
+/// point; the next daily run plans them again. Anything not blocked is
+/// skipped and reported. The index is rebuilt so Attention updates at once.
+fn handle_attention_retry(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let v: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return json_response(400, r#"{"error":"body must be JSON"}"#),
+    };
+    let Some(shas) = v.get("shas").and_then(|s| s.as_array()) else {
+        return json_response(400, r#"{"error":"`shas` array is required"}"#);
+    };
+    let shas: Vec<&str> = shas.iter().filter_map(|s| s.as_str()).filter(|s| !s.is_empty()).collect();
+    if shas.is_empty() || shas.len() > 500 {
+        return json_response(400, r#"{"error":"`shas` must hold 1-500 source hashes"}"#);
+    }
+    let reason = v.get("reason").and_then(|r| r.as_str()).map(str::to_string);
+    let _guard = state.acks_write_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let ledger = match ovp_daily::read_daily_ledger(&state.vault_root.join(state.layout.daily_ledger())) {
+        Ok(l) => l,
+        Err(e) => return json_response(500, &serde_json::json!({ "error": e }).to_string()),
+    };
+    let totals = ovp_daily::failed_counts(&ledger);
+    let granted_before = ovp_daily::read_retry_grants(&state.vault_root);
+    let at = ovp_index::now_rfc3339();
+    let mut grants = Vec::new();
+    let mut skipped = Vec::new();
+    for sha in shas {
+        let total = totals.get(sha).copied().unwrap_or(0);
+        let counted = ovp_daily::effective_failures(total, granted_before.get(sha).copied());
+        if counted >= ovp_daily::MAX_FAILURES_BEFORE_BLOCKED {
+            grants.push(ovp_daily::RetryGrant {
+                schema: ovp_daily::RETRY_GRANT_SCHEMA.into(),
+                source_sha256: sha.to_string(),
+                failures_before: total,
+                granted_at: at.clone(),
+                reason: reason.clone(),
+            });
+        } else {
+            skipped.push(sha.to_string());
+        }
+    }
+    if let Err(e) = ovp_daily::append_retry_grants(&state.vault_root, &grants) {
+        return json_response(500, &serde_json::json!({ "error": e }).to_string());
+    }
+    drop(_guard);
+    let rebuilt = !grants.is_empty() && rebuild_index_now(state).is_ok();
+    let body = serde_json::json!({
+        "granted": grants.len(),
+        "skipped": skipped,
+        "index_rebuilt": rebuilt,
+    });
+    json_response(200, &body.to_string())
 }
 
 fn handle_attention_ack(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -6869,6 +6928,45 @@ mod tests {
             "empty value removes the key"
         );
 
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn attention_retry_grants_only_blocked_sources() {
+        let vault = portal_vault("attn-retry", "50-Inbox/03-Processed/good.md", "body\n");
+        let ledger = vault.join(".ovp/daily-runs.jsonl");
+        let fail = |sha: &str| ovp_daily::DailyRunRecord {
+            schema: ovp_daily::DAILY_SCHEMA.into(),
+            run_id: "daily-2026-11-16".into(),
+            date: "2026-11-16".into(),
+            source_path: format!("50-Inbox/01-Raw/{sha}.md"),
+            source_sha256: sha.into(),
+            status: ovp_daily::RunStatus::Failed,
+            pack_dir: None,
+            moved_to: None,
+            units: 0,
+            cards: 0,
+            reason: Some("provider error rate_limit_error".into()),
+        };
+        for sha in ["blocked1", "blocked1", "blocked1", "failed1"] {
+            ovp_daily::append_daily_record(&ledger, &fail(sha)).unwrap();
+        }
+        let st = state(vault.clone(), None);
+        let post = |body: &str| body_json(dispatch(&st, Method::Post, "/api/attention/retry", body));
+
+        let v = post(r#"{"shas":["blocked1","failed1","unknown"],"reason":"quota restored"}"#);
+        assert_eq!(v["granted"], 1);
+        assert_eq!(v["skipped"], serde_json::json!(["failed1", "unknown"]));
+        let grants = ovp_daily::read_retry_grants(&vault);
+        assert_eq!(grants.get("blocked1"), Some(&3));
+        // Already re-admitted → no longer blocked → a second click is a no-op.
+        let v = post(r#"{"shas":["blocked1"]}"#);
+        assert_eq!(v["granted"], 0);
+
+        assert_eq!(
+            dispatch(&st, Method::Post, "/api/attention/retry", r#"{"shas":[]}"#).status_code(),
+            400
+        );
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }
 

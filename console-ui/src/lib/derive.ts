@@ -2195,6 +2195,14 @@ export function attentionGroupKey(s: SourceRow): AttentionGroupKey {
   return 'other';
 }
 
+/** Groups whose blocked sources are worth another round once the cause is
+ * fixed (quota topped up / provider switched, network back). Extraction
+ * failures are content problems — retrying them only burns calls — and
+ * needs-content sources are not blocked at all. */
+export function attentionGroupRetryable(key: AttentionGroupKey): boolean {
+  return key === 'quota' || key === 'network' || key === 'provider';
+}
+
 /** Groups in descending size (ties by key), each keeping input order. */
 export function attentionGroups(
   sources: SourceRow[],
