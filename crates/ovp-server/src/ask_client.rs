@@ -23,8 +23,21 @@ pub const LLM_NOT_CONFIGURED: &str = "llm_not_configured";
 /// key choice the live builder uses. Used by `/api/settings`
 /// (`llm_configured`) so the System page reflects the product config surface.
 pub fn api_key_configured(vault_root: &Path) -> bool {
+    key_configured_with(vault_root, |k| std::env::var(k).ok())
+}
+
+/// [`api_key_configured`] with an injected process-env lookup (env wins over
+/// the file, as in [`provider_lookup`]) — testable without touching the
+/// shared process environment.
+fn key_configured_with(vault_root: &Path, env: impl Fn(&str) -> Option<String>) -> bool {
     let file = ovp_domain::providers::read_providers_file(vault_root).unwrap_or_default();
-    ovp_llm::resolve_api_key(provider_lookup(&file)).is_ok()
+    ovp_llm::resolve_api_key(|name: &str| {
+        env(name)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .or_else(|| file.get(name).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+    })
+    .is_ok()
 }
 
 /// Live-transport factory for ask: `Some` when built with `--features
@@ -97,6 +110,7 @@ fn build_ask_client_bounded(
 
 /// Env-over-file lookup matching `apply_providers_env` semantics without
 /// mutating the process environment.
+#[cfg(feature = "anthropic")]
 fn provider_lookup(
     file: &std::collections::BTreeMap<String, String>,
 ) -> impl Fn(&str) -> Option<String> + '_ {
@@ -144,27 +158,34 @@ mod tests {
     #[test]
     fn api_key_configured_reads_providers_file() {
         let vault = temp_vault("key-file");
-        assert!(!api_key_configured(&vault));
+        // An empty env lookup: the machine's real OPENAI/ANTHROPIC vars must
+        // not leak into the assertions.
+        let configured = |v: &Path| key_configured_with(v, |_| None);
+        assert!(!configured(&vault));
         std::fs::write(
             vault.join(".ovp/providers.toml"),
             "[env]\nANTHROPIC_API_KEY = \"sk-from-file\"\n",
         )
         .unwrap();
-        assert!(api_key_configured(&vault));
+        assert!(configured(&vault));
         // OpenAI selected: a leftover Anthropic key is NOT readiness …
         std::fs::write(
             vault.join(".ovp/providers.toml"),
             "[env]\nANTHROPIC_API_KEY = \"sk-from-file\"\nOVP_LLM_PROVIDER = \"openai\"\n",
         )
         .unwrap();
-        assert!(!api_key_configured(&vault));
+        assert!(!configured(&vault));
         // … and the OpenAI key alone is.
         std::fs::write(
             vault.join(".ovp/providers.toml"),
             "[env]\nOVP_LLM_PROVIDER = \"openai\"\nOPENAI_API_KEY = \"sk-oai\"\n",
         )
         .unwrap();
-        assert!(api_key_configured(&vault));
+        assert!(configured(&vault));
+        // The env wins over the file, as in the live builder.
+        let env_says_anthropic =
+            |k: &str| (k == "OVP_LLM_PROVIDER").then(|| "anthropic".to_string());
+        assert!(!key_configured_with(&vault, env_says_anthropic));
         let _ = std::fs::remove_dir_all(&vault);
     }
 

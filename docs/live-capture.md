@@ -125,8 +125,15 @@ Behavior worth knowing (all verified live against `gpt-6-luna`, 2026-11-17):
   rejects `temperature`, the client resends once without it and omits it for
   the rest of that process (one stderr line). Cassette keys are unaffected.
 - **Budget**: `max_output_tokens` includes hidden reasoning tokens; an answer
-  that never arrives because reasoning used the budget is a retryable
-  `BudgetExhausted` (raise `OVP_LLM_MAX_TOKENS`).
+  that never arrives because reasoning used the budget is a `BudgetExhausted`.
+  Scheduled jobs and the portal (`build_recording_live_client`) retry it once
+  at a doubled budget; the bounded MCP path
+  (`build_recording_live_client_bounded`) does not escalate by design — raise
+  `OVP_LLM_MAX_TOKENS` yourself if Ask over MCP hits it.
+- **Rate limits**: a 429 (`rate_limit_exceeded`, `slow_down`) is retried like
+  any transient failure; a 429 `insufficient_quota` is not.
+- **Refusals** come back as the reply text under a refusal stop reason (Ask
+  shows them), not as a decode failure.
 - `insufficient_quota` is **not** retried; `rate_limit_exceeded` and 5xx are.
 - Proxy: `OVP_LLM_NO_PROXY=1` was right for MiniMax, but `api.openai.com` may
   need the ambient proxy — set it to `0` (or remove it) when switching.

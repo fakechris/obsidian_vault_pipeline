@@ -250,16 +250,24 @@ pub fn parse_openai_reply(json_body: &str) -> Result<ModelReply, CallError> {
                 ),
             });
         }
-        let detail = if refusal.is_empty() {
-            format!(
-                "no_text_content_blocks: response had no output text (status={})",
-                status.unwrap_or("unknown")
-            )
-        } else {
-            format!("model refused: {}", refusal.chars().take(300).collect::<String>())
-        };
-        return Err(CallError::Decode { detail });
+        if refusal.is_empty() {
+            return Err(CallError::Decode {
+                detail: format!(
+                    "no_text_content_blocks: response had no output text (status={})",
+                    status.unwrap_or("unknown")
+                ),
+            });
+        }
     }
+    // A refusal is an ANSWER, as on the Anthropic path: its explanation is
+    // the reply text under StopReason::Refusal (never a final success), so
+    // the agent loop can show it instead of reporting a model failure.
+    let (text, stop_reason, raw_stop_reason) = if text.is_empty() && calls == 0 {
+        blocks.push(ReplyBlock::Text { text: refusal.clone() });
+        (refusal, StopReason::Refusal, raw_stop_reason)
+    } else {
+        (text, stop_reason, raw_stop_reason)
+    };
 
     let tokens = |key: &str| {
         v.pointer(&format!("/usage/{key}")).and_then(|n| n.as_u64()).unwrap_or(0) as u32
@@ -281,6 +289,26 @@ fn is_max_tokens(v: &serde_json::Value) -> bool {
     v.get("status").and_then(|s| s.as_str()) == Some("incomplete")
         && v.pointer("/incomplete_details/reason").and_then(|r| r.as_str())
             == Some("max_output_tokens")
+}
+
+/// Classify a non-2xx response. The structured slug is kept, except for
+/// 5xx and for a 429 that is NOT a spent quota (`slow_down`,
+/// `rate_limit_exceeded`, …): there the numeric status carries the retry
+/// posture the shared `is_transient` understands. An unstructured body
+/// falls back to the status with the (truncated) body as detail.
+pub fn http_error(status: u16, body: &str) -> CallError {
+    match parse_openai_reply(body) {
+        Err(CallError::Provider { code, detail })
+            if (500..=599).contains(&status) || (status == 429 && code != "insufficient_quota") =>
+        {
+            CallError::Provider { code: status.to_string(), detail: format!("{code}: {detail}") }
+        }
+        Err(e @ CallError::Provider { .. }) => e,
+        _ => CallError::Provider {
+            code: status.to_string(),
+            detail: body.chars().take(500).collect(),
+        },
+    }
 }
 
 /// Whether a provider error says the model rejects `temperature` (reasoning
@@ -441,23 +469,10 @@ mod live {
                     return Err(err);
                 }
             };
-            let result = if !status.is_success() {
-                match parse_openai_reply(&text) {
-                    // 5xx: the numeric status carries the retry posture.
-                    Err(CallError::Provider { code, detail }) if status.is_server_error() => {
-                        Err(CallError::Provider {
-                            code: status.as_u16().to_string(),
-                            detail: format!("{code}: {detail}"),
-                        })
-                    }
-                    Err(e @ CallError::Provider { .. }) => Err(e),
-                    _ => Err(CallError::Provider {
-                        code: status.as_u16().to_string(),
-                        detail: text.chars().take(500).collect(),
-                    }),
-                }
-            } else {
+            let result = if status.is_success() {
                 parse_openai_reply(&text)
+            } else {
+                Err(http_error(status.as_u16(), &text))
             };
             self.meter(request, started, Some(&text), &result);
             result
@@ -663,12 +678,27 @@ mod tests {
     }
 
     #[test]
-    fn refusal_without_text_is_reported() {
+    fn http_429_retries_unless_the_quota_is_spent() {
+        let slow = r#"{"error":{"message":"Please slow down","type":"rate_limit_error","code":"slow_down"}}"#;
+        let e = http_error(429, slow);
+        assert!(crate::client::is_transient(&e), "{e:?}");
+        assert_eq!(crate::client::failure_class(&e), "rate_limited");
+        let quota = r#"{"error":{"message":"quota","type":"insufficient_quota","code":"insufficient_quota"}}"#;
+        assert!(!crate::client::is_transient(&http_error(429, quota)));
+        assert!(crate::client::is_transient(&http_error(503, "<html>bad gateway</html>")));
+        let bad = r#"{"error":{"message":"bad","type":"invalid_request_error","code":"unsupported_value"}}"#;
+        assert!(matches!(http_error(400, bad), CallError::Provider { code, .. } if code == "unsupported_value"));
+    }
+
+    #[test]
+    fn refusal_is_an_answer_not_a_decode_failure() {
         let body = r#"{"model":"m","status":"completed","output":[{"type":"message","role":"assistant",
             "content":[{"type":"refusal","refusal":"I can't help with that."}]}]}"#;
-        match parse_openai_reply(body) {
-            Err(CallError::Decode { detail }) => assert!(detail.contains("refused"), "{detail}"),
-            other => panic!("{other:?}"),
-        }
+        let r = parse_openai_reply(body).unwrap();
+        assert_eq!(r.stop_reason, StopReason::Refusal);
+        assert_eq!(r.text, "I can't help with that.");
+        assert!(!r.is_final_success());
+        let empty = r#"{"model":"m","status":"completed","output":[]}"#;
+        assert!(matches!(parse_openai_reply(empty), Err(CallError::Decode { .. })));
     }
 }
