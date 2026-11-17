@@ -2164,11 +2164,12 @@ export function citationSupportMark(c: Pick<CitationDetail, 'support'>): Citatio
 export const SYSTEM_TABS = ['overview', 'runs', 'attention', 'settings'] as const;
 export type SystemTab = (typeof SYSTEM_TABS)[number];
 
-/** `?tab=` → a known tab, defaulting to the overview. */
-export function systemTabOf(param: string | null | undefined): SystemTab {
-  return (SYSTEM_TABS as readonly string[]).includes(param ?? '')
-    ? (param as SystemTab)
-    : 'overview';
+/** `?tab=` → a known tab, defaulting to the overview — except that a job
+ * deep link (`?job=<id>`, e.g. from the failing-job banner) opens Settings,
+ * where the automation panel with that job's controls lives. */
+export function systemTabOf(param: string | null | undefined, job?: string | null): SystemTab {
+  if ((SYSTEM_TABS as readonly string[]).includes(param ?? '')) return param as SystemTab;
+  return job ? 'settings' : 'overview';
 }
 
 export type AttentionGroupKey =

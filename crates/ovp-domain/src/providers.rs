@@ -386,8 +386,18 @@ fn write_file(
         for line in raw.lines() {
             let t = line.trim();
             if t.starts_with('[') {
-                keep = t != "[env]"
-                    && !(profiles.is_some() && t.starts_with("[llm_profiles."));
+                // Header spelling-insensitive (`[ env ]`, `[llm_profiles . x]`,
+                // quoted keys): a section kept under one spelling and
+                // re-rendered under another would duplicate the table.
+                let header: String = t
+                    .split('#')
+                    .next()
+                    .unwrap_or(t)
+                    .chars()
+                    .filter(|c| !c.is_whitespace() && *c != '"' && *c != '\'')
+                    .collect();
+                keep = header != "[env]"
+                    && !(profiles.is_some() && header.starts_with("[llm_profiles."));
             }
             if keep {
                 kept_sections.push_str(line);
@@ -856,6 +866,16 @@ mod tests {
         // Hand-editing [env] away from every profile → no active profile.
         env.insert("OVP_LLM_MODEL".into(), "gpt-6-sol".into());
         assert_eq!(active_llm_profile(&env, &profiles), None);
+
+        // A hand-written header with spaces/quotes is replaced, not duplicated.
+        let raw = std::fs::read_to_string(vault.join(".ovp/providers.toml")).unwrap();
+        std::fs::write(
+            vault.join(".ovp/providers.toml"),
+            raw.replace("[llm_profiles.minimax]", "[ llm_profiles . \"minimax\" ]"),
+        )
+        .unwrap();
+        write_llm_profiles(vault, &profiles).unwrap();
+        assert_eq!(read_llm_profiles(vault).unwrap(), profiles, "still parses: no duplicate table");
 
         assert!(activate_llm_profile(vault, "nope").is_err());
         let bad = BTreeMap::from([("Bad Id".to_string(), LlmProfile::default())]);

@@ -1035,7 +1035,7 @@ export default function SystemPage() {
   const { t } = useI18n();
   const { model, error, loading } = useModel();
   const [params, setParams] = useSearchParams();
-  const tab = systemTabOf(params.get('tab'));
+  const tab = systemTabOf(params.get('tab'), params.get('job'));
   const go = (next: SystemTab) => {
     const p = new URLSearchParams(params);
     if (next === 'overview') p.delete('tab');

@@ -18,6 +18,9 @@ describe('System page helpers', () => {
     expect(systemTabOf('settings')).toBe('settings');
     expect(systemTabOf('nope')).toBe('overview');
     expect(systemTabOf(null)).toBe('overview');
+    // The failing-job banner links to /system?job=<id>: open its controls.
+    expect(systemTabOf(null, 'daily')).toBe('settings');
+    expect(systemTabOf('runs', 'daily')).toBe('runs');
   });
 
   it('groups attention sources by cause (real vault reasons)', () => {
