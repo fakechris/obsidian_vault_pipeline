@@ -2158,3 +2158,110 @@ export function citationSupportMark(c: Pick<CitationDetail, 'support'>): Citatio
   if (!s?.flagged || s.support === 'supports' || s.confidence == null) return null;
   return { kind: s.support, pct: Math.round(s.confidence * 100) };
 }
+
+// ------------------------------------------------------------ System page
+
+export const SYSTEM_TABS = ['overview', 'runs', 'attention', 'settings'] as const;
+export type SystemTab = (typeof SYSTEM_TABS)[number];
+
+/** `?tab=` → a known tab, defaulting to the overview. */
+export function systemTabOf(param: string | null | undefined): SystemTab {
+  return (SYSTEM_TABS as readonly string[]).includes(param ?? '')
+    ? (param as SystemTab)
+    : 'overview';
+}
+
+export type AttentionGroupKey =
+  | 'needs_content'
+  | 'quota'
+  | 'network'
+  | 'extraction'
+  | 'provider'
+  | 'other';
+
+/** Why a source needs the operator, by cause — so dozens of near-identical
+ * cards collapse into a handful of rows. Pattern-matched on the recorded
+ * failure reason; anything unrecognised stays visible under `other`. */
+export function attentionGroupKey(s: SourceRow): AttentionGroupKey {
+  if (s.status === 'needs_content') return 'needs_content';
+  const r = (s.last_reason ?? '').toLowerCase();
+  if (/rate_limit|quota|insufficient_quota|token plan|用量上限|额度/.test(r)) return 'quota';
+  if (/transport|error sending request|timed out|timeout|connection/.test(r)) return 'network';
+  if (/truth-layer|units extracted|did not parse|reader cards produced/.test(r)) {
+    return 'extraction';
+  }
+  if (/provider error|api_error/.test(r)) return 'provider';
+  return 'other';
+}
+
+/** Groups in descending size (ties by key), each keeping input order. */
+export function attentionGroups(
+  sources: SourceRow[],
+): { key: AttentionGroupKey; sources: SourceRow[] }[] {
+  const by = new Map<AttentionGroupKey, SourceRow[]>();
+  for (const s of sources) {
+    const k = attentionGroupKey(s);
+    const list = by.get(k);
+    if (list) list.push(s);
+    else by.set(k, [s]);
+  }
+  return [...by.entries()]
+    .map(([key, list]) => ({ key, sources: list }))
+    .sort((a, b) => b.sources.length - a.sources.length || a.key.localeCompare(b.key));
+}
+
+export type LlmProviderKind = 'anthropic' | 'openai';
+
+/** What a saved profile (or the live env) points at, for one-line display. */
+export function llmSetupSummary(env: Record<string, string>): {
+  provider: LlmProviderKind;
+  model: string;
+  endpoint: string;
+} {
+  const provider: LlmProviderKind =
+    (env.OVP_LLM_PROVIDER ?? '').trim().toLowerCase() === 'openai' ? 'openai' : 'anthropic';
+  const endpoint =
+    provider === 'openai'
+      ? env.OPENAI_BASE_URL || 'https://api.openai.com/v1/responses'
+      : env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com/v1/messages';
+  return { provider, model: env.OVP_LLM_MODEL ?? '', endpoint };
+}
+
+export interface LlmProfileForm {
+  provider: LlmProviderKind;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  noProxy: boolean;
+}
+
+/** The `set` payload for a profile save: the chosen provider's variables,
+ * and EMPTY values for the other provider's, so a profile switched from
+ * Anthropic-compatible to OpenAI (or back) carries no stale key/endpoint. */
+export function llmProfileSet(form: LlmProfileForm): Record<string, string> {
+  const openai = form.provider === 'openai';
+  return {
+    OVP_LLM_PROVIDER: openai ? 'openai' : '',
+    OPENAI_API_KEY: openai ? form.apiKey : '',
+    OPENAI_BASE_URL: openai ? form.baseUrl : '',
+    ANTHROPIC_API_KEY: openai ? '' : form.apiKey,
+    ANTHROPIC_BASE_URL: openai ? '' : form.baseUrl,
+    OVP_LLM_MODEL: form.model,
+    OVP_LLM_NO_PROXY: form.noProxy ? '1' : '',
+  };
+}
+
+/** A profile id from a display label: lowercase a-z0-9 joined by `-`,
+ * ≤ 40 chars; falls back to `profile-<n>` when nothing usable remains
+ * (e.g. an all-CJK label), avoiding ids already taken. */
+export function profileIdFor(label: string, taken: string[]): string {
+  const base =
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 34) || 'profile';
+  let id = base;
+  for (let n = 2; taken.includes(id); n += 1) id = `${base}-${n}`;
+  return id;
+}

@@ -26,16 +26,18 @@ pub fn api_key_configured(vault_root: &Path) -> bool {
     key_configured_with(vault_root, |k| std::env::var(k).ok())
 }
 
-/// [`api_key_configured`] with an injected process-env lookup (env wins over
-/// the file, as in [`provider_lookup`]) — testable without touching the
+/// [`api_key_configured`] with an injected process-env lookup (same layering
+/// as [`provider_lookup`]) — testable without touching the
 /// shared process environment.
 fn key_configured_with(vault_root: &Path, env: impl Fn(&str) -> Option<String>) -> bool {
     let file = ovp_domain::providers::read_providers_file(vault_root).unwrap_or_default();
     ovp_llm::resolve_api_key(|name: &str| {
-        env(name)
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .or_else(|| file.get(name).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+        ovp_domain::providers::layered_value(
+            name,
+            &file,
+            &env,
+            ovp_domain::providers::seeded_from_file,
+        )
     })
     .is_ok()
 }
@@ -108,22 +110,21 @@ fn build_ask_client_bounded(
     )
 }
 
-/// Env-over-file lookup matching `apply_providers_env` semantics without
-/// mutating the process environment.
+/// Env-over-file lookup without mutating the process environment — except
+/// that a variable this process merely COPIED from providers.toml at startup
+/// is re-read from the file, so an LLM switch applies without a restart
+/// (`ovp2 serve` seeds its env; the desktop app does not).
 #[cfg(feature = "anthropic")]
 fn provider_lookup(
     file: &std::collections::BTreeMap<String, String>,
 ) -> impl Fn(&str) -> Option<String> + '_ {
     move |name: &str| {
-        if let Ok(v) = std::env::var(name) {
-            let t = v.trim();
-            if !t.is_empty() {
-                return Some(t.to_string());
-            }
-        }
-        file.get(name)
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
+        ovp_domain::providers::layered_value(
+            name,
+            file,
+            |k| std::env::var(k).ok(),
+            ovp_domain::providers::seeded_from_file,
+        )
     }
 }
 

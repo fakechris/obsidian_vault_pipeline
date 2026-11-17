@@ -270,8 +270,50 @@ export function fetchIndexRebuildStatus(): Promise<IndexRebuildStatus> {
 }
 
 /** LLM provider config (a GUI over .ovp/providers.toml; secrets masked). */
+export interface LlmProfile {
+  id: string;
+  label: string;
+  /** Secrets masked (`••••<last 4>`); a masked value sent back = unchanged. */
+  env: Record<string, string>;
+  /** The profile whose LLM variables match the live `[env]` (derived). */
+  active: boolean;
+}
+
 export interface ProvidersPayload {
   env: Record<string, string>;
+  /** Absent from servers that predate saved profiles. */
+  profiles?: LlmProfile[];
+  active_profile?: string | null;
+}
+
+async function postProviders(path: string, body: unknown): Promise<void> {
+  const resp = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const b = (await resp.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `request failed (${resp.status})`);
+  }
+}
+
+/** Create or update a saved LLM setup. Editing the active one also updates
+ * the live config server-side. */
+export function saveLlmProfile(
+  id: string,
+  label: string,
+  set: Record<string, string>,
+): Promise<void> {
+  return postProviders('/api/providers/profiles', { id, label, set });
+}
+
+export function activateLlmProfile(id: string): Promise<void> {
+  return postProviders('/api/providers/profiles/activate', { id });
+}
+
+export function deleteLlmProfile(id: string): Promise<void> {
+  return postProviders('/api/providers/profiles/delete', { id });
 }
 export function fetchProviders(): Promise<ProvidersPayload> {
   return fetchJson<ProvidersPayload>('/api/providers');
