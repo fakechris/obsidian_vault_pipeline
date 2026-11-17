@@ -167,8 +167,34 @@ pub fn write_llm_profiles(
             return Err(format!("`{id}` is not a valid profile id (a-z, 0-9, _ or -)"));
         }
     }
-    let env = read_providers_file(vault_root)?;
+    let env = env_or_legacy(vault_root)?;
     write_file(vault_root, &env, Some(profiles))
+}
+
+/// `[env]` to write back: the file's, or — when providers.toml does not
+/// exist yet — the legacy `daily.env` it supersedes. Creating providers.toml
+/// makes the scheduler stop sourcing daily.env, so a first write that
+/// started from an empty `[env]` would silently strip scheduled jobs of
+/// their credentials.
+fn env_or_legacy(vault_root: &Path) -> Result<BTreeMap<String, String>, String> {
+    if vault_root.join(".ovp/providers.toml").exists() {
+        read_providers_file(vault_root)
+    } else {
+        Ok(read_legacy_daily_env(vault_root))
+    }
+}
+
+/// Replace the live LLM setup: `llm` becomes the [`LLM_PROFILE_KEYS`] part of
+/// `[env]`; every other `[env]` entry stays.
+pub fn set_live_llm_env(vault_root: &Path, llm: &BTreeMap<String, String>) -> Result<(), String> {
+    let mut env = env_or_legacy(vault_root)?;
+    env.retain(|k, _| !LLM_PROFILE_KEYS.contains(&k.as_str()));
+    env.extend(
+        llm.iter()
+            .filter(|(k, _)| LLM_PROFILE_KEYS.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone())),
+    );
+    write_providers_file(vault_root, &env)
 }
 
 /// Make `id` the live LLM setup: its variables replace every
@@ -176,10 +202,7 @@ pub fn write_llm_profiles(
 pub fn activate_llm_profile(vault_root: &Path, id: &str) -> Result<(), String> {
     let profiles = read_llm_profiles(vault_root)?;
     let profile = profiles.get(id).ok_or_else(|| format!("no LLM profile `{id}`"))?;
-    let mut env = read_providers_file(vault_root)?;
-    env.retain(|k, _| !LLM_PROFILE_KEYS.contains(&k.as_str()));
-    env.extend(profile.env.clone());
-    write_providers_file(vault_root, &env)
+    set_live_llm_env(vault_root, &profile.env)
 }
 
 /// `[budget]` — soft per-day token budget, surfaced by `ovp2 usage` as a
@@ -386,18 +409,14 @@ fn write_file(
         for line in raw.lines() {
             let t = line.trim();
             if t.starts_with('[') {
-                // Header spelling-insensitive (`[ env ]`, `[llm_profiles . x]`,
-                // quoted keys): a section kept under one spelling and
-                // re-rendered under another would duplicate the table.
-                let header: String = t
-                    .split('#')
-                    .next()
-                    .unwrap_or(t)
-                    .chars()
-                    .filter(|c| !c.is_whitespace() && *c != '"' && *c != '\'')
-                    .collect();
-                keep = header != "[env]"
-                    && !(profiles.is_some() && header.starts_with("[llm_profiles."));
+                // Header spelling-insensitive (`[ env ]`, `[llm_profiles . x]`)
+                // but quote-aware: `["llm_profiles.x"]` is ONE literal key,
+                // not a profile. The parent `[llm_profiles]` block goes too
+                // when regenerating — it may hold inline-table profiles,
+                // which would otherwise be kept AND re-rendered.
+                let header = header_path(t);
+                let is_profile = header.first().map(String::as_str) == Some("llm_profiles");
+                keep = header != ["env"] && !(profiles.is_some() && is_profile);
             }
             if keep {
                 kept_sections.push_str(line);
@@ -449,6 +468,30 @@ fn write_file(
     #[cfg(not(unix))]
     std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
     Ok(())
+}
+
+/// The key path of a `[table]` header line: dotted parts with surrounding
+/// whitespace removed and quotes resolved (`[ "a.b" . c ]` → `["a.b", "c"]`).
+/// Not a full TOML parser — escapes inside quoted keys are kept verbatim,
+/// which is enough to tell our sections apart.
+fn header_path(line: &str) -> Vec<String> {
+    let inner = line.trim().trim_start_matches('[').trim_end_matches(']');
+    let inner = inner.split('#').next().unwrap_or(inner);
+    let mut parts = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    for c in inner.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.push(c),
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '.') => parts.push(std::mem::take(&mut cur)),
+            (None, c) if c.is_whitespace() || c == ']' => {}
+            (None, c) => cur.push(c),
+        }
+    }
+    parts.push(cur);
+    parts
 }
 
 /// A TOML basic-string literal for `v` (serde_toml handles the escaping).
@@ -771,6 +814,21 @@ mod tests {
     }
 
     #[test]
+    fn first_profile_save_migrates_legacy_daily_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        std::fs::create_dir_all(vault.join(".ovp")).unwrap();
+        std::fs::write(vault.join(".ovp/daily.env"), "export ANTHROPIC_API_KEY=sk-legacy\nPINBOARD_TOKEN=u:1\n").unwrap();
+        let p = BTreeMap::from([("a".to_string(), LlmProfile { label: "A".into(), env: env_of(&[("ANTHROPIC_API_KEY", "sk-legacy")]) })]);
+        write_llm_profiles(vault, &p).unwrap();
+        // providers.toml now exists (daily.env stops being sourced), so its
+        // [env] must carry what daily.env did.
+        let env = read_providers_file(vault).unwrap();
+        assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("sk-legacy"));
+        assert_eq!(env.get("PINBOARD_TOKEN").map(String::as_str), Some("u:1"));
+    }
+
+    #[test]
     fn layered_value_rereads_startup_copies_but_honours_real_overrides() {
         let file = env_of(&[("OVP_LLM_MODEL", "gpt-6-luna"), ("OVP_LLM_PROVIDER", "openai")]);
         // The process env still holds the STARTUP copy of the old setup.
@@ -876,6 +934,20 @@ mod tests {
         .unwrap();
         write_llm_profiles(vault, &profiles).unwrap();
         assert_eq!(read_llm_profiles(vault).unwrap(), profiles, "still parses: no duplicate table");
+
+        // Inline-table profiles under the parent table are replaced, not
+        // duplicated; a quoted dotted key is NOT a profile and is kept.
+        std::fs::write(
+            vault.join(".ovp/providers.toml"),
+            "[env]\nGITHUB_TOKEN = \"ghp\"\n\n[llm_profiles]\nold = { label = \"Old\", ANTHROPIC_API_KEY = \"k\" }\n\n[\"llm_profiles.backup\"]\nnote = \"keep me\"\n",
+        )
+        .unwrap();
+        assert!(read_llm_profiles(vault).unwrap().contains_key("old"));
+        write_llm_profiles(vault, &profiles).unwrap();
+        assert_eq!(read_llm_profiles(vault).unwrap(), profiles, "old inline profile replaced, file parses");
+        let raw = std::fs::read_to_string(vault.join(".ovp/providers.toml")).unwrap();
+        assert!(raw.contains("keep me"), "quoted dotted key is not a profile: {raw}");
+        assert_eq!(header_path("[ \"a.b\" . c ] # x"), vec!["a.b", "c"]);
 
         assert!(activate_llm_profile(vault, "nope").is_err());
         let bad = BTreeMap::from([("Bad Id".to_string(), LlmProfile::default())]);

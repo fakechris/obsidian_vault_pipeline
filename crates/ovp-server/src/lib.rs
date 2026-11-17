@@ -2586,13 +2586,16 @@ fn handle_profile_save(state: &AppState, body: &str) -> Response<std::io::Cursor
         let body = serde_json::json!({ "error": format!("{var} is required for this setup") });
         return json_response(400, &body.to_string());
     }
-    profiles.insert(id.clone(), profile);
-    if let Err(e) = prov::write_llm_profiles(&state.vault_root, &profiles) {
+    // Live config FIRST when editing the active setup: if the profile write
+    // then fails, [env] already equals the edited setup, so a retry finds it
+    // active again and completes — never "saved" with a stale live config.
+    if was_active
+        && let Err(e) = prov::set_live_llm_env(&state.vault_root, &profile.env)
+    {
         return provider_error(e);
     }
-    if was_active
-        && let Err(e) = prov::activate_llm_profile(&state.vault_root, &id)
-    {
+    profiles.insert(id.clone(), profile);
+    if let Err(e) = prov::write_llm_profiles(&state.vault_root, &profiles) {
         return provider_error(e);
     }
     json_response(200, &serde_json::json!({ "saved": true, "id": id }).to_string())

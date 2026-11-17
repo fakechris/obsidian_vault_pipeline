@@ -432,8 +432,12 @@ function ProfileEditor({
       ...draft,
       preset: id,
       provider: p.provider,
-      // Another provider's (masked) key is no credential for this one.
-      apiKey: p.provider === draft.provider ? draft.apiKey : '',
+      // A key belongs to one endpoint: never carry it to another provider
+      // or another Anthropic-compatible vendor (MiniMax → Kimi).
+      apiKey:
+        p.provider === draft.provider && p.base_url === draft.baseUrl && p.id !== 'custom'
+          ? draft.apiKey
+          : '',
       baseUrl: p.id === 'custom' ? draft.baseUrl : p.base_url,
       model: p.model || draft.model,
       label: draft.label || p.label,
@@ -1038,6 +1042,9 @@ export default function SystemPage() {
   const tab = systemTabOf(params.get('tab'), params.get('job'));
   const go = (next: SystemTab) => {
     const p = new URLSearchParams(params);
+    // An explicit tab click ends a job deep link (?job= would otherwise
+    // keep resolving to Settings).
+    p.delete('job');
     if (next === 'overview') p.delete('tab');
     else p.set('tab', next);
     setParams(p, { replace: true });
@@ -1078,8 +1085,9 @@ export default function SystemPage() {
         </>
       ) : (
         <>
-          {/* Run now + live activity must work with NO index — starting a
-              run is how a missing index gets rebuilt (codex P2). */}
+          {/* Run now must work with NO index — starting a run is how a
+              missing index gets rebuilt (codex P2). Live activity reads the
+              model, so it only shows once an index exists. */}
           {tab === 'runs' && (
             <>
               <RunNowSection />
