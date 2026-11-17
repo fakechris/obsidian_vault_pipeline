@@ -622,7 +622,7 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
         return Err(RpcError {
             code: -32000,
             message: "ask is not configured — run ovp2 built with `--features anthropic` \
-                      and set an API key via System → LLM Provider (or ANTHROPIC_API_KEY)"
+                      and set an API key via System → LLM Provider (or ANTHROPIC_API_KEY / OPENAI_API_KEY with OVP_LLM_PROVIDER=openai)"
                 .into(),
         });
     };
@@ -631,7 +631,8 @@ fn tool_ask(state: &McpState, args: &Value) -> Result<Value, RpcError> {
             RpcError {
                 code: -32000,
                 message: "ask is not configured — set an API key via System → LLM Provider \
-                          (or ANTHROPIC_API_KEY); no restart needed after save"
+                          (or ANTHROPIC_API_KEY / OPENAI_API_KEY with OVP_LLM_PROVIDER=openai); \
+                          no restart needed after save"
                     .into(),
             }
         } else {

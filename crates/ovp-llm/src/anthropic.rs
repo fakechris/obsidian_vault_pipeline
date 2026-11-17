@@ -26,7 +26,7 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// `ToolResults` never appears without such a turn. Anthropic 4xxes these
 /// shapes; failing loudly here turns a silent invalid request into a caller
 /// bug with a precise message.
-fn validate_tool_protocol(messages: &[ModelMessage]) -> Result<(), CallError> {
+pub(crate) fn validate_tool_protocol(messages: &[ModelMessage]) -> Result<(), CallError> {
     let violation = |detail: String| CallError::Protocol { detail };
     // ids emitted by the previous assistant turn, still awaiting results
     let mut pending: Option<Vec<String>> = None;
@@ -324,7 +324,7 @@ fn map_stop_reason(s: Option<&str>) -> (StopReason, Option<String>) {
 }
 
 #[cfg(feature = "anthropic")]
-pub use live::AnthropicBlockingClient;
+pub use live::{AnthropicBlockingClient, DEFAULT_TIMEOUT_SECS};
 
 #[cfg(feature = "anthropic")]
 mod live {

@@ -1,4 +1,7 @@
-//! Live Anthropic-compatible client construction (feature = `anthropic`).
+//! Live client construction (feature = `anthropic`, which only gates
+//! `reqwest`): Anthropic-compatible Messages endpoints (Anthropic, MiniMax,
+//! Kimi, GLM, DeepSeek …) or the OpenAI Responses API, picked by
+//! `OVP_LLM_PROVIDER`.
 //!
 //! Shared by the CLI (`--client live`), `ovp2 serve` / MCP ask factories, and
 //! the desktop in-process portal. Config is resolved via an injected lookup so
@@ -11,12 +14,12 @@ use std::time::Duration;
 
 use crate::anthropic::AnthropicBlockingClient;
 use crate::cache::{CacheMode, CachedModelClient};
-use crate::client::{BudgetEscalatingModelClient, ModelClient, RetryingModelClient};
+use crate::client::{BudgetEscalatingModelClient, CallError, ModelClient, RetryingModelClient};
+use crate::openai::OpenAiBlockingClient;
+pub use crate::provider::{resolve_api_key, LlmProvider, LLM_NOT_CONFIGURED};
+use crate::reply::ModelReply;
+use crate::request::ModelRequest;
 
-/// Stable machine-readable error when no API key is available. Servers map
-/// this to HTTP 503 `llm_not_configured` so the portal can show setup guidance
-/// instead of a generic 502.
-pub const LLM_NOT_CONFIGURED: &str = "llm_not_configured";
 
 /// Validated config for an Anthropic-**compatible** live provider (e.g. MiniMax).
 /// All fields are optional — absent leaves the real-Anthropic defaults baked
@@ -32,8 +35,16 @@ pub const LLM_NOT_CONFIGURED: &str = "llm_not_configured";
 /// - `OVP_LLM_NO_PROXY` — boolean; bypass ambient `HTTP(S)_PROXY` for the live
 ///   HTTP client ONLY.
 /// - `OVP_LLM_TIMEOUT_SECS` — non-negative integer request timeout.
+/// - `OVP_LLM_PROVIDER` — `anthropic` (default) or `openai`. With `openai`
+///   the key is `OPENAI_API_KEY` and the endpoint `OPENAI_BASE_URL` (the FULL
+///   Responses URL, default `https://api.openai.com/v1/responses`);
+///   `ANTHROPIC_*` values are ignored, so switching back loses nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LiveClientConfig {
+    /// `OVP_LLM_PROVIDER` — wire protocol; absent = Anthropic.
+    pub provider: LlmProvider,
+    /// The provider's full endpoint: `ANTHROPIC_BASE_URL` (…`/messages`) or
+    /// `OPENAI_BASE_URL` (…`/responses`), per `provider`.
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub max_tokens: Option<u32>,
@@ -77,12 +88,22 @@ impl LiveClientConfig {
                 }
             },
         };
-        let base_url = match nonempty("ANTHROPIC_BASE_URL") {
-            None => None,
-            Some(u) => {
-                validate_messages_endpoint(&u)?;
-                Some(u)
-            }
+        let provider = LlmProvider::from_lookup(&lookup)?;
+        let base_url = match provider {
+            LlmProvider::Anthropic => match nonempty("ANTHROPIC_BASE_URL") {
+                None => None,
+                Some(u) => {
+                    validate_endpoint("ANTHROPIC_BASE_URL", &u, "/messages")?;
+                    Some(u)
+                }
+            },
+            LlmProvider::OpenAi => match nonempty("OPENAI_BASE_URL") {
+                None => None,
+                Some(u) => {
+                    validate_endpoint("OPENAI_BASE_URL", &u, "/responses")?;
+                    Some(u)
+                }
+            },
         };
         let timeout_secs = match nonempty("OVP_LLM_TIMEOUT_SECS") {
             None => None,
@@ -94,6 +115,7 @@ impl LiveClientConfig {
             }
         };
         Ok(Self {
+            provider,
             base_url,
             model: nonempty("OVP_LLM_MODEL"),
             max_tokens,
@@ -103,14 +125,13 @@ impl LiveClientConfig {
     }
 }
 
-/// Validate that `ANTHROPIC_BASE_URL` is the FULL Messages endpoint (path ends
-/// in `/messages`), not a root/base URL — so a misconfig fails loud at startup
-/// rather than on the first live call.
-fn validate_messages_endpoint(url: &str) -> Result<(), String> {
+/// Validate that a provider URL is its FULL endpoint (path ends in `suffix`:
+/// `/messages` for Anthropic-compatible, `/responses` for OpenAI),
+/// not a root/base URL — so a misconfig fails loud at startup rather than on
+/// the first live call.
+fn validate_endpoint(var: &str, url: &str, suffix: &str) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(format!(
-            "ANTHROPIC_BASE_URL must be an http(s) URL, got `{url}`"
-        ));
+        return Err(format!("{var} must be an http(s) URL, got `{url}`"));
     }
     let after_scheme = url.split_once("://").map(|x| x.1).unwrap_or("");
     let path = match after_scheme.find('/') {
@@ -122,14 +143,74 @@ fn validate_messages_endpoint(url: &str) -> Result<(), String> {
         .next()
         .unwrap_or(path)
         .trim_end_matches('/');
-    if !path.ends_with("/messages") {
+    if !path.ends_with(suffix) {
+        let example = if suffix == "/messages" {
+            "e.g. https://api.anthropic.com/v1/messages or \
+             https://api.minimaxi.com/anthropic/v1/messages"
+        } else {
+            "e.g. https://api.openai.com/v1/responses"
+        };
         return Err(format!(
-            "ANTHROPIC_BASE_URL must be the full Messages endpoint ending in `/messages` \
-             (e.g. https://api.anthropic.com/v1/messages or \
-             https://api.minimaxi.com/anthropic/v1/messages), got `{url}`"
+            "{var} must be the full endpoint ending in `{suffix}` ({example}), got `{url}`"
         ));
     }
     Ok(())
+}
+
+/// The provider-selected HTTP client. One concrete type so the retry /
+/// budget-escalation / cassette wrappers stay generic and unchanged.
+pub enum LiveHttpClient {
+    Anthropic(AnthropicBlockingClient),
+    OpenAi(OpenAiBlockingClient),
+}
+
+impl ModelClient for LiveHttpClient {
+    fn call(&mut self, request: &ModelRequest) -> Result<ModelReply, CallError> {
+        match self {
+            Self::Anthropic(c) => c.call(request),
+            Self::OpenAi(c) => c.call(request),
+        }
+    }
+}
+
+/// Build the provider's HTTP client with every knob from `cfg`.
+fn live_http_client(
+    api_key: &str,
+    cfg: &LiveClientConfig,
+    usage_ledger: Option<&Path>,
+) -> LiveHttpClient {
+    macro_rules! configure {
+        ($client:expr) => {{
+            let mut c = $client;
+            if let Some(url) = cfg.base_url.as_ref() {
+                c = c.with_base_url(url.clone());
+            }
+            if let Some(model) = cfg.model.as_ref() {
+                c = c.with_model_override(model.clone());
+            }
+            if let Some(mt) = cfg.max_tokens {
+                c = c.with_max_tokens(mt);
+            }
+            if cfg.no_proxy {
+                c = c.with_no_proxy();
+            }
+            if let Some(secs) = cfg.timeout_secs {
+                c = c.with_timeout(secs);
+            }
+            if let Some(dir) = usage_ledger {
+                c = c.with_usage_ledger(dir);
+            }
+            c
+        }};
+    }
+    match cfg.provider {
+        LlmProvider::Anthropic => {
+            LiveHttpClient::Anthropic(configure!(AnthropicBlockingClient::new(api_key)))
+        }
+        LlmProvider::OpenAi => {
+            LiveHttpClient::OpenAi(configure!(OpenAiBlockingClient::new(api_key)))
+        }
+    }
 }
 
 /// Bounded retry budget for transient live failures (transport / 429 / 5xx).
@@ -160,25 +241,7 @@ pub fn build_recording_live_client(
     if api_key.trim().is_empty() {
         return Err(LLM_NOT_CONFIGURED.into());
     }
-    let mut live = AnthropicBlockingClient::new(api_key);
-    if let Some(url) = cfg.base_url.as_ref() {
-        live = live.with_base_url(url.clone());
-    }
-    if let Some(model) = cfg.model.as_ref() {
-        live = live.with_model_override(model.clone());
-    }
-    if let Some(mt) = cfg.max_tokens {
-        live = live.with_max_tokens(mt);
-    }
-    if cfg.no_proxy {
-        live = live.with_no_proxy();
-    }
-    if let Some(secs) = cfg.timeout_secs {
-        live = live.with_timeout(secs);
-    }
-    if let Some(dir) = usage_ledger {
-        live = live.with_usage_ledger(dir);
-    }
+    let live = live_http_client(api_key, cfg, usage_ledger);
     let retrying = RetryingModelClient::new(live, LIVE_MAX_RETRIES, LIVE_RETRY_BACKOFF);
     let escalated = cfg
         .max_tokens
@@ -212,25 +275,7 @@ pub fn build_recording_live_client_bounded(
     if api_key.trim().is_empty() {
         return Err(LLM_NOT_CONFIGURED.into());
     }
-    let mut live = AnthropicBlockingClient::new(api_key);
-    if let Some(url) = bounded.base_url.as_ref() {
-        live = live.with_base_url(url.clone());
-    }
-    if let Some(model) = bounded.model.as_ref() {
-        live = live.with_model_override(model.clone());
-    }
-    if let Some(mt) = bounded.max_tokens {
-        live = live.with_max_tokens(mt);
-    }
-    if bounded.no_proxy {
-        live = live.with_no_proxy();
-    }
-    if let Some(secs) = bounded.timeout_secs {
-        live = live.with_timeout(secs);
-    }
-    if let Some(dir) = usage_ledger {
-        live = live.with_usage_ledger(dir);
-    }
+    let live = live_http_client(api_key, &bounded, usage_ledger);
     let retrying = RetryingModelClient::new(live, max_retries, LIVE_RETRY_BACKOFF);
     // NO budget escalation here: it silently issues a SECOND provider
     // request on BudgetExhausted, doubling the blocking window the whole
@@ -250,17 +295,6 @@ pub fn clamp_timeout(configured: Option<u64>, cap_secs: u64) -> u64 {
         .unwrap_or(cap_secs)
         .min(cap_secs)
         .max(1)
-}
-
-/// Resolve a non-empty API key from a lookup. Missing / blank → [`LLM_NOT_CONFIGURED`].
-pub fn resolve_api_key(lookup: impl Fn(&str) -> Option<String>) -> Result<String, String> {
-    match lookup("ANTHROPIC_API_KEY")
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-    {
-        Some(k) => Ok(k),
-        None => Err(LLM_NOT_CONFIGURED.into()),
-    }
 }
 
 #[cfg(test)]
@@ -396,5 +430,61 @@ mod tests {
             .unwrap(),
             "sk-test"
         );
+    }
+
+    #[test]
+    fn openai_provider_reads_its_own_endpoint_and_ignores_anthropic_values() {
+        let c = cfg(&[
+            ("OVP_LLM_PROVIDER", "OpenAI"),
+            ("OVP_LLM_MODEL", "gpt-6-luna"),
+            // left over from the Anthropic-compatible setup: must not leak in
+            ("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic/v1/messages"),
+        ])
+        .unwrap();
+        assert_eq!(c.provider, LlmProvider::OpenAi);
+        assert_eq!(c.base_url, None, "default OpenAI endpoint");
+        assert_eq!(c.model.as_deref(), Some("gpt-6-luna"));
+        let c = cfg(&[
+            ("OVP_LLM_PROVIDER", "openai"),
+            ("OPENAI_BASE_URL", "https://gateway.example/v1/responses"),
+        ])
+        .unwrap();
+        assert_eq!(c.base_url.as_deref(), Some("https://gateway.example/v1/responses"));
+        assert!(cfg(&[("OVP_LLM_PROVIDER", "openai"), ("OPENAI_BASE_URL", "https://api.openai.com/v1")]).is_err());
+        assert!(cfg(&[("OVP_LLM_PROVIDER", "gemini")]).is_err(), "unknown provider fails loud");
+        assert_eq!(cfg(&[("OVP_LLM_PROVIDER", " ")]).unwrap().provider, LlmProvider::Anthropic);
+    }
+
+    #[test]
+    fn api_key_follows_the_provider() {
+        let env = |provider: Option<&'static str>| {
+            move |k: &str| match k {
+                "OVP_LLM_PROVIDER" => provider.map(String::from),
+                "ANTHROPIC_API_KEY" => Some("sk-ant".to_string()),
+                "OPENAI_API_KEY" => Some("sk-oai".to_string()),
+                _ => None,
+            }
+        };
+        assert_eq!(resolve_api_key(env(None)).unwrap(), "sk-ant");
+        assert_eq!(resolve_api_key(env(Some("openai"))).unwrap(), "sk-oai");
+        let only_ant = |k: &str| match k {
+            "OVP_LLM_PROVIDER" => Some("openai".to_string()),
+            "ANTHROPIC_API_KEY" => Some("sk-ant".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            resolve_api_key(only_ant).unwrap_err(),
+            LLM_NOT_CONFIGURED,
+            "never sends the Anthropic key to OpenAI"
+        );
+    }
+
+    #[test]
+    fn builder_picks_the_client_by_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let oai = cfg(&[("OVP_LLM_PROVIDER", "openai")]).unwrap();
+        assert!(matches!(live_http_client("k", &oai, None), LiveHttpClient::OpenAi(_)));
+        assert!(matches!(live_http_client("k", &LiveClientConfig::default(), None), LiveHttpClient::Anthropic(_)));
+        assert!(build_recording_live_client("k", &oai, dir.path(), "ns", None).is_ok());
     }
 }

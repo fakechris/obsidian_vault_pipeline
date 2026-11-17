@@ -101,6 +101,54 @@ set -a && . ./.env.live && set +a
 cargo run -p ovp-cli --features anthropic -- run-cycle --client live ...
 ```
 
+### OpenAI (Responses API)
+
+Set `OVP_LLM_PROVIDER=openai` to switch every live call — daily, crystallize,
+themes, translations, Ask — to OpenAI's Responses API (`POST /v1/responses`).
+`ANTHROPIC_*` values are ignored while it is set, so switching back loses
+nothing. `OVP_LLM_MODEL`, `OVP_LLM_MAX_TOKENS`, `OVP_LLM_NO_PROXY` and
+`OVP_LLM_TIMEOUT_SECS` apply to either provider.
+
+| Variable | Meaning |
+|---|---|
+| `OVP_LLM_PROVIDER` | `anthropic` (default; also every Anthropic-compatible endpoint) or `openai`. Anything else is a startup error. |
+| `OPENAI_API_KEY` | API key used when the provider is `openai` (the Anthropic key is never sent to OpenAI). |
+| `OPENAI_BASE_URL` | Optional **full Responses endpoint** ending in `/responses`. Absent → `https://api.openai.com/v1/responses`. |
+
+Behavior worth knowing (all verified live against `gpt-6-luna`, 2026-11-17):
+
+- **Responses, not Chat Completions**: on `/v1/chat/completions`, `gpt-6-luna`
+  rejects function tools while reasoning is on, and Ask needs tools.
+- **`store: false`** on every request — vault content is not kept in
+  OpenAI-side response storage.
+- **Temperature**: reasoning models accept only the default. When a model
+  rejects `temperature`, the client resends once without it and omits it for
+  the rest of that process (one stderr line). Cassette keys are unaffected.
+- **Budget**: `max_output_tokens` includes hidden reasoning tokens; an answer
+  that never arrives because reasoning used the budget is a `BudgetExhausted`.
+  Scheduled jobs and the portal (`build_recording_live_client`) retry it once
+  at a doubled budget; the bounded MCP path
+  (`build_recording_live_client_bounded`) does not escalate by design — raise
+  `OVP_LLM_MAX_TOKENS` yourself if Ask over MCP hits it.
+- **Rate limits**: a 429 (`rate_limit_exceeded`, `slow_down`) is retried like
+  any transient failure; a 429 `insufficient_quota` is not.
+- **Refusals** come back as the reply text under a refusal stop reason (Ask
+  shows them), not as a decode failure.
+- `insufficient_quota` is **not** retried; `rate_limit_exceeded` and 5xx are.
+- Proxy: `OVP_LLM_NO_PROXY=1` was right for MiniMax, but `api.openai.com` may
+  need the ambient proxy — set it to `0` (or remove it) when switching.
+
+```toml
+# <vault>/.ovp/providers.toml
+[env]
+OVP_LLM_PROVIDER = "openai"
+OPENAI_API_KEY   = "..."
+OVP_LLM_MODEL    = "gpt-6-luna"
+```
+
+Live smoke test (network + spend, ignored by default):
+`OPENAI_API_KEY=… cargo test -p ovp-llm --features anthropic --test openai_live -- --ignored`.
+
 ## Failure & retry behavior
 
 Live extraction failures are **loud**, not silent empty successes:

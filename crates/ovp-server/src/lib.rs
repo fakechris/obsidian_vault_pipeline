@@ -1957,6 +1957,9 @@ fn handle_run_start(state: &AppState, body: &str) -> Response<std::io::Cursor<Ve
         for key in [
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_BASE_URL",
+            "OVP_LLM_PROVIDER",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
             "OVP_LLM_MODEL",
             "OVP_LLM_MAX_TOKENS",
             "OVP_LLM_NO_PROXY",
