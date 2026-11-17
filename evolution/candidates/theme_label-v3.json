@@ -1,0 +1,25 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "theme_label-v3",
+  "base_version": "v2",
+  "target_version": "v3",
+  "surface": "prompt",
+  "component": "prompt.theme_label",
+  "hypothesis": "v2 fixed minority-topic names (t005 'stock data toolkits' became 'Data and Retrieval Tools'), but its real-vault dry run on gpt-6-luna (2026-11-17, 33 communities) showed the opposite failure: names became generic and indistinguishable — 13 of 33 began with 'AI Agent …' ('AI Agent Tools', 'AI Agent Developer Tools', 'AI Agent Tools and Automation', 'AI Agent Runtime and Tooling'). Each community was named in isolation, so the model never saw its neighbours, and rule 1 pushed toward the broader umbrella. v3 names communities biggest-first and shows the model every name already in use (kept or just chosen), with rule 1 asking for the most specific thread that still covers most members and a new rule 2 requiring a name that sets this theme apart from the listed ones and does not reuse their generic head words. Predicted: far fewer shared head words (well under 13 'AI Agent …' names) while keeping v2's majority rule (no minority-topic names).",
+  "predicted_delta": {
+    "label_readability": "operator reviews the real-vault dry-run table: names distinguishable from each other; count of names sharing the 'AI Agent' head word drops sharply from 13/33",
+    "cost": "same call count as v2 (one per renamed community); requests grow by the list of names in use (~33 short lines)"
+  },
+  "guardrails": {
+    "majority_rule_kept": "v2's 'name what most members share; no minority topics' stays rule 1",
+    "presentation_only": "labels never feed gating, grounding, synthesis prompts or the ledger",
+    "determinism": "naming order is fixed (size desc, then cluster index), so the taken-name list and therefore cassette keys are reproducible"
+  },
+  "eval_plan": {
+    "replay_set": "request-shape unit test (taken-names section, v3 namespace); real-vault --dry-run table on gpt-6-luna compared with the v2 table, reviewed by the operator before the first write",
+    "paired_sources": 33,
+    "soak": false
+  },
+  "rollback": "Revert prompt file, THEME_LABEL_PROMPT_ID and the sequential naming loop to v2; v2 cassettes remain on disk.",
+  "ablation_required": false
+}
