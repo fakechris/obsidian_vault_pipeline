@@ -432,6 +432,8 @@ function ProfileEditor({
       ...draft,
       preset: id,
       provider: p.provider,
+      // Another provider's (masked) key is no credential for this one.
+      apiKey: p.provider === draft.provider ? draft.apiKey : '',
       baseUrl: p.id === 'custom' ? draft.baseUrl : p.base_url,
       model: p.model || draft.model,
       label: draft.label || p.label,

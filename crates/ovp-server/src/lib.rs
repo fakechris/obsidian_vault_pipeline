@@ -2576,6 +2576,16 @@ fn handle_profile_save(state: &AppState, body: &str) -> Response<std::io::Cursor
             profile.env.insert(k.clone(), text.trim().to_string());
         }
     }
+    // Never store a setup that cannot authenticate (e.g. switched from an
+    // Anthropic-compatible endpoint to OpenAI without entering a new key):
+    // saving it "successfully" would break the LLM the moment it is used.
+    if ovp_llm::resolve_api_key(|k| profile.env.get(k).cloned()).is_err() {
+        let var = ovp_llm::LlmProvider::from_lookup(&|k: &str| profile.env.get(k).cloned())
+            .map(ovp_llm::LlmProvider::api_key_var)
+            .unwrap_or("API key");
+        let body = serde_json::json!({ "error": format!("{var} is required for this setup") });
+        return json_response(400, &body.to_string());
+    }
     profiles.insert(id.clone(), profile);
     if let Err(e) = prov::write_llm_profiles(&state.vault_root, &profiles) {
         return provider_error(e);
@@ -6905,9 +6915,18 @@ mod tests {
         assert_eq!(env.get("OVP_LLM_MODEL").map(String::as_str), Some("gpt-6-sol"));
         assert_eq!(env.get("OPENAI_API_KEY").map(String::as_str), Some("sk-oai-3333"));
 
+        // Switching a setup's provider without a new key is refused, and the
+        // stored setup is left intact.
+        let r = post("/api/providers/profiles", serde_json::json!({"id": "minimax",
+            "set": {"OVP_LLM_PROVIDER": "openai", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": ""}}));
+        assert_eq!(r.status_code(), 400);
+        let kept = ovp_domain::providers::read_llm_profiles(&vault).unwrap();
+        assert_eq!(kept["minimax"].env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("sk-mm-1111"));
+
         // Guard rails.
         assert_eq!(post("/api/providers/profiles", serde_json::json!({"id": "Bad Id", "set": {}})).status_code(), 400);
         assert_eq!(post("/api/providers/profiles", serde_json::json!({"id": "x", "set": {"GITHUB_TOKEN": "t"}})).status_code(), 400);
+        assert_eq!(post("/api/providers/profiles", serde_json::json!({"id": "nokey", "set": {"OVP_LLM_MODEL": "m"}})).status_code(), 400);
         assert_eq!(post("/api/providers/profiles/activate", serde_json::json!({"id": "nope"})).status_code(), 404);
 
         // Deleting the active profile leaves the live [env] configured.
