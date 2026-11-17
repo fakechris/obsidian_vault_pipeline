@@ -956,6 +956,7 @@ fn serve_loop(server: &Server, state: &Arc<AppState>) {
                 || p == "/api/schedule/features"
                 || p == "/api/attention/ack"
                 || p == "/api/providers"
+                || p.starts_with("/api/providers/")
                 || (p.starts_with("/api/source/") && p.ends_with("/tags"))
                 || (p.starts_with("/api/source/") && p.ends_with("/translate"))
                 || (p.starts_with("/api/source/") && p.ends_with("/summarize"))
@@ -1111,6 +1112,9 @@ fn dispatch(
         (Method::Post, "/api/attention/ack") => handle_attention_ack(state, body),
         (Method::Get, "/api/providers") => handle_providers_get(state),
         (Method::Post, "/api/providers") => handle_providers_set(state, body),
+        (Method::Post, "/api/providers/profiles") => handle_profile_save(state, body),
+        (Method::Post, "/api/providers/profiles/activate") => handle_profile_activate(state, body),
+        (Method::Post, "/api/providers/profiles/delete") => handle_profile_delete(state, body),
         (Method::Post, "/api/tags/decision") => handle_tag_decision(state, body),
         (Method::Get, "/api/entities") => handle_entities_api(state),
         (Method::Get, p) if p.starts_with("/api/entity/") => handle_entity_api(state, url),
@@ -2440,35 +2444,207 @@ fn provider_secret(name: &str) -> bool {
 
 const MASK_PREFIX: &str = "\u{2022}\u{2022}\u{2022}\u{2022}";
 
+/// Secrets shown as `••••<last 4>`; everything else plain.
+fn mask_env(map: &std::collections::BTreeMap<String, String>) -> serde_json::Map<String, serde_json::Value> {
+    map.iter()
+        .map(|(k, v)| {
+            let shown = if provider_secret(k) {
+                let tail: String = v
+                    .chars()
+                    .rev()
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                format!("{MASK_PREFIX}{tail}")
+            } else {
+                v.clone()
+            };
+            (k.clone(), serde_json::json!(shown))
+        })
+        .collect()
+}
+
+/// `GET /api/providers` — `[env]` (masked) plus the saved LLM profiles, each
+/// masked, with `active` = the profile matching `[env]` (derived).
 fn handle_providers_get(state: &AppState) -> Response<std::io::Cursor<Vec<u8>>> {
-    match ovp_domain::providers::read_providers_file(&state.vault_root) {
-        Ok(map) => {
-            let masked: serde_json::Map<String, serde_json::Value> = map
-                .into_iter()
-                .map(|(k, v)| {
-                    let shown = if provider_secret(&k) {
-                        let tail: String = v
-                            .chars()
-                            .rev()
-                            .take(4)
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                            .rev()
-                            .collect();
-                        format!("{MASK_PREFIX}{tail}")
-                    } else {
-                        v
-                    };
-                    (k, serde_json::json!(shown))
+    let loaded = ovp_domain::providers::read_providers_file(&state.vault_root).and_then(|env| {
+        ovp_domain::providers::read_llm_profiles(&state.vault_root).map(|p| (env, p))
+    });
+    match loaded {
+        Ok((map, profiles)) => {
+            let active = ovp_domain::providers::active_llm_profile(&map, &profiles);
+            let list: Vec<serde_json::Value> = profiles
+                .iter()
+                .map(|(id, p)| {
+                    serde_json::json!({
+                        "id": id,
+                        "label": p.label,
+                        "env": mask_env(&p.env),
+                        "active": active == Some(id.as_str()),
+                    })
                 })
                 .collect();
-            let body = serde_json::json!({ "env": masked });
+            let body = serde_json::json!({
+                "env": mask_env(&map),
+                "profiles": list,
+                "active_profile": active,
+            });
             json_response(200, &body.to_string())
         }
         Err(e) => {
             let body = serde_json::json!({ "error": e });
             json_response(500, &body.to_string())
         }
+    }
+}
+
+fn profile_id_of(v: &serde_json::Value) -> Result<String, Response<std::io::Cursor<Vec<u8>>>> {
+    let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("").trim().to_string();
+    if !ovp_domain::providers::valid_profile_id(&id) {
+        let body = serde_json::json!({
+            "error": "`id` must be 1-40 chars of a-z, 0-9, _ or -"
+        });
+        return Err(json_response(400, &body.to_string()));
+    }
+    Ok(id)
+}
+
+fn provider_error(e: String) -> Response<std::io::Cursor<Vec<u8>>> {
+    json_response(500, &serde_json::json!({ "error": e }).to_string())
+}
+
+/// `POST /api/providers/profiles` `{id, label, set:{VAR: value}}` — create or
+/// update one saved LLM setup. Only LLM variables are accepted; a masked
+/// value means "unchanged", an empty one removes the variable. Editing the
+/// ACTIVE profile re-applies it to `[env]`, so the live setup follows.
+fn handle_profile_save(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    use ovp_domain::providers as prov;
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return json_response(400, r#"{"error":"body must be JSON"}"#);
+    };
+    let id = match profile_id_of(&v) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let Some(set) = v.get("set").and_then(|s| s.as_object()) else {
+        return json_response(400, r#"{"error":"`set` object is required"}"#);
+    };
+    let _guard = state.acks_write_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let (env, mut profiles) = match prov::read_providers_file(&state.vault_root)
+        .and_then(|e| prov::read_llm_profiles(&state.vault_root).map(|p| (e, p)))
+    {
+        Ok(x) => x,
+        Err(e) => return provider_error(e),
+    };
+    let was_active = prov::active_llm_profile(&env, &profiles) == Some(id.as_str());
+    let mut profile = profiles.get(&id).cloned().unwrap_or_default();
+    if let Some(label) = v.get("label").and_then(|l| l.as_str()) {
+        profile.label = label.trim().to_string();
+    }
+    if profile.label.is_empty() {
+        profile.label = id.clone();
+    }
+    for (k, val) in set {
+        if !prov::LLM_PROFILE_KEYS.contains(&k.as_str()) {
+            let body = serde_json::json!({ "error": format!("`{k}` is not an LLM profile variable") });
+            return json_response(400, &body.to_string());
+        }
+        let Some(text) = val.as_str() else {
+            let body = serde_json::json!({ "error": format!("`{k}` must be a string") });
+            return json_response(400, &body.to_string());
+        };
+        if text.starts_with(MASK_PREFIX) {
+            // "Unchanged": keep the profile's own value — or, for a profile
+            // being created FROM the live setup (no value yet), adopt the
+            // live [env] value whose mask the form echoed back.
+            if !profile.env.contains_key(k)
+                && let Some(live) = env.get(k)
+                && mask_env(&std::collections::BTreeMap::from([(k.clone(), live.clone())]))
+                    .get(k)
+                    .and_then(|m| m.as_str())
+                    == Some(text)
+            {
+                profile.env.insert(k.clone(), live.clone());
+            }
+            continue;
+        }
+        if text.trim().is_empty() {
+            profile.env.remove(k);
+        } else {
+            profile.env.insert(k.clone(), text.trim().to_string());
+        }
+    }
+    // Never store a setup that cannot authenticate (e.g. switched from an
+    // Anthropic-compatible endpoint to OpenAI without entering a new key):
+    // saving it "successfully" would break the LLM the moment it is used.
+    if ovp_llm::resolve_api_key(|k| profile.env.get(k).cloned()).is_err() {
+        let var = ovp_llm::LlmProvider::from_lookup(&|k: &str| profile.env.get(k).cloned())
+            .map(ovp_llm::LlmProvider::api_key_var)
+            .unwrap_or("API key");
+        let body = serde_json::json!({ "error": format!("{var} is required for this setup") });
+        return json_response(400, &body.to_string());
+    }
+    // Live config FIRST when editing the active setup: if the profile write
+    // then fails, [env] already equals the edited setup, so a retry finds it
+    // active again and completes — never "saved" with a stale live config.
+    if was_active
+        && let Err(e) = prov::set_live_llm_env(&state.vault_root, &profile.env)
+    {
+        return provider_error(e);
+    }
+    profiles.insert(id.clone(), profile);
+    if let Err(e) = prov::write_llm_profiles(&state.vault_root, &profiles) {
+        return provider_error(e);
+    }
+    json_response(200, &serde_json::json!({ "saved": true, "id": id }).to_string())
+}
+
+/// `POST /api/providers/profiles/activate` `{id}` — make a saved setup live.
+/// Scheduled jobs pick it up at their next start; Ask on its next question.
+fn handle_profile_activate(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return json_response(400, r#"{"error":"body must be JSON"}"#);
+    };
+    let id = match profile_id_of(&v) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let _guard = state.acks_write_lock.lock().unwrap_or_else(|e| e.into_inner());
+    match ovp_domain::providers::activate_llm_profile(&state.vault_root, &id) {
+        Ok(()) => json_response(200, &serde_json::json!({ "active": id }).to_string()),
+        Err(e) if e.starts_with("no LLM profile") => {
+            json_response(404, &serde_json::json!({ "error": e }).to_string())
+        }
+        Err(e) => provider_error(e),
+    }
+}
+
+/// `POST /api/providers/profiles/delete` `{id}` — forget a saved setup.
+/// `[env]` is untouched: deleting the active profile does not unconfigure
+/// the live LLM.
+fn handle_profile_delete(state: &AppState, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    use ovp_domain::providers as prov;
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return json_response(400, r#"{"error":"body must be JSON"}"#);
+    };
+    let id = match profile_id_of(&v) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let _guard = state.acks_write_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let mut profiles = match prov::read_llm_profiles(&state.vault_root) {
+        Ok(p) => p,
+        Err(e) => return provider_error(e),
+    };
+    if profiles.remove(&id).is_none() {
+        let body = serde_json::json!({ "error": format!("no LLM profile `{id}`") });
+        return json_response(404, &body.to_string());
+    }
+    match prov::write_llm_profiles(&state.vault_root, &profiles) {
+        Ok(()) => json_response(200, &serde_json::json!({ "deleted": id }).to_string()),
+        Err(e) => provider_error(e),
     }
 }
 
@@ -6692,6 +6868,77 @@ mod tests {
             !saved.contains_key("ANTHROPIC_BASE_URL"),
             "empty value removes the key"
         );
+
+        let _ = std::fs::remove_dir_all(vault.parent().unwrap());
+    }
+
+    #[test]
+    fn llm_profile_endpoints_save_activate_and_mask() {
+        let vault = portal_vault("llm-profiles", "50-Inbox/03-Processed/good.md", "body\n");
+        std::fs::write(
+            vault.join(".ovp/providers.toml"),
+            "[env]\nANTHROPIC_API_KEY = \"sk-mm-1111\"\nOVP_LLM_MODEL = \"MiniMax-M3\"\nGITHUB_TOKEN = \"ghp-2222\"\n",
+        )
+        .unwrap();
+        let st = state(vault.clone(), None);
+        let post = |path: &str, body: serde_json::Value| {
+            dispatch(&st, Method::Post, path, &body.to_string())
+        };
+
+        // "Save current as profile": the form echoes the LIVE key masked; the
+        // new profile adopts the live value → it is the active one.
+        let live = body_json(dispatch(&st, Method::Get, "/api/providers", ""));
+        let live_masked = live["env"]["ANTHROPIC_API_KEY"].clone();
+        let r = post("/api/providers/profiles", serde_json::json!({"id": "minimax", "label": "MiniMax",
+            "set": {"ANTHROPIC_API_KEY": live_masked, "OVP_LLM_MODEL": "MiniMax-M3"}}));
+        assert_eq!(r.status_code(), 200);
+        let r = post("/api/providers/profiles", serde_json::json!({"id": "openai", "label": "OpenAI",
+            "set": {"OVP_LLM_PROVIDER": "openai", "OPENAI_API_KEY": "sk-oai-3333", "OVP_LLM_MODEL": "gpt-6-luna"}}));
+        assert_eq!(r.status_code(), 200);
+        let v = body_json(dispatch(&st, Method::Get, "/api/providers", ""));
+        assert_eq!(v["active_profile"], "minimax");
+        let oai = v["profiles"].as_array().unwrap().iter().find(|p| p["id"] == "openai").unwrap().clone();
+        let masked = oai["env"]["OPENAI_API_KEY"].as_str().unwrap().to_string();
+        assert!(masked.ends_with("3333") && masked.starts_with('\u{2022}'), "{masked}");
+        assert_eq!(oai["active"], false);
+
+        // Switch → [env] follows, unrelated tokens stay.
+        assert_eq!(post("/api/providers/profiles/activate", serde_json::json!({"id": "openai"})).status_code(), 200);
+        let env = ovp_domain::providers::read_providers_file(&vault).unwrap();
+        assert_eq!(env.get("OVP_LLM_PROVIDER").map(String::as_str), Some("openai"));
+        assert!(!env.contains_key("ANTHROPIC_API_KEY"));
+        assert_eq!(env.get("GITHUB_TOKEN").map(String::as_str), Some("ghp-2222"));
+
+        // Editing the ACTIVE profile with its masked key round-tripped keeps
+        // the secret and re-applies the change to [env].
+        let r = post("/api/providers/profiles", serde_json::json!({"id": "openai",
+            "set": {"OPENAI_API_KEY": masked, "OVP_LLM_MODEL": "gpt-6-sol"}}));
+        assert_eq!(r.status_code(), 200);
+        let env = ovp_domain::providers::read_providers_file(&vault).unwrap();
+        assert_eq!(env.get("OVP_LLM_MODEL").map(String::as_str), Some("gpt-6-sol"));
+        assert_eq!(env.get("OPENAI_API_KEY").map(String::as_str), Some("sk-oai-3333"));
+
+        // Switching a setup's provider without a new key is refused, and the
+        // stored setup is left intact.
+        let r = post("/api/providers/profiles", serde_json::json!({"id": "minimax",
+            "set": {"OVP_LLM_PROVIDER": "openai", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": ""}}));
+        assert_eq!(r.status_code(), 400);
+        let kept = ovp_domain::providers::read_llm_profiles(&vault).unwrap();
+        assert_eq!(kept["minimax"].env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("sk-mm-1111"));
+
+        // Guard rails.
+        assert_eq!(post("/api/providers/profiles", serde_json::json!({"id": "Bad Id", "set": {}})).status_code(), 400);
+        assert_eq!(post("/api/providers/profiles", serde_json::json!({"id": "x", "set": {"GITHUB_TOKEN": "t"}})).status_code(), 400);
+        assert_eq!(post("/api/providers/profiles", serde_json::json!({"id": "nokey", "set": {"OVP_LLM_MODEL": "m"}})).status_code(), 400);
+        assert_eq!(post("/api/providers/profiles/activate", serde_json::json!({"id": "nope"})).status_code(), 404);
+
+        // Deleting the active profile leaves the live [env] configured.
+        assert_eq!(post("/api/providers/profiles/delete", serde_json::json!({"id": "openai"})).status_code(), 200);
+        let env = ovp_domain::providers::read_providers_file(&vault).unwrap();
+        assert_eq!(env.get("OVP_LLM_PROVIDER").map(String::as_str), Some("openai"));
+        let v = body_json(dispatch(&st, Method::Get, "/api/providers", ""));
+        assert_eq!(v["profiles"].as_array().unwrap().len(), 1);
+        assert!(v["active_profile"].is_null());
 
         let _ = std::fs::remove_dir_all(vault.parent().unwrap());
     }

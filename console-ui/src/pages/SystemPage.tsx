@@ -1,14 +1,15 @@
 /** System `/system` — answers US8 (design §3.6): is the pipeline healthy,
  * where is it stuck, and what does this product even do?
  *
- * Sections (B5): (a) all recorded runs, (b) sources needing the operator
- * (same AttentionCard as Today) + the doctor hint, (c) pipeline surfaces —
- * the legacy Flow/Monitor views and the generated admin pages, (d) the
- * three-layer concept explainer, (e) read-only settings from /api/settings.
+ * Four tabs (`?tab=`), so settings are no longer buried under run logs:
+ * Overview (one line per "is something wrong here?" + a jump), Runs (run
+ * now, live activity, history), Attention (sources needing the operator,
+ * grouped by cause and collapsed), Settings (saved LLM setups with a
+ * switcher, automation, publish, system info, surfaces, concepts).
  * Internal vocabulary (pack/unit/ledger) is allowed HERE and only here
  * (design §6, BL-051 word layering). */
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import AttentionCard from '../components/AttentionCard';
 import AutomationPanel from '../components/AutomationPanel';
 import { RunActivitySection } from '../components/RunActivity';
@@ -16,17 +17,33 @@ import { AgeLabel, EmptyState, ModelGate, PageHelp } from '../components/ui';
 import { useI18n } from '../i18n';
 import {
   STATIC_MODE,
+  activateLlmProfile,
+  deleteLlmProfile,
   fetchProviders,
   fetchPublishStatus,
   fetchRunNowStatus,
   fetchSettings,
+  saveLlmProfile,
   saveProviders,
   startPublish,
   startRunNow,
+  type LlmProfile,
+  type ProvidersPayload,
   type PublishStatus,
   type RunNowStatus,
 } from '../lib/api';
-import { attentionSources } from '../lib/derive';
+import {
+  SYSTEM_TABS,
+  attentionGroups,
+  attentionSources,
+  llmExtraOf,
+  llmProfileSet,
+  llmSetupSummary,
+  profileIdFor,
+  systemTabOf,
+  type LlmProviderKind,
+  type SystemTab,
+} from '../lib/derive';
 import type { IndexModel, SettingsPayload } from '../lib/types';
 import { useModel } from '../model';
 
@@ -112,18 +129,32 @@ function RunsSection({ model }: { model: IndexModel }) {
   );
 }
 
+/** Sources needing the operator, grouped by cause and collapsed: dozens of
+ * near-identical cards (one provider outage blocks twenty sources) become a
+ * handful of rows; open a group to act on its sources. */
 function AttentionSection({ model }: { model: IndexModel }) {
   const { t } = useI18n();
-  const sources = attentionSources(model);
+  const groups = useMemo(() => attentionGroups(attentionSources(model)), [model]);
   return (
     <div className="section">
       <h2>{t('system.attentionTitle')}</h2>
-      {sources.length === 0 ? (
+      {groups.length === 0 ? (
         <EmptyState>
           <p>{t('system.attentionEmpty')}</p>
         </EmptyState>
       ) : (
-        sources.map((s) => <AttentionCard source={s} key={s.sha256} />)
+        groups.map((g) => (
+          <details className="attention-group" key={g.key}>
+            <summary>
+              <strong>{t(`system.attentionGroup.${g.key}`)}</strong>
+              <span className="muted"> · {g.sources.length}</span>
+              <span className="sm muted"> — {t(`system.attentionGroupHint.${g.key}`)}</span>
+            </summary>
+            {g.sources.map((s) => (
+              <AttentionCard source={s} key={`${s.sha256}-${s.status}`} />
+            ))}
+          </details>
+        ))
       )}
       <p className="tiny muted">
         {t('system.doctorHint')} <code className="mono">ovp2 doctor</code>
@@ -293,49 +324,313 @@ function RunNowSection() {
   );
 }
 
-/** Built-in provider presets — all Anthropic-Messages-compatible endpoints
- * (the protocol our runtime speaks). base_url is the FULL messages endpoint.
- * OpenAI-compatible / Gemini native protocols need a new client and are not
- * offered yet. */
+/** Built-in provider presets. `anthropic` = Anthropic-Messages-compatible
+ * endpoints (base_url is the FULL /messages endpoint); `openai` = the OpenAI
+ * Responses API (empty base_url = the official endpoint). */
+/** Presets the legacy single-setup form (servers without saved setups) can
+ * store — it writes Anthropic-compatible variables only. */
+const LEGACY_PRESETS = () => PROVIDER_PRESETS.filter((p) => p.provider === 'anthropic');
+
 const PROVIDER_PRESETS: {
   id: string;
   label: string;
+  provider: LlmProviderKind;
   base_url: string;
   model: string;
 }[] = [
-  { id: 'anthropic', label: 'Anthropic', base_url: '', model: 'claude-sonnet-4-6' },
+  { id: 'openai', label: 'OpenAI', provider: 'openai', base_url: '', model: 'gpt-6-luna' },
+  { id: 'anthropic', label: 'Anthropic', provider: 'anthropic', base_url: '', model: 'claude-sonnet-4-6' },
   {
     id: 'kimi',
     label: 'Kimi (Moonshot)',
+    provider: 'anthropic',
     base_url: 'https://api.moonshot.cn/anthropic/v1/messages',
     model: 'kimi-k2-0711-preview',
   },
   {
     id: 'glm',
     label: 'GLM (智谱)',
+    provider: 'anthropic',
     base_url: 'https://open.bigmodel.cn/api/anthropic/v1/messages',
     model: 'glm-4.6',
   },
   {
     id: 'deepseek',
     label: 'DeepSeek',
+    provider: 'anthropic',
     base_url: 'https://api.deepseek.com/anthropic/v1/messages',
     model: 'deepseek-chat',
   },
   {
     id: 'minimax-cn',
     label: 'MiniMax 中国',
+    provider: 'anthropic',
     base_url: 'https://api.minimaxi.com/anthropic/v1/messages',
     model: 'MiniMax-M2',
   },
   {
     id: 'minimax-global',
     label: 'MiniMax Global',
+    provider: 'anthropic',
     base_url: 'https://api.minimax.io/anthropic/v1/messages',
     model: 'MiniMax-M2',
   },
-  { id: 'custom', label: 'Custom (Anthropic-compatible)', base_url: '', model: '' },
+  { id: 'custom', label: 'Custom (Anthropic-compatible)', provider: 'anthropic', base_url: '', model: '' },
 ];
+
+interface ProfileDraft {
+  /** null = a new profile (id derived from the label on save). */
+  id: string | null;
+  /** LLM variables without a field here, carried through verbatim. */
+  extra: Record<string, string>;
+  label: string;
+  preset: string;
+  provider: LlmProviderKind;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  noProxy: boolean;
+}
+
+function draftFromEnv(id: string | null, label: string, env: Record<string, string>): ProfileDraft {
+  const sum = llmSetupSummary(env);
+  const baseUrl = sum.provider === 'openai' ? env.OPENAI_BASE_URL ?? '' : env.ANTHROPIC_BASE_URL ?? '';
+  const preset =
+    PROVIDER_PRESETS.find(
+      (p) => p.provider === sum.provider && p.base_url === baseUrl && p.id !== 'custom',
+    )?.id ?? 'custom';
+  return {
+    id,
+    extra: llmExtraOf(env),
+    label,
+    preset,
+    provider: sum.provider,
+    baseUrl,
+    model: sum.model,
+    apiKey: (sum.provider === 'openai' ? env.OPENAI_API_KEY : env.ANTHROPIC_API_KEY) ?? '',
+    noProxy: env.OVP_LLM_NO_PROXY === '1' || env.OVP_LLM_NO_PROXY === 'true',
+  };
+}
+
+/** One saved setup's form. */
+function ProfileEditor({
+  draft,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  draft: ProfileDraft;
+  onChange: (d: ProfileDraft) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useI18n();
+  const onPreset = (id: string) => {
+    const p = PROVIDER_PRESETS.find((pr) => pr.id === id);
+    if (!p) return;
+    onChange({
+      ...draft,
+      preset: id,
+      provider: p.provider,
+      // A key belongs to one endpoint: never carry it to another provider
+      // or another Anthropic-compatible vendor (MiniMax → Kimi).
+      apiKey:
+        p.provider === draft.provider && p.base_url === draft.baseUrl && p.id !== 'custom'
+          ? draft.apiKey
+          : '',
+      baseUrl: p.id === 'custom' ? draft.baseUrl : p.base_url,
+      model: p.model || draft.model,
+      label: draft.label || p.label,
+    });
+  };
+  return (
+    <div className="provider-form">
+      <label>
+        {t('providers.label')}
+        <input type="text" value={draft.label} onChange={(e) => onChange({ ...draft, label: e.target.value })} />
+      </label>
+      <label>
+        {t('providers.preset')}
+        <select value={draft.preset} onChange={(e) => onPreset(e.target.value)}>
+          {PROVIDER_PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        {t('providers.baseUrl')}
+        <input
+          type="text"
+          value={draft.baseUrl}
+          placeholder={draft.provider === 'openai' ? t('providers.baseUrlHintOpenai') : t('providers.baseUrlHint')}
+          onChange={(e) => onChange({ ...draft, baseUrl: e.target.value })}
+        />
+      </label>
+      <label>
+        {t('providers.model')}
+        <input type="text" value={draft.model} onChange={(e) => onChange({ ...draft, model: e.target.value })} />
+      </label>
+      <label>
+        {t('providers.apiKey')}
+        <input
+          type="text"
+          value={draft.apiKey}
+          placeholder={t('providers.apiKeyHint')}
+          onChange={(e) => onChange({ ...draft, apiKey: e.target.value })}
+        />
+      </label>
+      <label className="provider-check">
+        <input
+          type="checkbox"
+          checked={draft.noProxy}
+          onChange={(e) => onChange({ ...draft, noProxy: e.target.checked })}
+        />
+        {t('providers.noProxy')}
+      </label>
+      <div className="provider-actions">
+        <button type="button" className="publish-btn" onClick={onSave}>
+          {t('providers.save')}
+        </button>
+        <button type="button" className="linkish" onClick={onCancel}>
+          {t('providers.cancel')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** LLM providers: saved setups (`[llm_profiles.*]` in .ovp/providers.toml)
+ * with a one-click switch. The live setup is `[env]`; the active profile is
+ * the one matching it (server-derived). Secrets arrive masked; a masked
+ * value saved back means "unchanged". */
+function ProviderProfilesSection({ onSaved }: { onSaved?: () => void }) {
+  const { t } = useI18n();
+  const [data, setData] = useState<ProvidersPayload | null>(null);
+  const [draft, setDraft] = useState<ProfileDraft | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    if (STATIC_MODE) return;
+    let cancelled = false;
+    fetchProviders()
+      .then((p) => !cancelled && setData(p))
+      .catch((e: Error) => !cancelled && setError(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [reload]);
+
+  if (STATIC_MODE) return null;
+  // A server without saved-profile support: the single-setup form.
+  if (data && data.profiles === undefined) return <ProviderSection onSaved={onSaved} />;
+
+  const profiles: LlmProfile[] = data?.profiles ?? [];
+  const live = llmSetupSummary(data?.env ?? {});
+  const done = (msg: string) => {
+    setNote(msg);
+    setDraft(null);
+    setReload((n) => n + 1);
+    onSaved?.();
+  };
+  const run = (p: Promise<void>, msg: string) => {
+    setError(null);
+    setNote(null);
+    p.then(() => done(msg)).catch((e: Error) => setError(e.message));
+  };
+  const onSave = () => {
+    if (!draft) return;
+    const label = draft.label.trim() || PROVIDER_PRESETS.find((p) => p.id === draft.preset)?.label || 'LLM';
+    const id = draft.id ?? profileIdFor(label, profiles.map((p) => p.id));
+    run(saveLlmProfile(id, label, llmProfileSet(draft)), t('providers.profileSaved'));
+  };
+
+  return (
+    <div className="section">
+      <h2>{t('providers.title')}</h2>
+      <p className="sm muted">{t('providers.profilesHelp')}</p>
+      <p className="sm">
+        {t('providers.liveNow')}{' '}
+        <strong>{data?.active_profile ? profiles.find((p) => p.active)?.label : t('providers.unsaved')}</strong>
+        <span className="muted mono tiny"> · {live.provider} · {live.model || '—'}</span>
+      </p>
+      {profiles.length === 0 && data && !draft && (
+        <EmptyState>
+          <p>{t('providers.noProfiles')}</p>
+        </EmptyState>
+      )}
+      <ul className="profile-list">
+        {profiles.map((p) => {
+          const sum = llmSetupSummary(p.env);
+          return (
+            <li key={p.id} className={p.active ? 'profile active' : 'profile'}>
+              <div>
+                <strong>{p.label}</strong>
+                {p.active && <span className="pill durable">{t('providers.active')}</span>}
+                <div className="tiny muted mono">
+                  {sum.provider} · {sum.model || '—'} · {sum.endpoint}
+                </div>
+              </div>
+              <div className="profile-actions">
+                {!p.active && (
+                  <button
+                    type="button"
+                    className="publish-btn"
+                    onClick={() => run(activateLlmProfile(p.id), t('providers.switched', { label: p.label }))}
+                  >
+                    {t('providers.use')}
+                  </button>
+                )}
+                <button type="button" className="linkish" onClick={() => setDraft(draftFromEnv(p.id, p.label, p.env))}>
+                  {t('providers.edit')}
+                </button>
+                <button
+                  type="button"
+                  className="linkish"
+                  onClick={() => {
+                    if (window.confirm(t('providers.deleteConfirm', { label: p.label }))) {
+                      run(deleteLlmProfile(p.id), t('providers.deleted'));
+                    }
+                  }}
+                >
+                  {t('providers.delete')}
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {draft ? (
+        <ProfileEditor draft={draft} onChange={setDraft} onSave={onSave} onCancel={() => setDraft(null)} />
+      ) : (
+        <p className="profile-add">
+          {!data?.active_profile && data && Object.keys(data.env).length > 0 && (
+            <button
+              type="button"
+              className="linkish"
+              onClick={() => setDraft(draftFromEnv(null, t('providers.currentLabel'), data.env))}
+            >
+              {t('providers.saveCurrent')}
+            </button>
+          )}
+          <button
+            type="button"
+            className="linkish"
+            onClick={() => setDraft(draftFromEnv(null, '', { OVP_LLM_PROVIDER: 'openai', OVP_LLM_MODEL: 'gpt-6-luna' }))}
+          >
+            {t('providers.addProfile')}
+          </button>
+        </p>
+      )}
+      <p className="tiny muted">{t('providers.switchNote')}</p>
+      {note && <p className="sm">{note}</p>}
+      {error && <p className="sm warn">{error}</p>}
+    </div>
+  );
+}
 
 /** LLM provider card — a GUI over `.ovp/providers.toml`. Reads the current
  * values back (secrets masked; a masked value round-tripped on save means
@@ -364,7 +659,7 @@ function ProviderSection({ onSaved }: { onSaved?: () => void }) {
         setModel(env.OVP_LLM_MODEL ?? '');
         setApiKey(env.ANTHROPIC_API_KEY ?? '');
         setNoProxy(env.OVP_LLM_NO_PROXY === '1' || env.OVP_LLM_NO_PROXY === 'true');
-        const match = PROVIDER_PRESETS.find((pr) => pr.base_url === url && pr.id !== 'custom');
+        const match = LEGACY_PRESETS().find((pr) => pr.base_url === url && pr.id !== 'custom');
         setPreset(match?.id ?? (url ? 'custom' : 'anthropic'));
         setLoaded(true);
       })
@@ -378,7 +673,7 @@ function ProviderSection({ onSaved }: { onSaved?: () => void }) {
 
   const onPreset = (id: string) => {
     setPreset(id);
-    const p = PROVIDER_PRESETS.find((pr) => pr.id === id);
+    const p = LEGACY_PRESETS().find((pr) => pr.id === id);
     if (p && p.id !== 'custom') {
       setBaseUrl(p.base_url);
       if (p.model) setModel(p.model);
@@ -409,7 +704,7 @@ function ProviderSection({ onSaved }: { onSaved?: () => void }) {
         <label>
           {t('providers.preset')}
           <select value={preset} onChange={(e) => onPreset(e.target.value)}>
-            {PROVIDER_PRESETS.map((p) => (
+            {LEGACY_PRESETS().map((p) => (
               <option key={p.id} value={p.id}>
                 {p.label}
               </option>
@@ -669,42 +964,143 @@ function SettingsSection({ refreshKey = 0 }: { refreshKey?: number }) {
   );
 }
 
+/** One-glance status: each line answers "is something wrong here?" and
+ * jumps to the tab that fixes it. */
+function OverviewSection({ model, go }: { model: IndexModel; go: (t: SystemTab) => void }) {
+  const { t } = useI18n();
+  const [providers, setProviders] = useState<ProvidersPayload | null>(null);
+  useEffect(() => {
+    if (STATIC_MODE) return;
+    let cancelled = false;
+    fetchProviders()
+      .then((p) => !cancelled && setProviders(p))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const groups = useMemo(() => attentionGroups(attentionSources(model)), [model]);
+  const pending = groups.reduce((n, g) => n + g.sources.length, 0);
+  const last = model.runs.length > 0 ? model.runs[model.runs.length - 1] : null;
+  const live = llmSetupSummary(providers?.env ?? {});
+  const activeLabel = providers?.profiles?.find((p) => p.active)?.label;
+  return (
+    <div className="section">
+      <dl className="settings-list overview-list">
+        <dt>{t('system.overviewLastRun')}</dt>
+        <dd>
+          {last ? (
+            <>
+              <span className="mono">{last.date}</span>{' '}
+              {t('system.overviewRunLine', { ok: last.succeeded, failed: last.failed, blocked: last.blocked })}
+            </>
+          ) : (
+            t('system.runsEmpty')
+          )}{' '}
+          <button type="button" className="linkish" onClick={() => go('runs')}>
+            {t('system.tab.runs')} →
+          </button>
+        </dd>
+        <dt>{t('system.overviewAttention')}</dt>
+        <dd className={pending > 0 ? 'warn' : undefined}>
+          {pending === 0
+            ? t('system.attentionEmpty')
+            : t('system.overviewAttentionLine', {
+                n: pending,
+                top: t(`system.attentionGroup.${groups[0].key}`),
+                topN: groups[0].sources.length,
+              })}{' '}
+          {pending > 0 && (
+            <button type="button" className="linkish" onClick={() => go('attention')}>
+              {t('system.tab.attention')} →
+            </button>
+          )}
+        </dd>
+        {!STATIC_MODE && (
+          <>
+            <dt>{t('system.overviewLlm')}</dt>
+            <dd>
+              {activeLabel ?? t('providers.unsaved')}{' '}
+              <span className="muted mono tiny">
+                {live.provider} · {live.model || '—'}
+              </span>{' '}
+              <button type="button" className="linkish" onClick={() => go('settings')}>
+                {t('system.overviewSwitch')} →
+              </button>
+            </dd>
+          </>
+        )}
+      </dl>
+    </div>
+  );
+}
+
 export default function SystemPage() {
   const { t } = useI18n();
   const { model, error, loading } = useModel();
-  // Bump after LLM Provider save so Settings re-reads llm_configured without
-  // a full page reload (Ask already re-reads providers.toml per request).
+  const [params, setParams] = useSearchParams();
+  const tab = systemTabOf(params.get('tab'), params.get('job'));
+  const go = (next: SystemTab) => {
+    const p = new URLSearchParams(params);
+    // An explicit tab click ends a job deep link (?job= would otherwise
+    // keep resolving to Settings).
+    p.delete('job');
+    if (next === 'overview') p.delete('tab');
+    else p.set('tab', next);
+    setParams(p, { replace: true });
+  };
+  // Bump after an LLM switch so Settings re-reads llm_configured without a
+  // full page reload (Ask already re-reads providers.toml per request).
   const [settingsRefresh, setSettingsRefresh] = useState(0);
-  // Only Runs/Attention need the index — Settings, concepts and the
-  // pipeline links must render in exactly the missing-index state this
-  // page helps diagnose (codex review P1). /api/settings returns null
-  // index fields for that case on purpose.
+  const pending = model ? attentionSources(model).length : 0;
+  // Tabs that need the index sit behind the ModelGate; Settings must render
+  // in exactly the missing-index state this page helps diagnose (codex P1).
   return (
     <>
       <h1 style={{ marginTop: '1rem' }}>{t('nav.system')}</h1>
       <PageHelp>{t('system.help')}</PageHelp>
-      <ModelGate loading={loading} error={error}>
-        {model && (
-          <>
-            {/* Live per-source activity feed (the portal's tail -f) sits at the
-                TOP of System: it's what the operator opens the page for while a
-                run is in flight. */}
-            <RunActivitySection />
-            <RunsSection model={model} />
-            <AttentionSection model={model} />
-          </>
-        )}
-      </ModelGate>
-      {/* Schedule explainer first among settings-ish sections: answers
-          "what does the timer do / how does the pipeline run" before the
-          manual Run now control. Does not need the index model. */}
-      <AutomationPanel />
-      <RunNowSection />
-      <SurfacesSection />
-      <ConceptsSection />
-      <PublishSection />
-      <ProviderSection onSaved={() => setSettingsRefresh((n) => n + 1)} />
-      <SettingsSection refreshKey={settingsRefresh} />
+      <div className="tab-row" role="tablist">
+        {SYSTEM_TABS.map((k) => (
+          <button
+            key={k}
+            type="button"
+            role="tab"
+            aria-selected={tab === k}
+            className={tab === k ? 'active' : ''}
+            onClick={() => go(k)}
+          >
+            {t(`system.tab.${k}`)}
+            {k === 'attention' && pending > 0 && <span className="muted"> ({pending})</span>}
+          </button>
+        ))}
+      </div>
+      {tab === 'settings' ? (
+        <>
+          <ProviderProfilesSection onSaved={() => setSettingsRefresh((n) => n + 1)} />
+          <AutomationPanel />
+          <PublishSection />
+          <SettingsSection refreshKey={settingsRefresh} />
+          <SurfacesSection />
+          <ConceptsSection />
+        </>
+      ) : (
+        <>
+          {/* Run now must work with NO index — starting a run is how a
+              missing index gets rebuilt (codex P2). Live activity reads the
+              model, so it only shows once an index exists. */}
+          {tab === 'runs' && (
+            <>
+              <RunNowSection />
+              <RunActivitySection />
+            </>
+          )}
+          <ModelGate loading={loading} error={error}>
+            {model && tab === 'overview' && <OverviewSection model={model} go={go} />}
+            {model && tab === 'runs' && <RunsSection model={model} />}
+            {model && tab === 'attention' && <AttentionSection model={model} />}
+          </ModelGate>
+        </>
+      )}
     </>
   );
 }
