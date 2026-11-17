@@ -1046,8 +1046,8 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
     let mut claims = Vec::new();
 
     let events: Vec<StoreEvent> = read_jsonl_strict(&store.join("ledger.jsonl"))?;
-    // run_ids are content hashes; the run log is where a run's day lives.
-    // Absent or unreadable → fall back to a date embedded in the run_id.
+    // run_ids are content hashes; the run log (keyed by claim_key) is where
+    // a write's day lives. Absent or unreadable → a date in the run_id.
     let run_days = std::fs::read_to_string(store.join(ovp_domain::crystal::RUN_LOG_FILE))
         .map(|t| ovp_domain::crystal::parse_run_log(&t))
         .unwrap_or_default();
@@ -1069,7 +1069,7 @@ fn build_claims(vault_root: &Path, layout: &VaultLayout) -> Result<Vec<ClaimRow>
             strength: enum_str(&rec.strength),
             run_id: Some(rec.run_id.clone()),
             run_date: run_days
-                .get(&rec.run_id)
+                .get(&rec.claim_key)
                 .filter(|d| is_iso_day(d))
                 .cloned()
                 .or_else(|| run_date_from_run_id(&rec.run_id)),

@@ -1188,7 +1188,7 @@ fn claims_take_their_run_day_from_the_run_log() {
     .unwrap();
     std::fs::write(
         store.join("runs.jsonl"),
-        "{\"run_id\":\"run-8afec032\",\"date\":\"2026-11-15\"}\n",
+        "{\"run_id\":\"run-8afec032\",\"date\":\"2026-11-15\",\"claim_keys\":[\"k1\"]}\n",
     )
     .unwrap();
     let model = build_index(root, "2026-11-16", None).unwrap();
