@@ -1799,6 +1799,8 @@ mod tests {
                 size: 1,
             }],
             labels_provenance: LabelsProvenance::Llm,
+            label_prompt: None,
+            next_id: None,
         };
         assert_eq!(cluster_theme("case-a", Some(&themes)), "memory · context");
         assert_eq!(cluster_theme("unknown", Some(&themes)), FALLBACK_THEME);

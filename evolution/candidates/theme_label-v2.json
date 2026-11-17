@@ -1,0 +1,25 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "theme_label-v2",
+  "base_version": "v1",
+  "target_version": "v2",
+  "surface": "prompt",
+  "component": "prompt.theme_label",
+  "hypothesis": "v1 named each community from its 3 centroid-nearest titles plus c-TF-IDF keywords, under a rule demanding specificity. On the real vault (09-27 run, 34 communities) this named a 129-pack open-source AI tools community 'AI coding assistant stock data toolkits': 2 of its 129 members are stock-data repos and they sat near the centroid, while its keywords were uninformative ('uses, use, built, data, code'). v2 changes only what the labeler sees and asks: 12 member titles sampled at even rank intervals from core to edge (by closeness to the centroid), up to 5 of the claims the portal shows under the theme, and a rule to name what MOST members share (broader name when members are diverse) instead of 'be specific'. Predicted: no community name is driven by a topic that only one or two members mention; specifically the 129-pack community no longer mentions stock/finance.",
+  "predicted_delta": {
+    "label_readability": "operator reviews the real-vault `crystal-themes --client live --dry-run` table before the first write: no name built on a minority topic (the t005 stock-data case is the known positive control)",
+    "cost": "<= 1 cached call per community on the first v2 run (every name was produced by v1, so all relabel once); afterwards only communities whose membership moved (runtime.theme_identity) — typically a handful per weekly run"
+  },
+  "guardrails": {
+    "presentation_only": "unchanged from v1 — labels never feed gating, grounding, synthesis prompts (synth_theme stays keyword-derived) or the ledger",
+    "offline_fallback": "replay/offline runs keep deterministic keyword labels; no client is built",
+    "tried_and_rejected": "two DECIDABLE label checks were measured on the real vault before this candidate and rejected: mean embedding similarity of name to members (bad name 0.310 vs a sound alternative 0.309) and per-word member coverage (flags 'evolution', 'tradeoffs', 'internals' as low as 'stock'). Name quality is not decidable here, so v2 fixes the input instead of adding a judge or rule-pile"
+  },
+  "eval_plan": {
+    "replay_set": "unit tests for the request shape (titles + claims sections, v2 namespace) and the spread sampler; real-vault dry-run table reviewed by the operator before the first write",
+    "paired_sources": 34,
+    "soak": false
+  },
+  "rollback": "Revert the prompt file + THEME_LABEL_PROMPT_ID to v1 and the request builder to 3 centroid titles; v1 cassettes are still on disk. themes.json is a rebuildable projection.",
+  "ablation_required": false
+}

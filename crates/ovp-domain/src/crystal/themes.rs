@@ -12,7 +12,7 @@
 //!   exists (replacing the retired hardcoded keyword buckets).
 //!
 //! Labels are presentation-only: deterministic c-TF-IDF keywords are the
-//! stable auditable layer, the optional bilingual LLM name (`theme_label/v1`)
+//! stable auditable layer, the optional bilingual LLM name (`theme_label/v2`)
 //! sits on top.
 
 use std::collections::BTreeMap;
@@ -33,7 +33,7 @@ pub const UNCLASSIFIED_THEME: &str = "Unclassified";
 
 const THEME_LABEL_TEMPLATE: &str = include_str!("../../prompts/theme_label.md");
 /// Cassette namespace + version marker for the bilingual labeling stage.
-pub const THEME_LABEL_PROMPT_ID: &str = "theme_label/v1";
+pub const THEME_LABEL_PROMPT_ID: &str = "theme_label/v2";
 const LABEL_MODEL: &str = "claude-sonnet-4-6";
 const LABEL_MAX_TOKENS: u32 = 300;
 
@@ -58,7 +58,7 @@ pub enum LabelsProvenance {
     /// Deterministic c-TF-IDF keyword labels (the offline default).
     #[default]
     Keyword,
-    /// Bilingual model-named labels (`--client live`, `theme_label/v1`).
+    /// Bilingual model-named labels (`--client live`, `theme_label/v2`).
     Llm,
 }
 
@@ -117,6 +117,19 @@ pub struct ThemesFile {
     /// up-to-date projection.
     #[serde(default)]
     pub labels_provenance: LabelsProvenance,
+    /// Which labeling prompt ([`THEME_LABEL_PROMPT_ID`]) produced the `Llm`
+    /// labels. Additive: absent in older files, which therefore relabel on
+    /// the next live run. A rerun reuses a stable community's label only
+    /// when this matches the current prompt, so a better prompt reaches
+    /// every theme once instead of being masked by label carry-over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_prompt: Option<String>,
+    /// Allocation high-water mark: the next community id never used before.
+    /// Retired ids vanish from `communities`, so without this a later run
+    /// would hand a retired id (and its theme URL) to unrelated content.
+    /// Additive: absent in older files → derived from the surviving ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_id: Option<i64>,
 }
 
 impl ThemesFile {
@@ -288,18 +301,35 @@ pub fn clusters_date_ordered(catalog: &UnitsCatalog, cap: usize) -> Vec<Cluster>
         .collect()
 }
 
-// ---- Bilingual label model stage (`theme_label/v1`) ----
+// ---- Bilingual label model stage (`theme_label/v2`) ----
 
-/// Build the labeling `ModelRequest` for one community: its c-TF-IDF keywords
-/// plus a few representative titles → a short bilingual name.
-pub fn theme_label_request(keywords: &[String], sample_titles: &[String]) -> ModelRequest {
+/// Build the labeling `ModelRequest` for one community: its c-TF-IDF
+/// keywords, member titles sampled across the whole community (not just its
+/// center — three centroid titles once named a 129-pack tools community
+/// after the two stock-data repos among them), and a few of the claims the
+/// reader actually sees under the theme.
+pub fn theme_label_request(
+    keywords: &[String],
+    sample_titles: &[String],
+    sample_claims: &[String],
+) -> ModelRequest {
     let marker = "## Community";
     let (system, _) = THEME_LABEL_TEMPLATE
         .split_once(marker)
         .unwrap_or((THEME_LABEL_TEMPLATE, ""));
-    let mut user = format!("{marker}\n\nKeywords: {}\n\nRepresentative titles:\n", keywords.join(", "));
+    let mut user = format!(
+        "{marker}\n\nKeywords: {}\n\nMember titles ({} sampled across the community):\n",
+        keywords.join(", "),
+        sample_titles.len()
+    );
     for t in sample_titles {
         user.push_str(&format!("- {t}\n"));
+    }
+    if !sample_claims.is_empty() {
+        user.push_str("\nClaims shown under this theme:\n");
+        for c in sample_claims {
+            user.push_str(&format!("- {c}\n"));
+        }
     }
     ModelRequest {
         model: LABEL_MODEL.to_string(),
@@ -372,6 +402,8 @@ mod tests {
                 },
             ],
             labels_provenance: LabelsProvenance::Keyword,
+            label_prompt: None,
+            next_id: None,
         }
     }
 
@@ -525,9 +557,10 @@ mod tests {
         let req = theme_label_request(
             &["memory".into(), "agent".into()],
             &["Agent memory systems".into()],
+            &["Agents persist state in files.".into()],
         );
-        assert_eq!(req.cache_namespace.as_deref(), Some("theme_label/v1"));
-        assert!(req.system.as_deref().unwrap().contains("theme_label/v1"));
+        assert_eq!(req.cache_namespace.as_deref(), Some("theme_label/v2"));
+        assert!(req.system.as_deref().unwrap().contains("theme_label/v2"));
         let ModelMessage::User { content } = &req.messages[0] else {
             panic!()
         };

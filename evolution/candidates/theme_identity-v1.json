@@ -1,0 +1,26 @@
+{
+  "kind": "ovp.evolution.candidate/v1",
+  "id": "theme_identity-v1",
+  "base_version": "none",
+  "target_version": "v1",
+  "surface": "runtime",
+  "component": "runtime.theme_identity",
+  "hypothesis": "RUNTIME surface: `crystal-themes` numbered communities 0..n in Louvain order on every recompute, so a weekly recluster reshuffled theme ids — and with them theme URLs (`/knowledge/theme/<id>`, `ovp://theme-page/<id>`), theme_pages.json keys and the synthesis cluster keys `t{id:03}` — and re-paid a model call for every name. That made the scheduled weekly themes job unsafe to leave on (it had been off since 09-27 while 360+ new packs accumulated). v1 carries identity across runs: each new community inherits the id of the previous community it overlaps most (member Jaccard >= 0.3, greedy one-to-one, deterministic ties); unmatched communities get fresh ids from a persisted high-water mark (`next_id`) so a retired id is never reused; a community whose membership barely moved (Jaccard >= 0.6) keeps its previous name without a model call when that name came from the current labeling prompt. `--dry-run` prints kept / renamed / new / retired without writing. Predicted: weekly reruns keep existing theme ids for every continuing community and call the model only for new or substantially changed communities.",
+  "predicted_delta": {
+    "operational_reliability": "theme ids stable across reruns for continuing communities; retired ids never reassigned",
+    "cost_efficiency": "model calls per weekly run drop from one per community to one per new/changed community"
+  },
+  "guardrails": {
+    "first_run_unchanged": "no previous themes.json → ids 0..n in clustering order exactly as before",
+    "corrupt_previous_file": "an unreadable previous themes.json carries nothing (fresh ids) and never fails the run",
+    "legacy_files": "files without `next_id` / `label_prompt` load (serde default); the high-water mark falls back to past-the-max surviving id",
+    "projection_only": "themes.json stays a rebuildable projection; nothing is written to the ledger"
+  },
+  "eval_plan": {
+    "replay_set": "ovp-cli tests: carry_ids (inherit by overlap, split keeps the larger share, fresh ids past retired ones, high-water mark honored), reused_name (only current prompt + stable membership), change_lines, and an end-to-end rerun where a new pack joins an existing community (ids unchanged; --dry-run writes nothing)",
+    "paired_sources": 0,
+    "soak": false
+  },
+  "rollback": "Revert crystal_themes.rs to number communities 0..n; delete themes.json to rebuild. Ignored fields (`next_id`, `label_prompt`) are harmless to older binaries.",
+  "ablation_required": false
+}
