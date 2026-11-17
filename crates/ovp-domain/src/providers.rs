@@ -117,11 +117,30 @@ pub fn read_llm_profiles(vault_root: &Path) -> Result<BTreeMap<String, LlmProfil
     Ok(out)
 }
 
-/// The LLM part of an `[env]` map (the comparison key for "active").
+/// The LLM part of an `[env]` map, NORMALIZED — the comparison key for
+/// "active". Values that mean the same as absent collapse to absent
+/// (`OVP_LLM_PROVIDER=anthropic`, a false `OVP_LLM_NO_PROXY`) and booleans
+/// to `1`, so a setup saved from the live config (which the form writes in
+/// canonical form) is still recognised as the live one.
 pub fn llm_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     env.iter()
-        .filter(|(k, v)| LLM_PROFILE_KEYS.contains(&k.as_str()) && !v.trim().is_empty())
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .filter(|(k, _)| LLM_PROFILE_KEYS.contains(&k.as_str()))
+        .filter_map(|(k, v)| {
+            let t = v.trim();
+            let canon = match k.as_str() {
+                "OVP_LLM_PROVIDER" => {
+                    let p = t.to_ascii_lowercase();
+                    (p != "anthropic").then_some(p)
+                }
+                "OVP_LLM_NO_PROXY" => match t.to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" | "on" => Some("1".to_string()),
+                    "0" | "false" | "no" | "off" => None,
+                    _ => Some(t.to_string()),
+                },
+                _ => Some(t.to_string()),
+            };
+            canon.filter(|c| !c.is_empty()).map(|c| (k.clone(), c))
+        })
         .collect()
 }
 
@@ -133,7 +152,7 @@ pub fn active_llm_profile<'a>(
     let current = llm_env(env);
     profiles
         .iter()
-        .find(|(_, p)| p.env == current)
+        .find(|(_, p)| llm_env(&p.env) == current)
         .map(|(id, _)| id.as_str())
 }
 
@@ -815,6 +834,24 @@ mod tests {
         env.insert("PINBOARD_TOKEN".into(), "u:1".into());
         write_providers_file(vault, &env).unwrap();
         assert_eq!(read_llm_profiles(vault).unwrap(), profiles);
+
+        // Equivalent spellings still match: explicit default provider and a
+        // false NO_PROXY in [env] vs the canonical (absent) form in a profile.
+        let mut spelled = env.clone();
+        spelled.insert("OVP_LLM_NO_PROXY".into(), "0".into());
+        let plain = BTreeMap::from([(
+            "p".to_string(),
+            LlmProfile { label: "p".into(), env: llm_env(&env) },
+        )]);
+        assert_eq!(active_llm_profile(&spelled, &plain), Some("p"));
+        let mut ant = env_of(&[("OVP_LLM_PROVIDER", "Anthropic"), ("ANTHROPIC_API_KEY", "k")]);
+        let ant_profile = BTreeMap::from([(
+            "a".to_string(),
+            LlmProfile { label: "a".into(), env: env_of(&[("ANTHROPIC_API_KEY", "k")]) },
+        )]);
+        assert_eq!(active_llm_profile(&ant, &ant_profile), Some("a"));
+        ant.insert("OVP_LLM_NO_PROXY".into(), "true".into());
+        assert_eq!(active_llm_profile(&ant, &ant_profile), None, "a real difference still counts");
 
         // Hand-editing [env] away from every profile → no active profile.
         env.insert("OVP_LLM_MODEL".into(), "gpt-6-sol".into());
