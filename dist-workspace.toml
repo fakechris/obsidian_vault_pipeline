@@ -33,6 +33,13 @@ install-updater = false
 # Keep the release workflow purely tag-triggered: repo policy is PR-only bot
 # CI, so we do not add a `dist plan` check to every pull request.
 pr-run-mode = "skip"
+# Build only the packages that ship (`-p ovp-cli`), not `--workspace`.
+# `apps/desktop/src-tauri` is a workspace member (since 07-13); `dist = false`
+# keeps it out of the ARTIFACTS but a workspace build still COMPILES it, and
+# Tauri needs GTK/WebKit on Linux and a bundled sidecar on Windows — v2.2.0's
+# Linux and Windows jobs failed on exactly that (glib-sys / ovp2-desktop
+# build script). The desktop app ships from release-desktop.yml instead.
+precise-builds = true
 # `.github/workflows/release.yml` carries ONE deliberate hand edit (the
 # `desktop-v*` guard on the `plan` job — see the comment there). Without this,
 # every `dist plan` / `dist build` aborts with "out of date contents", which
