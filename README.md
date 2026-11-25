@@ -62,6 +62,12 @@ loop runs up on everything you ever saved.
 
 Durable vs caveated claims, grouped by theme. Switch **List / Graph / Terrain** when you want structure instead of a spreadsheet of notes.
 
+Themes are found, not filed: claims are clustered by meaning once a week and each cluster is
+named from what most of its members share, with the names already taken in view so it steers
+away from them — on our vault that took the cards starting "AI Agent…" from 13 to none. A theme keeps its id across re-clustering
+when its membership mostly carries over. Each card has a 12-week sparkline of how many sources
+fed it, by the week they entered your vault.
+
 Each theme also gets a **topic page**: its durable claims woven into prose, where every
 sentence cites a claim key. A draft that cannot cite is repaired once, then rejected — the
 page never ships ungrounded.
@@ -102,9 +108,17 @@ zh layer is rebuildable from it, so a translation can never become a second sour
 that quietly disagrees. New material is queued as it arrives and old material backfills in
 the background, both inside the vault's own token budget.
 
+### System — the machine room, in four tabs
+
+**Overview** (last run, what needs attention, which LLM setup is live) · **Runs** (run
+now, live progress, history) · **Attention** (problems grouped by cause — fifty blocked sources from one quota
+outage are one row, with a **Retry these N** button when the cause was temporary) ·
+**Settings** (LLM setups, scheduled jobs, publishing). You can save several LLM setups — say an Anthropic
+one and an OpenAI one — and switch with one click; keys stay masked. (A variable exported
+in your shell still overrides the file.)
+
 Also in the portal: **Tags**, **Entities**, **Work queue** (what enrichment is running, its
-pace and ETA), **System** (runs, doctor, LLM settings, schedule). Light *Atelier* and dark
-*Vault* themes.
+pace and ETA). Light *Atelier* and dark *Vault* themes.
 
 ---
 
@@ -114,7 +128,7 @@ pace and ETA), **System** (runs, doctor, LLM settings, schedule). Light *Atelier
 |---|---|
 | Process the vault once | `ovp2 daily --vault-root ~/path/to/vault --client live` |
 | Open the UI | `ovp2 serve --vault-root ~/path/to/vault` → open the printed URL |
-| Desktop app | [OVP2.app releases](https://github.com/fakechris/obsidian_vault_pipeline/releases) (macOS) — it carries its own clock, so `ovp2 schedule init` is enough; no OS unit needed |
+| Desktop app | [OVP2 Desktop releases](https://github.com/fakechris/obsidian_vault_pipeline/releases) (macOS DMG, Windows installer) — it carries its own clock, so `ovp2 schedule init` is enough; no OS unit needed |
 | Ingest on a schedule, no app running | `ovp2 schedule install` (launchd / systemd user timer) |
 | See what the LLM cost you | `ovp2 usage --vault-root …` — tokens by day × lane, against the soft budget |
 | Ask from the CLI | `ovp2 ask --vault-root … "your question"` |
@@ -141,11 +155,13 @@ bookmark is worth reading is your call, so it stays a tag.
 
 ## Install
 
-Prebuilt **CLI** for macOS arm64 and Linux x64 (current line: **v2.0.1**). No Rust toolchain required.
+Prebuilt **CLI** for macOS arm64 and Linux x64 (current line: **v2.2.0**). No Rust toolchain required.
+The **desktop app** (macOS + Windows) is a separate download: `desktop-v2.2.0` on the
+[releases page](https://github.com/fakechris/obsidian_vault_pipeline/releases).
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
+  https://github.com/fakechris/obsidian_vault_pipeline/releases/download/v2.2.0/ovp-cli-installer.sh | sh
 ```
 
 or:
@@ -174,8 +190,12 @@ Full channels, desktop DMG, and rollback notes: [`docs/install.md`](docs/install
    daily_token_budget = 2000000   # optional; reported by `ovp2 usage`, not enforced
    ```
 
-   The portal's **System → LLM settings** page edits this file for you (keys masked once
-   saved). A scheduled job cannot reliably shell-source an env file — that is why this is a
+   Prefer OpenAI? Use `OVP_LLM_PROVIDER = "openai"`, `OPENAI_API_KEY = "sk-..."` and
+   `OVP_LLM_MODEL = "<model>"` instead — every lane, Ask included, then runs on the
+   Responses API.
+
+   The portal's **System → Settings** tab edits this file for you, keys masked once saved,
+   and can keep several named setups to switch between. A scheduled job cannot reliably shell-source an env file — that is why this is a
    config file and not `daily.env`.
 
 2. **One daily pass** (try `--dry-run` first):

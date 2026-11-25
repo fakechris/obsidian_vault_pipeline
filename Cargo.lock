@@ -2712,7 +2712,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-api-projection"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-domain",
  "ovp-index",
@@ -2725,7 +2725,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-app"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-core",
  "ovp-domain",
@@ -2739,7 +2739,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-auto"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -2754,7 +2754,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-cli"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "chrono",
  "clap",
@@ -2791,7 +2791,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-console"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-domain",
  "ovp-index",
@@ -2800,7 +2800,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-core"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-core",
  "serde",
@@ -2810,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-daily"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-domain",
  "ovp-intake",
@@ -2822,7 +2822,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-doctor"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "chrono",
  "ovp-daily",
@@ -2836,7 +2836,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-domain"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-core",
  "ovp-domain",
@@ -2851,7 +2851,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-embed"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "fastembed",
  "serde",
@@ -2862,7 +2862,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-enrich"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-domain",
  "reqwest 0.12.28",
@@ -2874,7 +2874,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-eval"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -2890,7 +2890,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-evolve"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "chrono",
  "ovp-app",
@@ -2905,7 +2905,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-index"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "chrono",
  "ovp-daily",
@@ -2919,7 +2919,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-intake"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "flate2",
  "libc",
@@ -2936,7 +2936,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-lint"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -2952,7 +2952,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-llm"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
@@ -2963,7 +2963,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-mcp"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-api-projection",
  "ovp-app",
@@ -2980,7 +2980,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-memory"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "chrono",
  "libc",
@@ -2998,7 +2998,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-publish"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-api-projection",
  "ovp-domain",
@@ -3013,7 +3013,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-query"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -3029,7 +3029,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-rag"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-core",
  "ovp-domain",
@@ -3042,7 +3042,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-review"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -3060,7 +3060,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-run"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-app",
  "ovp-core",
@@ -3074,7 +3074,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-scheduler"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -3084,7 +3084,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-server"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "chrono",
  "ovp-api-projection",
@@ -3105,7 +3105,7 @@ dependencies = [
 
 [[package]]
 name = "ovp-stores"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-core",
  "ovp-domain",
@@ -3119,7 +3119,7 @@ dependencies = [
 
 [[package]]
 name = "ovp2-desktop"
-version = "2.0.1"
+version = "2.2.0"
 dependencies = [
  "ovp-domain",
  "ovp-server",

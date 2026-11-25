@@ -5,10 +5,17 @@ as an install story. Distribution is prebuilt binaries via
 [cargo-dist](https://axodotdev.github.io/cargo-dist) (`dist`, pinned to
 **0.32.0** in `dist-workspace.toml` and in the generated workflow).
 
-Current release: **v0.23.0** (continuing the repo's release lineage — v0.22.0
-was the last Python-era release; v2.0.0 is reserved for the merge-to-main /
-Python-retirement milestone). Both channels are published and verified
-end-to-end.
+Current CLI release: **v2.2.0**. The desktop app ships under its own tag
+namespace (`desktop-v2.2.0`, built by `.github/workflows/release-desktop.yml`);
+both carry the same version number from 2.2.0 on. (Lineage: v0.22.0 was the last
+Python-era release, v2.0.0 the merge-to-main / Python-retirement milestone,
+desktop-v2.1.0 a desktop-only release.)
+
+**Use versioned installer URLs.** GitHub's `releases/latest` is the newest
+release of either kind — after a desktop-only release that is a release
+with no CLI installer, and `latest/download/ovp-cli-installer.sh` returns 404
+(this happened with desktop-v2.1.0). The commands below therefore name the
+version.
 
 ## Channels
 
@@ -17,13 +24,13 @@ end-to-end.
 
    ```sh
    curl --proto '=https' --tlsv1.2 -LsSf \
-     https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
+     https://github.com/fakechris/obsidian_vault_pipeline/releases/download/v2.2.0/ovp-cli-installer.sh | sh
    ```
 
 2. **PowerShell installer (Windows x64)** — same story, no toolchain:
 
    ```powershell
-   irm https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.ps1 | iex
+   irm https://github.com/fakechris/obsidian_vault_pipeline/releases/download/v2.2.0/ovp-cli-installer.ps1 | iex
    ```
 
    Unsigned, like every other channel here. See `docs/windows-port.md` for what
@@ -41,7 +48,7 @@ end-to-end.
    install (`env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY brew install
    fakechris/ovp2/ovp2`) or configure git's proxy explicitly.
 
-Verify either channel with `ovp2 --version` (→ `ovp2 2.0.1`).
+Verify any channel with `ovp2 --version` (→ `ovp2 2.2.0`).
 
 Prebuilt targets: `aarch64-apple-darwin` (Apple Silicon macOS),
 `x86_64-unknown-linux-gnu` (Linux x86_64, **glibc ≥ 2.38** — ort's prebuilt
@@ -75,7 +82,7 @@ ledgers are append-only and projections rebuild, so downgrading the binary
 does not corrupt anything.
 
 1. **curl installer, versioned URL (recommended).** Every release keeps its
-   installer attached; swap `latest/download` for a version tag:
+   installer attached; put the version you want in the URL:
 
    ```sh
    curl --proto '=https' --tlsv1.2 -LsSf \

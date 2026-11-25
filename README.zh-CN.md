@@ -58,6 +58,8 @@ OVP2 是面向 Obsidian vault 的本地优先应用：读取你捕获的内容�
 
 durable / caveated 主张按主题分组。需要结构时切换 **列表 / 图谱 / 地形**。
 
+主题是聚出来的，不是分进去的：主张每周按语义聚类一次，每个簇按**多数成员共有的内容**命名，命名时模型能看到已被占用的名字，并被要求避开——在我们的 vault 上，以 “AI Agent…” 开头的卡片从 13 张降到 0。重新聚类时，成员大体延续的主题保留原来的 id。每张卡片带一条 12 周的小柱图：每周有多少来源喂给了它，按来源**进入 vault 的那一周**计。
+
 每个主题还有一页 **专题综述**：把该主题的 durable 主张织成正文，**每一句都必须引用一个 claim key**。引不上的草稿只修一次,修不好就丢弃——综述页永远不会带着无据的句子上线。
 
 <p align="center">
@@ -90,7 +92,11 @@ durable / caveated 主张按主题分组。需要结构时切换 **列表 / 图�
 
 它**刻意只是投影**——账本保持英文、单一权威，中文层可从它重建。所以一份译文永远不会变成第二个真相来源，跟英文悄悄打架。新内容随到随排队，旧内容在后台回填，两者都受 vault 自己的 token 预算约束。
 
-另有 **标签 Tags**、**实体 Entities**、**工作队列**（正在跑什么增强、速率与预计完成）、**系统 System**（运行记录、doctor、LLM 设置、日程）。浅色 Atelier / 深色 Vault 两套主题。
+### 系统 System — 机房，四个标签页
+
+**概览**（上次运行、有什么待处理、当前用的是哪套 LLM 配置）· **运行**（立即运行、实时进度、历史）· **待处理**（按原因分组——一次额度耗尽导致的五十个 blocked 来源只占一行；原因是临时性的，就有 **重试这 N 个** 按钮）· **设置**（LLM 配置、定时任务、发布）。LLM 配置可以存多套——比如一套 Anthropic、一套 OpenAI——一键切换，密钥始终打码。
+
+另有 **标签 Tags**、**实体 Entities**、**工作队列**（正在跑什么增强、速率与预计完成）。浅色 Atelier / 深色 Vault 两套主题。
 
 ---
 
@@ -100,7 +106,7 @@ durable / caveated 主张按主题分组。需要结构时切换 **列表 / 图�
 |---|---|
 | 跑一遍日循环 | `ovp2 daily --vault-root ~/path/to/vault --client live` |
 | 打开界面 | `ovp2 serve --vault-root ~/path/to/vault` → 打开打印的 URL |
-| 桌面端 | [OVP2.app 发布页](https://github.com/fakechris/obsidian_vault_pipeline/releases)（macOS）——它自带时钟，`ovp2 schedule init` 就够，不需要 OS 单元 |
+| 桌面端 | [OVP2 Desktop 发布页](https://github.com/fakechris/obsidian_vault_pipeline/releases)（macOS DMG、Windows 安装包）——它自带时钟，`ovp2 schedule init` 就够，不需要 OS 单元 |
 | 不开 app 也要定时跑 | `ovp2 schedule install`（launchd / systemd user timer） |
 | 看 LLM 花了多少 | `ovp2 usage --vault-root …`——按天 × 车道的 token 用量，对照预算线 |
 | 命令行提问 | `ovp2 ask --vault-root … "你的问题"` |
@@ -120,11 +126,12 @@ durable / caveated 主张按主题分组。需要结构时切换 **列表 / 图�
 
 ## 安装
 
-macOS arm64 与 Linux x64 的预编译 **CLI**（当前线：**v2.0.1**），无需 Rust 工具链。
+macOS arm64 与 Linux x64 的预编译 **CLI**（当前线：**v2.2.0**），无需 Rust 工具链。
+**桌面 app**（macOS + Windows）单独下载：[发布页](https://github.com/fakechris/obsidian_vault_pipeline/releases) 上的 `desktop-v2.2.0`。
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/fakechris/obsidian_vault_pipeline/releases/latest/download/ovp-cli-installer.sh | sh
+  https://github.com/fakechris/obsidian_vault_pipeline/releases/download/v2.2.0/ovp-cli-installer.sh | sh
 ```
 
 或：
@@ -152,7 +159,9 @@ ovp2 --version
    daily_token_budget = 2000000   # 可选；由 `ovp2 usage` 报告，不做拦截
    ```
 
-   门户的 **系统 → LLM 设置** 页可以直接编辑这个文件（保存后密钥打码）。定时任务无法可靠地 shell-source 一个 env 文件——这正是它是配置文件而不是 `daily.env` 的原因。
+   用 OpenAI？改成 `OVP_LLM_PROVIDER = "openai"`、`OPENAI_API_KEY = "sk-..."`、`OVP_LLM_MODEL = "<模型>"`——包括对话在内的所有车道都走 Responses API。
+
+   门户的 **系统 → 设置** 标签页可以直接编辑这个文件（保存后密钥打码），还能存多套命名配置随时切换。定时任务无法可靠地 shell-source 一个 env 文件——这正是它是配置文件而不是 `daily.env` 的原因。
 
 2. **跑一次日循环**（可先 `--dry-run`）：
 
