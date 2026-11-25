@@ -36,6 +36,11 @@ version.
    Unsigned, like every other channel here. See `docs/windows-port.md` for what
    is and isn't verified on Windows.
 
+   `ovp2.exe` links the dynamic MSVC runtime (the bundled ONNX Runtime
+   requires it), so it needs the **Microsoft Visual C++ Redistributable
+   (x64)**, which most Windows machines already have. If `ovp2 --version`
+   reports a missing `VCRUNTIME140.dll`, install that redistributable.
+
 3. **Homebrew** — the public tap `fakechris/homebrew-ovp2` exists and carries
    the generated formula:
 

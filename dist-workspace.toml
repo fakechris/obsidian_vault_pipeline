@@ -40,6 +40,12 @@ pr-run-mode = "skip"
 # Linux and Windows jobs failed on exactly that (glib-sys / ovp2-desktop
 # build script). The desktop app ships from release-desktop.yml instead.
 precise-builds = true
+# Link the Windows binary against the DYNAMIC MSVC CRT. dist defaults to
+# +crt-static, but ort's prebuilt ONNX Runtime (the `embed` feature) is built
+# /MD and imports the dynamic CRT (`__imp_tolower` …): v2.2.0's static link
+# failed with 46 unresolved externals. The desktop sidecar has always been
+# built this way, so the CLI now needs the same VC++ runtime it does.
+msvc-crt-static = false
 # `.github/workflows/release.yml` carries ONE deliberate hand edit (the
 # `desktop-v*` guard on the `plan` job — see the comment there). Without this,
 # every `dist plan` / `dist build` aborts with "out of date contents", which
