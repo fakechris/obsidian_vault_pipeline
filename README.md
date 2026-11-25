@@ -63,8 +63,8 @@ loop runs up on everything you ever saved.
 Durable vs caveated claims, grouped by theme. Switch **List / Graph / Terrain** when you want structure instead of a spreadsheet of notes.
 
 Themes are found, not filed: claims are clustered by meaning once a week and each cluster is
-named from what most of its members share — and named differently from every other theme, so
-you never get ten cards that all start "AI Agent…". A theme keeps its id across re-clustering
+named from what most of its members share, with the names already taken in view so it steers
+away from them — on our vault that took the cards starting "AI Agent…" from 13 to none. A theme keeps its id across re-clustering
 when its membership mostly carries over. Each card has a 12-week sparkline of how many sources
 fed it, by the week they entered your vault.
 
@@ -114,7 +114,8 @@ the background, both inside the vault's own token budget.
 now, live progress, history) · **Attention** (problems grouped by cause — fifty blocked sources from one quota
 outage are one row, with a **Retry these N** button when the cause was temporary) ·
 **Settings** (LLM setups, scheduled jobs, publishing). You can save several LLM setups — say an Anthropic
-one and an OpenAI one — and switch with one click; keys stay masked.
+one and an OpenAI one — and switch with one click; keys stay masked. (A variable exported
+in your shell still overrides the file.)
 
 Also in the portal: **Tags**, **Entities**, **Work queue** (what enrichment is running, its
 pace and ETA). Light *Atelier* and dark *Vault* themes.

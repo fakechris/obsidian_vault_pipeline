@@ -33,8 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blocked sources collapse into a few rows instead of a long scroll.
 - **Theme names come from the whole community** (#531, #534). Labels are
   written from a spread of member titles and claims, biggest theme first, and
-  each name must differ from the ones already taken, so themes no longer share
-  one generic head phrase. Theme ids carry over across re-clusterings by
+  the labeler sees the names already taken and is told to differ from them
+  (a prompt rule; duplicates are not rejected). On the real vault this took
+  names starting "AI Agent …" from 13 to 0. Theme ids carry over across re-clusterings by
   membership overlap, and retired ids are never reused. Prompt
   `theme_label/v3`.
 - **Theme sparklines count sources by the week they entered the vault**

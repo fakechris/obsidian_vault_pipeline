@@ -28,7 +28,7 @@ Environment for live runs (put in your shell profile or `.env`, NEVER in the rep
 | Var | Used by | Notes |
 |---|---|---|
 | `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_BASE_URL`, `OVP_LLM_MODEL`, `OVP_LLM_MAX_TOKENS`, `OVP_LLM_NO_PROXY=1`) | `--client live` | see `docs/live-capture.md`; this sandbox/provider setup needs `OVP_LLM_NO_PROXY=1` |
-| `OVP_LLM_PROVIDER=openai` + `OPENAI_API_KEY` + `OVP_LLM_MODEL` (optional `OPENAI_BASE_URL`, must end in `/responses`) | `--client live` | OpenAI Responses API instead of Anthropic, for every lane; see `docs/live-capture.md`. Saved setups (`[llm_profiles.<id>]` in `providers.toml`) switch between providers from System → Settings |
+| `OVP_LLM_PROVIDER=openai` + `OPENAI_API_KEY` + `OVP_LLM_MODEL` (optional `OPENAI_BASE_URL`, must end in `/responses`) | `--client live` | OpenAI Responses API instead of Anthropic, for every lane; see `docs/live-capture.md`. Saved setups (`[llm_profiles.<id>]` in `providers.toml`) switch between providers from System → Settings. A switch rewrites `[env]` in the file, so it only takes effect for variables that come from the file: an LLM variable exported in the shell before `ovp2 serve` / the app started still wins (shell env beats `providers.toml`), and the switch appears to do nothing for it. Unset it and restart |
 | `OVP_LLM_TIMEOUT_SECS=480` | `--client live` | REQUIRED for dogfood: the default 180s total-request timeout mis-kills slow provider responses and amplifies load with retries (2026-07-06 live hang was exactly this class) |
 | `PINBOARD_TOKEN` (`username:TOKEN`) | `--pinboard-live` / `pinboard-sync --live` | same env var the legacy processor used; never logged, never persisted |
 
@@ -373,7 +373,7 @@ gracefully and everything shows `Unclassified`. `daily` prints a hint when
 new packs are missing from the projection and never runs this itself; the
 scheduler's `themes` job does, weekly (Sun 09:30, before crystallize). Names
 are prompt `theme_label/v3`: each community is named from a spread of its
-members, biggest first, and must differ from names already taken; ids carry
+members, biggest first, with the names already taken in the prompt and an instruction to differ from them (a prompt rule, not a check — a duplicate is not rejected); ids carry
 over by membership overlap and `--dry-run` prints what would be renamed. Embeddings cache under
 `.ovp/cache/embeddings/` (content-addressed; safe to delete). See
 `docs/stage-semantic-themes.md` for the recipe and validation.
