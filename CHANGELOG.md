@@ -7,7 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-24
+
+### Added
+- **OpenAI as an LLM provider** (#532). Set `OVP_LLM_PROVIDER = "openai"` plus
+  `OPENAI_API_KEY` / `OVP_LLM_MODEL` in `.ovp/providers.toml` and every lane
+  (daily reads, crystal synthesis, Ask, themes) goes through the OpenAI
+  Responses API, tool calls included. Models that only accept the default
+  temperature are detected from the first rejection and the request is resent
+  once without it. Anthropic stays the default; nothing changes for an
+  existing `providers.toml`. See `docs/live-capture.md`.
+- **Saved LLM setups** (#533). `providers.toml` can hold several named
+  `[llm_profiles.<id>]` blocks; the portal's System → Settings lists them, and
+  switching rewrites the live `[env]` in one step. Keys stay masked; a setup
+  without its provider's key is refused rather than saved half-configured.
+- **Retry blocked sources from the portal** (#535). Attention groups whose
+  cause is temporary (quota, network, provider) get a "Retry these N" button.
+  It writes one create-once grant per source under `.ovp/retry-grants/` that
+  resets the source's failure count, so daily picks it up again with the usual
+  3 attempts. No ledger is edited.
+
+### Changed
+- **System page is tabbed** (#533): Overview · Runs · Attention · Settings,
+  addressable by `?tab=`. Attention items are grouped by cause, so dozens of
+  blocked sources collapse into a few rows instead of a long scroll.
+- **Theme names come from the whole community** (#531, #534). Labels are
+  written from a spread of member titles and claims, biggest theme first, and
+  each name must differ from the ones already taken, so themes no longer share
+  one generic head phrase. Theme ids carry over across re-clusterings by
+  membership overlap, and retired ids are never reused. Prompt
+  `theme_label/v3`.
+- **Theme sparklines count sources by the week they entered the vault**
+  (#528–#530): 12 weekly bars per theme instead of a single spike.
+
 ### Fixed
+- Crystal claims are dated by the run that wrote them (`.ovp/crystal/runs.jsonl`)
+  instead of all sharing one stale date (#528).
+- `ovp2 serve` no longer mixes a stale seeded model with a freshly switched
+  provider: values it seeded from `providers.toml` at startup are re-read from
+  the file on every call (#533).
+
+## [2.1.0] - 2026-11-16
+
+Desktop-only release (`desktop-v2.1.0`); the CLI line stayed at 2.0.1.
+
+### Fixed
+- Shared `.ovp` state: one `write(2)` per JSONL record so a torn tail never
+  poisons a ledger; OS advisory locks replace PID files for sessions and
+  workers (#503–#506).
+- A failed crystal ledger append leaves no partial record (#519).
 - needs-content captures no longer retry forever: a capture whose enrichment
   fetch failed 3 times (`MAX_ENRICH_ATTEMPTS`) or for 72h since the first
   failure is closed as `IntakeAction::ContentUnavailable` — terminal and
@@ -58,6 +106,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run.
 
 ### Added
+- Claim propagation fields, typed citations (`CitationType`), precomputed graph
+  layout and a precomputed `portal-summary.json` built at index time
+  (#522–#527). SQLite shadow schema v8.
+- Per-citation support check after the durable write, in shadow mode
+  (#520); `crystal-citation-review` sends unsupported durables to review
+  (#516).
+- Provider-neutral typed decision client and gated evidence reranking for Ask
+  (#499–#502, #511, #512).
+- `crystal-regate-sources` re-gates durables whose sources turned out to be the
+  same article; intake dedups captures by canonical URL (#507–#510).
 - Custom frontmatter keys reach the index and are filterable. A capture
   source's own keys (a clipper property, a bot's capture id) already survived
   intake (`fs::rename`) and enrichment (the block is re-emitted verbatim) —

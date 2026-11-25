@@ -3,6 +3,8 @@
 The desktop app bundles the full OVP2 pipeline — it runs the portal locally and
 schedules your daily ingest + weekly crystallize in-app (no launchd/systemd).
 
+**What's new:** see [CHANGELOG.md](https://github.com/fakechris/obsidian_vault_pipeline/blob/main/CHANGELOG.md).
+
 ### Install — macOS
 1. Download the `.dmg` for your Mac (`arm64` for Apple Silicon, `x64` for Intel).
 2. Open it and drag **OVP2** to Applications.

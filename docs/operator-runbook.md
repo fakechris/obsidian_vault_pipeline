@@ -28,6 +28,7 @@ Environment for live runs (put in your shell profile or `.env`, NEVER in the rep
 | Var | Used by | Notes |
 |---|---|---|
 | `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_BASE_URL`, `OVP_LLM_MODEL`, `OVP_LLM_MAX_TOKENS`, `OVP_LLM_NO_PROXY=1`) | `--client live` | see `docs/live-capture.md`; this sandbox/provider setup needs `OVP_LLM_NO_PROXY=1` |
+| `OVP_LLM_PROVIDER=openai` + `OPENAI_API_KEY` + `OVP_LLM_MODEL` (optional `OPENAI_BASE_URL`, must end in `/responses`) | `--client live` | OpenAI Responses API instead of Anthropic, for every lane; see `docs/live-capture.md`. Saved setups (`[llm_profiles.<id>]` in `providers.toml`) switch between providers from System → Settings |
 | `OVP_LLM_TIMEOUT_SECS=480` | `--client live` | REQUIRED for dogfood: the default 180s total-request timeout mis-kills slow provider responses and amplifies load with retries (2026-07-06 live hang was exactly this class) |
 | `PINBOARD_TOKEN` (`username:TOKEN`) | `--pinboard-live` / `pinboard-sync --live` | same env var the legacy processor used; never logged, never persisted |
 
@@ -230,7 +231,12 @@ ledger and will be retried next run — nothing is lost).
   `failed` and **retried automatically** on the next run.
 - After **3 failures** it becomes **blocked**: skipped, listed in the console
   Attention feed and in `find --kind sources --status blocked`. Fix the file
-  (or the provider), then `--retry-blocked` on the next daily run.
+  (or the provider), then `--retry-blocked` on the next daily run — or, when
+  the cause was temporary (quota, network, provider), press **Retry these N**
+  on that group in System → Attention. That writes one create-once grant per
+  source under `.ovp/retry-grants/` that resets its failure count, so daily
+  picks it up again and it gets the usual 3 attempts before it blocks again.
+  No ledger is edited.
 - Lifecycle move failures are warnings, not failures: the pack is the
   product; the leftover raw file is harmless (dedup skips it forever).
 - The ledgers are append-only. A malformed ledger line is a hard error by
@@ -364,8 +370,11 @@ Louvain communities + c-TF-IDF keywords) that the index, portal and
 crystal-synth batching all read. First run downloads the embedding model
 (~460MB, one-time, `~/.cache/ovp/models`); offline or model-less runs skip
 gracefully and everything shows `Unclassified`. `daily` prints a hint when
-new packs are missing from the projection — it never auto-runs this (the
-model download should be a deliberate step). Embeddings cache under
+new packs are missing from the projection and never runs this itself; the
+scheduler's `themes` job does, weekly (Sun 09:30, before crystallize). Names
+are prompt `theme_label/v3`: each community is named from a spread of its
+members, biggest first, and must differ from names already taken; ids carry
+over by membership overlap and `--dry-run` prints what would be renamed. Embeddings cache under
 `.ovp/cache/embeddings/` (content-addressed; safe to delete). See
 `docs/stage-semantic-themes.md` for the recipe and validation.
 
@@ -444,8 +453,8 @@ deleting them only costs re-recording.
   links get README enrichment behind `github-live`).
 - No daemon — scheduling is the OS's job: `ovp2 schedule install` (§1) puts
   `daily` on launchd/systemd.
-- No embeddings/SQLite; `find` is substring search over the read model
-  (semantic themes via embeddings are in flight).
+- `find` is substring search over the read model; embeddings are used for
+  semantic themes, not for `find`.
 - Legacy Python surfaces (`knowledge.db`, the 8787 `ovp-ui`) are retired, not
   ported — see `docs/ovp-to-ovp2.md` for the mapping (`ovp-ask` → `ovp2 ask`,
   `/digest` → `ovp2 digest`, `/ops` → the portal System page).

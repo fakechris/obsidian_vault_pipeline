@@ -32,7 +32,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.0.1"
+version = "2.2.0"
 edition = "2024"
 # 1.89 = std `File::try_lock` (the session lock, INV-685). The previous floor,
 # 1.88, came from the `embed` dep tree (ort 2.0.0-rc.12 / time 0.3.53), which
